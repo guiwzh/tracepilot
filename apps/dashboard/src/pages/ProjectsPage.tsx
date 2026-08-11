@@ -98,7 +98,7 @@ export function ProjectsPage() {
                   </span>
                 </span>
                 <span className="project-stat">
-                  <small>Open evidence</small>
+                  <small>Grouped issues</small>
                   <strong>{formatNumber(project.issueCount ?? 0)}</strong>
                 </span>
                 <span className="project-stat">

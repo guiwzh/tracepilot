@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { SourceMapConsumer, type RawSourceMap } from 'source-map';
-import type { SourceMapRecord } from '@trace-pilot/shared';
+import { redactSensitive, type SourceMapRecord } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 
 interface StackFrame {
@@ -117,11 +117,12 @@ export async function symbolicateStack(
     await SourceMapConsumer.with(rawMap, null, (consumer) => {
       const original = consumer.originalPositionFor({
         line: frame.lineNumber,
-        column: frame.columnNumber,
+        column: Math.max(0, frame.columnNumber - 1),
       });
       if (original.source && original.line != null && original.column != null) {
         const fn = original.name ?? frame.functionName ?? '<anonymous>';
-        mappedLine = `    at ${fn} (${original.source}:${original.line}:${original.column})`;
+        const source = original.source.replace(/[?#].*$/, '');
+        mappedLine = `    at ${fn} (${source}:${original.line}:${original.column + 1})`;
         mapped += 1;
       }
     });
@@ -143,7 +144,7 @@ export async function symbolicateReleaseEvents(
     if (originalStack) {
       database.sqlite
         .prepare('UPDATE events SET original_stack = ? WHERE id = ?')
-        .run(originalStack, row.id);
+        .run(redactSensitive(originalStack), row.id);
       count += 1;
     }
   }

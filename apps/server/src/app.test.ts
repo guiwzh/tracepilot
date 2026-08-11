@@ -185,6 +185,46 @@ describe('telemetry ingestion', () => {
       p75: 2100,
       samples: 1,
     });
+    expect(metrics.json()).toMatchObject({
+      byRelease: [{ metric: 'LCP', name: '2.4.1', p75: 2100, samples: 1 }],
+      byRoute: [{ metric: 'LCP', name: '/checkout', p75: 2100, samples: 1 }],
+      byBrowser: [{ metric: 'LCP', name: 'Chrome', p75: 2100, samples: 1 }],
+    });
+    expect(
+      metrics
+        .json()
+        .trend.find((item: { metric: string; samples: number }) =>
+          Boolean(item.metric === 'LCP' && item.samples),
+        ),
+    ).toMatchObject({ metric: 'LCP', p75: 2100, samples: 1 });
+    const projects = await app.inject({ method: 'GET', url: '/api/v1/projects' });
+    expect(projects.json().items[0]).toMatchObject({ issueCount: 0, eventCount: 1 });
+  });
+
+  it('normalizes invalid pagination and event limit query values', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [event('query-event-one', '93849202'), event('query-event-two', '72849201')],
+      },
+    });
+    const issues = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/issues?page=not-a-number&pageSize=-20',
+    });
+    expect(issues.statusCode).toBe(200);
+    expect(issues.json()).toMatchObject({ page: 1, pageSize: 1, total: 1 });
+
+    const issueId = issues.json().items[0].id as string;
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issueId}/events?limit=-1`,
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.json().items).toHaveLength(1);
   });
 
   it('generates a schema-valid diagnosis and reuses an unchanged context', async () => {

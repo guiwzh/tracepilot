@@ -1,12 +1,28 @@
+import { useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Boxes, ChevronDown, Gauge, LayoutList, Radio, Search } from 'lucide-react';
-import { Link, NavLink, Outlet, useParams } from 'react-router-dom';
+import { Link, NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../services/api';
 
 export function AppShell() {
   const { projectId = 'demo-project' } = useParams();
+  const navigate = useNavigate();
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const project = projects.data?.items.find((item) => item.id === projectId);
+  const openSearch = useCallback(() => {
+    navigate(`/projects/${projectId}/issues?focus=search`);
+  }, [navigate, projectId]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        openSearch();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [openSearch]);
 
   return (
     <div className="app-shell">
@@ -18,14 +34,25 @@ export function AppShell() {
           <span>TracePilot</span>
         </Link>
 
-        <div className="project-switcher">
+        <label className="project-switcher">
           <span className="project-avatar">{project?.name.slice(0, 2).toUpperCase() ?? 'TP'}</span>
           <span>
             <small>Active project</small>
             <strong>{project?.name ?? 'Loading…'}</strong>
           </span>
+          <select
+            aria-label="Switch project"
+            value={projectId}
+            onChange={(event) => navigate(`/projects/${event.target.value}/issues`)}
+          >
+            {projects.data?.items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
           <ChevronDown size={14} />
-        </div>
+        </label>
 
         <nav className="primary-nav" aria-label="Primary">
           <p>Observe</p>
@@ -54,7 +81,7 @@ export function AppShell() {
           <div className="topbar-context">
             <Activity size={16} /> Production <span>/</span> All releases
           </div>
-          <button className="command-button" type="button">
+          <button className="command-button" type="button" onClick={openSearch}>
             <Search size={15} /> Search evidence <kbd>⌘ K</kbd>
           </button>
           <div className="operator" title="Local operator">

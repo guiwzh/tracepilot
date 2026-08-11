@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowDown, ChevronLeft, ChevronRight, Rows3, Search } from 'lucide-react';
+import { ArrowDown, ChevronLeft, ChevronRight, Route, Rows3, Search } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Chart, type ChartOption } from '../components/Chart';
 import { PageHeader } from '../components/PageHeader';
@@ -15,10 +15,21 @@ export function IssuesPage() {
   const { projectId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState(searchParams.get('search') ?? '');
+  const [route, setRoute] = useState(searchParams.get('route') ?? '');
+  const searchRef = useRef<HTMLInputElement>(null);
   const compactRows = usePreferences((state) => state.compactRows);
   const setCompactRows = usePreferences((state) => state.setCompactRows);
   const requestParams = useMemo(() => {
     const params = new URLSearchParams(searchParams);
+    const durations: Record<string, number> = {
+      '24h': 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
+    };
+    const duration = durations[params.get('window') ?? ''];
+    params.delete('window');
+    params.delete('focus');
+    if (duration) params.set('from', String(Date.now() - duration));
     if (!params.has('page')) params.set('page', '1');
     if (!params.has('pageSize')) params.set('pageSize', '25');
     return params;
@@ -32,7 +43,19 @@ export function IssuesPage() {
     queryFn: () => api.overview(projectId),
   });
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
+  const releases = useQuery({
+    queryKey: ['releases', projectId],
+    queryFn: () => api.releases(projectId),
+  });
   const project = projects.data?.items.find((item) => item.id === projectId);
+
+  useEffect(() => {
+    if (searchParams.get('focus') !== 'search') return;
+    searchRef.current?.focus();
+    const next = new URLSearchParams(searchParams);
+    next.delete('focus');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const trendOption = useMemo<ChartOption>(
     () => ({
@@ -79,15 +102,20 @@ export function IssuesPage() {
     const next = new URLSearchParams(searchParams);
     if (!value || value === 'all') next.delete(key);
     else next.set(key, value);
-    next.set('page', '1');
+    if (key !== 'page') next.set('page', '1');
     setSearchParams(next);
   }
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil((issues.data?.total ?? 0) / Number(requestParams.get('pageSize') ?? 25)),
-  );
-  const currentPage = Number(requestParams.get('page') ?? 1);
+  const requestedPageSize = Number(requestParams.get('pageSize') ?? 25);
+  const pageSize =
+    issues.data?.pageSize ??
+    (Number.isFinite(requestedPageSize) && requestedPageSize >= 1
+      ? Math.min(100, Math.floor(requestedPageSize))
+      : 25);
+  const totalPages = Math.max(1, Math.ceil((issues.data?.total ?? 0) / pageSize));
+  const requestedPage = Number(requestParams.get('page') ?? 1);
+  const currentPage =
+    Number.isFinite(requestedPage) && requestedPage >= 1 ? Math.floor(requestedPage) : 1;
 
   return (
     <main className="page-content">
@@ -145,6 +173,7 @@ export function IssuesPage() {
           >
             <Search size={15} />
             <input
+              ref={searchRef}
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search title or fingerprint"
@@ -170,6 +199,54 @@ export function IssuesPage() {
             <option value="warning">Warning</option>
             <option value="info">Info</option>
           </select>
+          <select
+            aria-label="Release"
+            value={searchParams.get('release') ?? 'all'}
+            onChange={(event) => updateFilter('release', event.target.value)}
+          >
+            <option value="all">All releases</option>
+            {releases.data?.items.map((release) => (
+              <option key={release.id} value={release.version}>
+                {release.version}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Browser"
+            value={searchParams.get('browser') ?? 'all'}
+            onChange={(event) => updateFilter('browser', event.target.value)}
+          >
+            <option value="all">All browsers</option>
+            <option value="Chrome">Chrome</option>
+            <option value="Edge">Edge</option>
+            <option value="Firefox">Firefox</option>
+            <option value="Safari">Safari</option>
+          </select>
+          <select
+            aria-label="Time window"
+            value={searchParams.get('window') ?? 'all'}
+            onChange={(event) => updateFilter('window', event.target.value)}
+          >
+            <option value="all">All time</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+          <form
+            className="route-field"
+            onSubmit={(event) => {
+              event.preventDefault();
+              updateFilter('route', route);
+            }}
+          >
+            <Route size={14} />
+            <input
+              aria-label="Route contains"
+              value={route}
+              onChange={(event) => setRoute(event.target.value)}
+              placeholder="Filter route"
+            />
+          </form>
           <button
             className="sort-button"
             onClick={() =>

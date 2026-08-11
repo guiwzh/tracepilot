@@ -140,7 +140,7 @@ function DiagnosisPanel({ issueId }: { issueId: string }) {
     queryFn: () => api.diagnoses(issueId),
   });
   const diagnose = useMutation({
-    mutationFn: () => api.diagnose(issueId),
+    mutationFn: (force: boolean) => api.diagnose(issueId, force),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['diagnoses', issueId] }),
   });
   const record: DiagnosisRecord | undefined = diagnose.data ?? records.data?.items[0];
@@ -161,7 +161,7 @@ function DiagnosisPanel({ issueId }: { issueId: string }) {
         </p>
         <button
           className="button button-signal"
-          onClick={() => diagnose.mutate()}
+          onClick={() => diagnose.mutate(false)}
           disabled={diagnose.isPending}
         >
           {diagnose.isPending ? <RefreshCw className="spin" size={15} /> : <Sparkles size={15} />}{' '}
@@ -187,7 +187,7 @@ function DiagnosisPanel({ issueId }: { issueId: string }) {
         </div>
         <button
           className="button button-quiet"
-          onClick={() => diagnose.mutate()}
+          onClick={() => diagnose.mutate(true)}
           disabled={diagnose.isPending}
         >
           <RefreshCw size={14} /> Regenerate
@@ -406,6 +406,24 @@ export function IssueDetailPage() {
                 </div>
               </header>
               <DistributionChart data={data.browserDistribution} />
+            </section>
+          </div>
+          <div className="distribution-grid">
+            <section className="panel">
+              <header className="panel-title">
+                <div>
+                  <h2>Route share</h2>
+                </div>
+              </header>
+              <DistributionChart data={data.routeDistribution} />
+            </section>
+            <section className="panel">
+              <header className="panel-title">
+                <div>
+                  <h2>Release share</h2>
+                </div>
+              </header>
+              <DistributionChart data={data.releaseDistribution} />
             </section>
           </div>
           <section className="panel source-preview">

@@ -2,7 +2,7 @@ import type {
   DiagnosisRecord,
   IssueDetail,
   IssueListResponse,
-  PerformanceMetric,
+  PerformanceOverview,
   Project,
   ProjectOverview,
   Release,
@@ -58,7 +58,7 @@ export const api = {
       body: JSON.stringify({ status }),
     }),
   performance: (projectId: string) =>
-    request<{ items: PerformanceMetric[] }>(`/api/v1/projects/${projectId}/performance`),
+    request<PerformanceOverview>(`/api/v1/projects/${projectId}/performance`),
   releases: (projectId: string) =>
     request<{ items: Release[] }>(`/api/v1/projects/${projectId}/releases`),
   createRelease: (projectId: string, version: string, commitSha?: string) =>

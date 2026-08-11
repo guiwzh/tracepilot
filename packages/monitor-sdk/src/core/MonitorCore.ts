@@ -169,7 +169,9 @@ export class MonitorCore implements MonitorClient {
 
   destroy(): void {
     if (this.destroyed) return;
-    for (const plugin of [...this.plugins].reverse()) this.protect(() => plugin.teardown());
+    // Transport is registered last, so forward teardown lets signal plugins enqueue final samples
+    // before the transport performs its closing beacon/flush.
+    for (const plugin of this.plugins) this.protect(() => plugin.teardown());
     this.destroyed = true;
     this.started = false;
     this.breadcrumbs.length = 0;

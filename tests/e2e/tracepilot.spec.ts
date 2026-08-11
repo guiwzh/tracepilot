@@ -37,7 +37,7 @@ test('triage view loads seeded telemetry and preserves filters in the URL', asyn
 
 test('issue detail reconstructs its breadcrumb evidence chain', async ({ page }) => {
   await page.goto('/projects/demo-project/issues');
-  await page.locator('.issue-row').first().click();
+  await page.locator('.issue-row').filter({ hasText: '503' }).click();
   await expect(page.locator('.issue-heading h1')).toContainText('503');
   await expect(page.locator('.evidence-chain li')).toHaveCount(4);
   await expect(page.getByText('POST /payment/authorize → 503')).toBeVisible();

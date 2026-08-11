@@ -85,6 +85,29 @@ export interface PerformanceMetric {
   samples: number;
 }
 
+export interface PerformanceComparison {
+  metric: PerformanceMetric['metric'];
+  name: string;
+  p75: number;
+  rating: PerformanceMetric['rating'];
+  samples: number;
+}
+
+export interface PerformanceTrendPoint {
+  timestamp: number;
+  metric: PerformanceMetric['metric'];
+  p75: number;
+  samples: number;
+}
+
+export interface PerformanceOverview {
+  items: PerformanceMetric[];
+  byRelease: PerformanceComparison[];
+  byRoute: PerformanceComparison[];
+  byBrowser: PerformanceComparison[];
+  trend: PerformanceTrendPoint[];
+}
+
 export interface DiagnosisRecord {
   id: string;
   issueId: string;

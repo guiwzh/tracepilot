@@ -15,30 +15,43 @@ export class PerformancePlugin implements MonitorPlugin {
   private readonly observers: PerformanceObserver[] = [];
   private cls = 0;
   private inp = 0;
+  private lcp?: number;
+  private hasCls = false;
+  private hasInp = false;
+  private finalized = false;
+  private readonly reported = new Set<VitalName>();
+  private readonly onPageHide = () => this.finalize();
+  private readonly onVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') this.finalize();
+  };
 
   setup(core: MonitorCore): void {
     if (this.core || typeof window === 'undefined') return;
     this.core = core;
     if (typeof PerformanceObserver === 'undefined') return;
+    window.addEventListener('pagehide', this.onPageHide);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.observe('paint', (entry) => {
-      if (entry.name === 'first-contentful-paint') this.report('FCP', entry.startTime);
+      if (entry.name === 'first-contentful-paint') this.reportOnce('FCP', entry.startTime);
     });
-    this.observe('largest-contentful-paint', (entry) => this.report('LCP', entry.startTime));
+    this.observe('largest-contentful-paint', (entry) => {
+      this.lcp = entry.startTime;
+    });
     this.observe('layout-shift', (entry) => {
       const shift = entry as PerformanceEntry & { value?: number; hadRecentInput?: boolean };
       if (!shift.hadRecentInput) {
         this.cls += shift.value ?? 0;
-        this.report('CLS', this.cls);
+        this.hasCls = true;
       }
     });
     this.observe('event', (entry) => {
       this.inp = Math.max(this.inp, entry.duration);
-      this.report('INP', this.inp);
+      this.hasInp = true;
     });
     queueMicrotask(() => {
       const navigation = performance.getEntriesByType('navigation')[0] as
         PerformanceNavigationTiming | undefined;
-      if (navigation) this.report('TTFB', navigation.responseStart);
+      if (navigation) this.reportOnce('TTFB', navigation.responseStart);
     });
   }
 
@@ -54,7 +67,9 @@ export class PerformancePlugin implements MonitorPlugin {
     }
   }
 
-  private report(metric: VitalName, value: number): void {
+  private reportOnce(metric: VitalName, value: number): void {
+    if (this.reported.has(metric)) return;
+    this.reported.add(metric);
     this.core?.captureEvent('performance', {
       metric,
       value: Number(value.toFixed(metric === 'CLS' ? 4 : 1)),
@@ -62,9 +77,22 @@ export class PerformancePlugin implements MonitorPlugin {
     });
   }
 
+  private finalize(): void {
+    if (this.finalized) return;
+    this.finalized = true;
+    if (this.lcp !== undefined) this.reportOnce('LCP', this.lcp);
+    if (this.hasCls) this.reportOnce('CLS', this.cls);
+    if (this.hasInp) this.reportOnce('INP', this.inp);
+  }
+
   teardown(): void {
+    this.finalize();
     for (const observer of this.observers) observer.disconnect();
     this.observers.length = 0;
+    if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    }
     this.core = undefined;
   }
 }

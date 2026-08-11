@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { createProjectSchema, createReleaseSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import {
-  getPerformanceMetrics,
+  getPerformanceOverview,
   getProjectOverview,
   listProjects,
   listReleases,
@@ -50,7 +50,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
     const exists = database.sqlite.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId);
     if (!exists)
       return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
-    return { items: getPerformanceMetrics(database, projectId) };
+    return getPerformanceOverview(database, projectId);
   });
 
   app.get('/api/v1/projects/:projectId/releases', async (request) => ({

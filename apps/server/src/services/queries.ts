@@ -4,7 +4,9 @@ import {
   type Issue,
   type IssueDetail,
   type IssueListResponse,
+  type PerformanceComparison,
   type PerformanceMetric,
+  type PerformanceOverview,
   type Project,
   type ProjectOverview,
   type Release,
@@ -63,12 +65,10 @@ export function listProjects(database: TraceDatabase): Project[] {
   const rows = database.sqlite
     .prepare(
       `SELECT p.*,
-        COUNT(DISTINCT i.id) AS issue_count,
-        COUNT(DISTINCT e.id) AS event_count
-       FROM projects p
-       LEFT JOIN issues i ON i.project_id = p.id
-       LEFT JOIN events e ON e.issue_id = i.id
-       GROUP BY p.id ORDER BY p.created_at DESC`,
+        (SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id) AS issue_count,
+        (SELECT COUNT(*) FROM events e JOIN releases r ON r.id = e.release_id
+         WHERE r.project_id = p.id) AS event_count
+       FROM projects p ORDER BY p.created_at DESC`,
     )
     .all() as Row[];
   return rows.map((row) => ({
@@ -136,10 +136,25 @@ export function listIssues(
     params.push(filters.release);
   }
   if (filters.browser) {
-    conditions.push(
-      "EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND json_extract(eb.context_json, '$.device.userAgent') LIKE ?)",
-    );
-    params.push(`%${filters.browser}%`);
+    const userAgent = "json_extract(eb.context_json, '$.device.userAgent')";
+    if (filters.browser === 'Edge') {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Edg/%')`,
+      );
+    } else if (filters.browser === 'Chrome') {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Chrome/%' AND ${userAgent} NOT LIKE '%Edg/%')`,
+      );
+    } else if (filters.browser === 'Safari') {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Safari/%' AND ${userAgent} NOT LIKE '%Chrome/%')`,
+      );
+    } else {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE ?)`,
+      );
+      params.push(`%${filters.browser}%`);
+    }
   }
   if (filters.route) {
     conditions.push(
@@ -255,9 +270,10 @@ export function listIssueEvents(
   issueId: string,
   limit = 50,
 ): StoredEvent[] {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 50;
   const rows = database.sqlite
     .prepare('SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT ?')
-    .all(issueId, Math.min(limit, 200)) as Row[];
+    .all(issueId, safeLimit) as Row[];
   return rows.map(mapEvent);
 }
 
@@ -302,34 +318,81 @@ export function getProjectOverview(database: TraceDatabase, projectId: string): 
   };
 }
 
-function metricRating(metric: keyof typeof WEB_VITAL_THRESHOLDS, value: number) {
+function metricRating(
+  metric: keyof typeof WEB_VITAL_THRESHOLDS,
+  value: number,
+): PerformanceMetric['rating'] {
   const [good, poor] = WEB_VITAL_THRESHOLDS[metric];
   return value <= good ? 'good' : value <= poor ? 'needs-improvement' : 'poor';
 }
 
-export function getPerformanceMetrics(
-  database: TraceDatabase,
-  projectId: string,
-): PerformanceMetric[] {
+const PERFORMANCE_METRICS = ['LCP', 'INP', 'CLS', 'FCP', 'TTFB'] as const;
+type PerformanceMetricName = (typeof PERFORMANCE_METRICS)[number];
+
+interface PerformanceSample {
+  metric: PerformanceMetricName;
+  value: number;
+  release: string;
+  route: string;
+  browser: string;
+  createdAt: number;
+}
+
+function browserName(userAgent: string): string {
+  if (userAgent.includes('Edg/')) return 'Edge';
+  if (userAgent.includes('Chrome/')) return 'Chrome';
+  if (userAgent.includes('Firefox/')) return 'Firefox';
+  if (userAgent.includes('Safari/')) return 'Safari';
+  return 'Other';
+}
+
+function routeName(pageUrl: string, route?: string): string {
+  if (route) return route.replace(/[?#].*$/, '') || '/';
+  try {
+    return new URL(pageUrl).pathname || '/';
+  } catch {
+    return pageUrl.replace(/[?#].*$/, '') || 'Unknown';
+  }
+}
+
+function getPerformanceSamples(database: TraceDatabase, projectId: string): PerformanceSample[] {
   const rows = database.sqlite
     .prepare(
-      `SELECT e.context_json FROM events e
-       JOIN releases r ON r.id = e.release_id
+      `SELECT e.context_json, e.page_url, e.created_at, r.version
+       FROM events e JOIN releases r ON r.id = e.release_id
        WHERE r.project_id = ? AND e.type = 'performance' AND e.created_at >= ?`,
     )
     .all(projectId, Date.now() - 7 * 24 * 60 * 60 * 1000) as Row[];
-  const grouped = new Map<string, number[]>();
+  const samples: PerformanceSample[] = [];
   for (const row of rows) {
-    const context = parseJson<{ payload?: { metric?: string; value?: number } }>(
-      String(row.context_json),
-      {},
-    );
+    const context = parseJson<{
+      page?: { route?: string };
+      device?: { userAgent?: string };
+      payload?: { metric?: string; value?: number };
+    }>(String(row.context_json), {});
     const metric = context.payload?.metric?.toUpperCase();
     const value = Number(context.payload?.value);
-    if (metric && Number.isFinite(value))
-      grouped.set(metric, [...(grouped.get(metric) ?? []), value]);
+    if (!PERFORMANCE_METRICS.includes(metric as PerformanceMetricName) || !Number.isFinite(value)) {
+      continue;
+    }
+    samples.push({
+      metric: metric as PerformanceMetricName,
+      value,
+      release: String(row.version ?? 'Unknown'),
+      route: routeName(String(row.page_url), context.page?.route),
+      browser: browserName(context.device?.userAgent ?? ''),
+      createdAt: number(row.created_at),
+    });
   }
-  return (['LCP', 'INP', 'CLS', 'FCP', 'TTFB'] as const).map((metric) => {
+  return samples;
+}
+
+function performanceMetrics(samples: PerformanceSample[]): PerformanceMetric[] {
+  const grouped = new Map<PerformanceMetricName, number[]>();
+  for (const sample of samples) {
+    grouped.set(sample.metric, [...(grouped.get(sample.metric) ?? []), sample.value]);
+  }
+  return PERFORMANCE_METRICS.map((metric) => {
     const values = grouped.get(metric) ?? [];
     const p75 = percentile(values, 0.75);
     return {
@@ -341,6 +404,80 @@ export function getPerformanceMetrics(
       samples: values.length,
     };
   });
+}
+
+function performanceComparison(
+  samples: PerformanceSample[],
+  dimension: 'release' | 'route' | 'browser',
+): PerformanceComparison[] {
+  const totals = new Map<string, number>();
+  for (const sample of samples)
+    totals.set(sample[dimension], (totals.get(sample[dimension]) ?? 0) + 1);
+  const visibleNames = new Set(
+    [...totals.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 8)
+      .map(([name]) => name),
+  );
+  const grouped = new Map<string, number[]>();
+  for (const sample of samples) {
+    if (!visibleNames.has(sample[dimension])) continue;
+    const key = `${sample[dimension]}\u0000${sample.metric}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), sample.value]);
+  }
+  return [...grouped.entries()]
+    .map(([key, values]) => {
+      const [name = 'Unknown', metric = 'LCP'] = key.split('\u0000');
+      const metricName = metric as PerformanceMetricName;
+      const p75 = percentile(values, 0.75);
+      return {
+        name,
+        metric: metricName,
+        p75,
+        rating: metricRating(metricName, p75),
+        samples: values.length,
+      };
+    })
+    .sort((left, right) => right.samples - left.samples || left.name.localeCompare(right.name));
+}
+
+export function getPerformanceMetrics(
+  database: TraceDatabase,
+  projectId: string,
+): PerformanceMetric[] {
+  return performanceMetrics(getPerformanceSamples(database, projectId));
+}
+
+export function getPerformanceOverview(
+  database: TraceDatabase,
+  projectId: string,
+): PerformanceOverview {
+  const samples = getPerformanceSamples(database, projectId);
+  const windowStart = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const day = 24 * 60 * 60 * 1000;
+  const trendGroups = new Map<string, number[]>();
+  for (const sample of samples) {
+    const bucket = Math.max(0, Math.min(6, Math.floor((sample.createdAt - windowStart) / day)));
+    const key = `${bucket}\u0000${sample.metric}`;
+    trendGroups.set(key, [...(trendGroups.get(key) ?? []), sample.value]);
+  }
+  return {
+    items: performanceMetrics(samples),
+    byRelease: performanceComparison(samples, 'release'),
+    byRoute: performanceComparison(samples, 'route'),
+    byBrowser: performanceComparison(samples, 'browser'),
+    trend: PERFORMANCE_METRICS.flatMap((metric) =>
+      Array.from({ length: 7 }, (_, bucket) => {
+        const values = trendGroups.get(`${bucket}\u0000${metric}`) ?? [];
+        return {
+          timestamp: windowStart + bucket * day,
+          metric,
+          p75: percentile(values, 0.75),
+          samples: values.length,
+        };
+      }),
+    ),
+  };
 }
 
 export { mapEvent };

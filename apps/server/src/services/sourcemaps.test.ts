@@ -24,7 +24,7 @@ describe('source map symbolication', () => {
   it('maps a minified frame inside its release boundary', async () => {
     const generator = new SourceMapGenerator({ file: 'app.js' });
     generator.addMapping({
-      generated: { line: 1, column: 0 },
+      generated: { line: 1, column: 9 },
       original: { line: 12, column: 4 },
       source: 'src/cart.ts',
       name: 'calculateTotal',
@@ -39,9 +39,9 @@ describe('source map symbolication', () => {
     const mapped = await symbolicateStack(
       database,
       'demo-release-2-4-1',
-      'TypeError: failure\n    at a (https://shop.test/assets/app.js:1:0)',
+      'TypeError: failure\n    at a (https://shop.test/assets/app.js:1:10)',
     );
-    expect(mapped).toContain('at calculateTotal (src/cart.ts:12:4)');
+    expect(mapped).toContain('at calculateTotal (src/cart.ts:12:5)');
   });
 
   it('returns a clear null fallback when a release has no matching map', async () => {
@@ -49,7 +49,7 @@ describe('source map symbolication', () => {
       await symbolicateStack(
         database,
         'demo-release-2-4-1',
-        'Error: missing\n    at a (https://shop.test/assets/other.js:1:0)',
+        'Error: missing\n    at a (https://shop.test/assets/other.js:1:1)',
       ),
     ).toBeNull();
   });

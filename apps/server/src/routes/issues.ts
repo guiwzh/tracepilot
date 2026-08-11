@@ -11,12 +11,24 @@ function queryRecord(query: unknown): Record<string, string | undefined> {
   return (query ?? {}) as Record<string, string | undefined>;
 }
 
+function positiveInteger(value: string | undefined, fallback: number, maximum: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(maximum, Math.floor(parsed)));
+}
+
+function optionalTimestamp(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabase): void {
   app.get('/api/v1/projects/:projectId/issues', async (request) => {
     const query = queryRecord(request.query);
     return listIssues(database, stringParam(request.params, 'projectId'), {
-      page: Math.max(1, Number(query.page ?? 1)),
-      pageSize: Math.max(1, Math.min(100, Number(query.pageSize ?? 25))),
+      page: positiveInteger(query.page, 1, 1_000_000),
+      pageSize: positiveInteger(query.pageSize, 25, 100),
       status: query.status,
       level: query.level,
       release: query.release,
@@ -25,8 +37,8 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
       search: query.search,
       sort: query.sort,
       order: query.order,
-      from: query.from ? Number(query.from) : undefined,
-      to: query.to ? Number(query.to) : undefined,
+      from: optionalTimestamp(query.from),
+      to: optionalTimestamp(query.to),
     });
   });
 
@@ -42,7 +54,7 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
     const issue = database.sqlite.prepare('SELECT 1 FROM issues WHERE id = ?').get(issueId);
     if (!issue)
       return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
-    const limit = Number(queryRecord(request.query).limit ?? 50);
+    const limit = positiveInteger(queryRecord(request.query).limit, 50, 200);
     return { items: listIssueEvents(database, issueId, limit) };
   });
 
