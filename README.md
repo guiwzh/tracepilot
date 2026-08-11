@@ -112,6 +112,7 @@ Playground 已提供 runtime、Promise、资源、Fetch、XHR、SPA 路由和手
 pnpm dev                  # 并行启动全部应用/包的开发模式
 pnpm seed                 # 重建虚构演示数据
 pnpm verify               # lint + typecheck + unit/integration + build
+pnpm smoke:production     # 加载 ESM/CJS 包并启动构建后的服务端
 pnpm test:e2e             # 真实浏览器闭环测试
 pnpm benchmark            # 本地 SQLite API 基准
 pnpm measure:sdk          # SDK minified/gzip 体积
@@ -124,13 +125,13 @@ pnpm evaluate:diagnosis   # 本地诊断契约与缓存冒烟评测
 
 | 指标                                   |              结果 |
 | -------------------------------------- | ----------------: |
-| SDK minified ESM                       |      12,502 bytes |
-| SDK gzip ESM                           |       4,183 bytes |
-| 10 事件接入批次 P50 / P95              | 1.79 ms / 2.23 ms |
+| SDK minified ESM                       |      13,556 bytes |
+| SDK gzip ESM                           |       4,419 bytes |
+| 10 事件接入批次 P50 / P95              | 1.88 ms / 2.28 ms |
 | Issue 列表查询 P50 / P95               | 0.13 ms / 0.16 ms |
 | 本地诊断结构化成功率（4 个固定 Issue） |              100% |
 | 未变化上下文缓存命中率                 |              100% |
-| Playwright 完整闭环                    |      4 / 4 passed |
+| Playwright 完整闭环                    |      7 / 7 passed |
 
 复现方式和限制见 [性能报告](docs/reports/performance.md) 与
 [诊断评测报告](docs/reports/diagnosis-evaluation.md)。简历或演示材料不应把这些本机数字包装成
