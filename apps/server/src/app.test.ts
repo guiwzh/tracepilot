@@ -104,4 +104,39 @@ describe('telemetry ingestion', () => {
       samples: 1,
     });
   });
+
+  it('generates a schema-valid diagnosis and reuses an unchanged context', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [event('diagnosis-event', '88392014')],
+      },
+    });
+    const issues = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/issues?page=1&pageSize=25',
+    });
+    const issueId = issues.json().items[0].id as string;
+    const first = await app.inject({
+      method: 'POST',
+      url: `/api/v1/issues/${issueId}/diagnoses`,
+      payload: {},
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({
+      issueId,
+      model: 'local-evidence-engine',
+      cached: false,
+      result: { possibleCauses: expect.any(Array), evidence: expect.any(Array) },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/api/v1/issues/${issueId}/diagnoses`,
+      payload: {},
+    });
+    expect(second.json()).toMatchObject({ id: first.json().id, cached: true });
+  });
 });

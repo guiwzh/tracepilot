@@ -1,10 +1,13 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import type { ServerConfig } from './config';
 import { createDatabase, ensureDemoProject } from './db/client';
 import { registerEventRoutes } from './routes/events';
 import { registerIssueRoutes } from './routes/issues';
 import { registerProjectRoutes } from './routes/projects';
+import { registerDiagnosisRoutes } from './routes/diagnosis';
+import { registerSourceMapRoutes } from './routes/sourcemaps';
 
 export interface BuildAppOptions {
   config: ServerConfig;
@@ -21,11 +24,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   ensureDemoProject(database);
 
   await app.register(cors, { origin: true, methods: ['GET', 'POST', 'PATCH', 'OPTIONS'] });
+  await app.register(multipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4 },
+  });
   app.get('/health', async () => ({ status: 'ok', service: 'tracepilot-server', time: Date.now() }));
 
   registerEventRoutes(app, database);
   registerProjectRoutes(app, database);
   registerIssueRoutes(app, database);
+  registerSourceMapRoutes(app, database, options.config);
+  registerDiagnosisRoutes(app, database, options.config);
 
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error }, 'request failed');
