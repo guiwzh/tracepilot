@@ -1,0 +1,75 @@
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import BetterSqlite3 from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import * as schema from './schema';
+
+const INITIAL_SCHEMA = `
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, dsn_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS releases (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  version TEXT NOT NULL, commit_sha TEXT, created_at INTEGER NOT NULL,
+  UNIQUE(project_id, version)
+);
+CREATE TABLE IF NOT EXISTS issues (
+  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL,
+  level TEXT NOT NULL, first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+  event_count INTEGER NOT NULL DEFAULT 1, user_count INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(project_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS issues_project_last_seen ON issues(project_id, last_seen_at);
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY, issue_id TEXT REFERENCES issues(id) ON DELETE SET NULL,
+  release_id TEXT REFERENCES releases(id) ON DELETE SET NULL, type TEXT NOT NULL,
+  message TEXT NOT NULL, stack TEXT, original_stack TEXT, page_url TEXT NOT NULL,
+  user_id TEXT, context_json TEXT NOT NULL, breadcrumbs_json TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_issue_created ON events(issue_id, created_at);
+CREATE INDEX IF NOT EXISTS events_release ON events(release_id);
+CREATE INDEX IF NOT EXISTS events_created ON events(created_at);
+CREATE TABLE IF NOT EXISTS source_maps (
+  id TEXT PRIMARY KEY, release_id TEXT NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+  minified_file TEXT NOT NULL, map_path TEXT NOT NULL, created_at INTEGER NOT NULL,
+  UNIQUE(release_id, minified_file)
+);
+CREATE TABLE IF NOT EXISTS diagnoses (
+  id TEXT PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, input_hash TEXT NOT NULL, result_json TEXT NOT NULL,
+  prompt_version TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  UNIQUE(issue_id, input_hash)
+);
+CREATE INDEX IF NOT EXISTS diagnoses_issue_created ON diagnoses(issue_id, created_at);
+`;
+
+export type TraceDatabase = ReturnType<typeof createDatabase>;
+
+export function createDatabase(databasePath: string) {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const sqlite = new BetterSqlite3(databasePath);
+  sqlite.pragma('busy_timeout = 5000');
+  sqlite.exec(INITIAL_SCHEMA);
+  const db = drizzle(sqlite, { schema });
+  return { db, sqlite, close: () => sqlite.close() };
+}
+
+export function ensureDemoProject(database: TraceDatabase): void {
+  const now = Date.now();
+  database.sqlite
+    .prepare(
+      `INSERT INTO projects (id, name, dsn_key, created_at)
+       VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+    )
+    .run('demo-project', 'Checkout Web', 'demo-dsn-key', now);
+  database.sqlite
+    .prepare(
+      `INSERT INTO releases (id, project_id, version, commit_sha, created_at)
+       VALUES (?, ?, ?, ?, ?) ON CONFLICT(project_id, version) DO NOTHING`,
+    )
+    .run('demo-release-2-4-1', 'demo-project', '2.4.1', '7f3ac91', now - 3_600_000);
+}
