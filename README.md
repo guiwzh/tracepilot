@@ -25,14 +25,14 @@
 
 ```mermaid
 flowchart LR
-  App[Business web app] --> SDK[Monitor SDK]
-  SDK --> Ingest[Fastify ingest API]
+  App[业务 Web 应用] --> SDK[监控 SDK]
+  SDK --> Ingest[Fastify 接入 API]
   Ingest --> DB[(SQLite)]
-  Maps[Private source maps] --> Symbolicate[Symbolication]
+  Maps[私有 Source Map] --> Symbolicate[堆栈还原]
   DB --> Symbolicate
-  DB --> Query[Issue & metric APIs]
-  Query --> UI[React evidence console]
-  DB --> Diagnose[Read-only diagnosis]
+  DB --> Query[Issue 与指标 API]
+  Query --> UI[React 证据工作台]
+  DB --> Diagnose[只读诊断]
   Diagnose --> UI
 ```
 
@@ -51,9 +51,9 @@ pnpm dev
 
 启动后：
 
-- Dashboard: [http://localhost:4173](http://localhost:4173)
-- Incident Playground: [http://localhost:4174](http://localhost:4174)
-- Server health: [http://localhost:4318/health](http://localhost:4318/health)
+- 调查工作台：[http://localhost:4173](http://localhost:4173)
+- 事故演练场：[http://localhost:4174](http://localhost:4174)
+- 服务健康检查：[http://localhost:4318/health](http://localhost:4318/health)
 
 `pnpm seed` 会重建 `demo-project` 的虚构数据；它不包含真实公司或用户信息。
 
@@ -179,6 +179,6 @@ Session Replay、自动改代码、Shell/测试执行、Agent 工具调用、Kaf
 企业多租户不属于本 MVP。只有监控闭环稳定并有真实压测后，才适合引入 PostgreSQL、异步队列、
 SSE 或 Agent 化能力。
 
-## License
+## 许可证
 
 MIT

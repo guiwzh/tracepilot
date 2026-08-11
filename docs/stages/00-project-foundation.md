@@ -1,20 +1,20 @@
-# Stage 00 — Project foundation
+# 阶段 00 — 项目基础
 
-## Outcome
+## 阶段成果
 
-Established the TracePilot pnpm workspace, common TypeScript/lint/format rules, shared runtime schemas,
-privacy helpers, environment template, and architecture records.
+建立 TracePilot pnpm 工作区、统一的 TypeScript/lint/格式化规则、共享运行时 Schema、隐私工具、
+环境变量模板和架构决策记录。
 
-## Implementation steps
+## 实现步骤
 
-1. Created workspace scripts for parallel development and repository-wide verification.
-2. Added strict TypeScript and ESLint flat configuration shared by all packages.
-3. Defined the monitor envelope, issue state, and evidence diagnosis schemas with Zod.
-4. Added common API/domain types so clients do not duplicate server response contracts.
-5. Implemented recursive sensitive-field redaction and URL query removal with unit coverage.
-6. Recorded the local-first architecture and event transport contract.
+1. 创建支持并行开发和仓库级验证的工作区脚本。
+2. 添加由所有包共享的严格 TypeScript 配置和 ESLint 扁平配置。
+3. 使用 Zod 定义监控事件信封、Issue 状态和证据诊断 Schema。
+4. 添加通用 API/领域类型，避免客户端重复定义服务端响应契约。
+5. 实现递归敏感字段脱敏和 URL 查询参数移除，并添加单元测试覆盖。
+6. 记录本地优先架构与事件传输契约。
 
-## Validation
+## 验证方式
 
 ```bash
 pnpm --filter @trace-pilot/shared typecheck
@@ -22,8 +22,8 @@ pnpm --filter @trace-pilot/shared test
 pnpm --filter @trace-pilot/shared build
 ```
 
-## Deliberate trade-offs
+## 明确的权衡
 
-- Source package exports keep local development fast; production packaging is still verified by tsup.
-- SQLite is selected for the runnable MVP, while storage details remain inside the server application.
-- The shared event payload is extensible but the surrounding envelope is strict.
+- 直接导出包源码可加快本地开发；生产打包仍通过 tsup 验证。
+- 可运行的 MVP 选择 SQLite，同时将存储细节限制在服务端应用内部。
+- 共享事件载荷允许扩展，但外围信封保持严格约束。

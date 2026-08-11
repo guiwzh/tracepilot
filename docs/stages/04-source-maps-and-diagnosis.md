@@ -1,29 +1,27 @@
-# Stage 04 — Source maps and evidence diagnosis
+# 阶段 04 — Source Map 与证据诊断
 
-## Outcome
+## 阶段成果
 
-Closed the product loop from a minified browser stack to original source coordinates and from stored
-telemetry to a cached, structured diagnosis. Both features degrade explicitly without affecting core
-issue investigation.
+打通从浏览器压缩堆栈到原始源码坐标，以及从已存储遥测数据到可缓存结构化诊断的产品闭环。两项
+功能都能明确降级，且不会影响核心 Issue 调查流程。
 
-## Implementation steps
+## 实现步骤
 
-1. Added private multipart source-map uploads with a 10 MB limit, `.map` extension check, version 3
-   structure validation, random server-side filenames, and restrictive file permissions.
-2. Normalized browser asset URLs to release-scoped filenames and mapped stack line/column pairs with
-   `source-map` consumers.
-3. Reprocessed stored release events after map upload and mapped new events immediately when a matching
-   map already existed.
-4. Built compact diagnosis context from the issue, mapped/minified stack, eight recent event samples,
-   twelve breadcrumbs per sample, failed requests, release, browser, and project-scoped performance.
-5. Applied recursive secret redaction again immediately before hashing or model use.
-6. Implemented a deterministic local evidence engine so demos and tests need no key or network access.
-7. Added an optional OpenAI Responses API adapter using Zod-backed `text.format` structured outputs,
-   a 30-second timeout, no SDK retries, and a final shared-schema validation.
-8. Persisted model, prompt version, context hash, tokens, latency, result, and cache state.
-9. Returned isolated 502 errors for provider failures while issue APIs remain independent.
+1. 添加私有 multipart Source Map 上传，设置 10 MB 上限、`.map` 扩展名检查、版本 3 结构校验、
+   服务端随机文件名和严格文件权限。
+2. 将浏览器资源 URL 归一化为 Release 范围内的文件名，并使用 `source-map` Consumer 映射堆栈的
+   行号与列号。
+3. Map 上传后重新处理已存储的 Release 事件；如果匹配的 Map 已存在，则在新事件到达时立即解析。
+4. 使用 Issue、已还原/压缩堆栈、最近 8 个事件样本、每个样本 12 条 Breadcrumb、失败请求、
+   Release、浏览器和项目级性能数据构建紧凑的诊断上下文。
+5. 在计算哈希或调用模型前，再次递归清理敏感信息。
+6. 实现确定性的本地证据引擎，使演示与测试无需密钥或网络访问。
+7. 添加可选的 OpenAI Responses API 适配器，使用 Zod 支持的 `text.format` 结构化输出，设置
+   30 秒超时、禁用 SDK 重试，并在最后执行共享 Schema 校验。
+8. 持久化模型、提示词版本、上下文哈希、Token、延迟、结果与缓存状态。
+9. 提供方失败时返回隔离的 502 错误，同时保持 Issue API 独立可用。
 
-## Validation
+## 验证方式
 
 ```bash
 pnpm --filter @trace-pilot/server typecheck
@@ -31,12 +29,12 @@ pnpm --filter @trace-pilot/server test
 pnpm --filter @trace-pilot/server build
 ```
 
-Result: 8 tests passed, including release-scoped source mapping, missing-map fallback, schema-valid local
-diagnosis, and unchanged-context cache reuse. The complete diagnosis report was also rendered against
-the local server and visually checked at 1440×1200.
+结果：8 项测试通过，覆盖 Release 范围内的源码映射、Map 缺失降级、符合 Schema 的本地诊断，
+以及上下文未变化时的缓存复用。完整诊断报告也已连接本地服务端渲染，并在 1440×1200 尺寸下
+完成视觉检查。
 
-## Key choices
+## 关键选择
 
-- Source maps are never exposed through a download endpoint.
-- Context size is bounded before model invocation rather than relying on the provider limit.
-- External structured output and local Zod validation are intentionally redundant trust boundaries.
+- Source Map 永远不会通过下载端点公开。
+- 在调用模型前主动限制上下文大小，而不是依赖提供方的限制。
+- 外部结构化输出和本地 Zod 校验刻意形成冗余的信任边界。

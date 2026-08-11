@@ -1,30 +1,28 @@
-# Diagnosis smoke evaluation
+# 诊断冒烟评测
 
-- Measured: 2026-08-12 (Asia/Shanghai)
-- Engine: `local-evidence-engine`
-- Dataset: 4 deterministic fictional seeded issues
+- 测量时间：2026-08-12（Asia/Shanghai）
+- 引擎：`local-evidence-engine`
+- 数据集：4 个确定性的虚构种子 Issue
 
 ```bash
 pnpm evaluate:diagnosis
 ```
 
-| Contract metric                       |       Result |
-| ------------------------------------- | -----------: |
-| Structured output success             | 4 / 4 (100%) |
-| Cache hit on identical second request | 4 / 4 (100%) |
-| Average evidence items                |         3.75 |
-| Average possible causes               |         2.00 |
+| 契约指标                   |         结果 |
+| -------------------------- | -----------: |
+| 结构化输出成功率           | 4 / 4 (100%) |
+| 第二次相同请求的缓存命中率 | 4 / 4 (100%) |
+| 平均证据项数量             |         3.75 |
+| 平均可能原因数量           |         2.00 |
 
-## What this proves
+## 本评测能够证明
 
-- Every generated record conforms to the shared Zod schema.
-- Each fixed scenario returns labeled evidence and multiple confidence-scored hypotheses.
-- Prompt-version plus redacted-context hashing reuses unchanged results.
+- 每条生成记录都符合共享 Zod Schema。
+- 每个固定场景都会返回带标签的证据，以及多个具有置信度评分的假设。
+- 提示词版本与脱敏上下文的组合哈希能够复用未变化的结果。
 
-## What this does not prove
+## 本评测无法证明
 
-This deterministic smoke suite does not measure semantic model quality, human usefulness, recall, or
-hallucination under an external provider. Before claiming those metrics, add 20–30 independently labeled
-incidents, human rubrics, blind scoring, provider/model snapshots, repeated trials, refusal handling,
-latency, and Token/cost collection. The repository deliberately reports this limitation instead of
-inventing an AI quality number.
+这套确定性的冒烟测试不衡量外部模型的语义质量、对人的实际帮助、召回率或幻觉情况。在声明这些
+指标前，应增加 20–30 个独立标注的事故、人工评分标准、盲评、提供方/模型快照、重复试验、拒答
+处理，以及延迟和 Token/成本采集。本仓库会如实说明这一限制，而不会虚构 AI 质量数据。

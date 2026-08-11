@@ -1,6 +1,6 @@
-# Event envelope
+# 事件信封格式
 
-The SDK sends batches to `POST /api/v1/envelopes`.
+SDK 将事件批次发送至 `POST /api/v1/envelopes`。
 
 ```json
 {
@@ -23,6 +23,5 @@ The SDK sends batches to `POST /api/v1/envelopes`.
 }
 ```
 
-The authoritative validation rules live in `packages/shared/src/schemas.ts`. The server rejects an
-entire malformed envelope, removes URL query strings, and redacts secret-shaped keys before writing.
-`eventId` is the ingestion idempotency key.
+权威校验规则位于 `packages/shared/src/schemas.ts`。服务端会拒绝整个格式错误的信封，在写入前
+移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段。`eventId` 是事件接入的幂等键。

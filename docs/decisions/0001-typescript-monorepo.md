@@ -1,18 +1,16 @@
-# ADR 0001: TypeScript workspace and local-first runtime
+# ADR 0001：TypeScript 工作区与本地优先运行时
 
-- Status: accepted
-- Date: 2026-08-12
+- 状态：已采纳
+- 日期：2026-08-12
 
-## Decision
+## 决策
 
-Use a pnpm TypeScript workspace with source-level package exports during development. Use Fastify and
-SQLite for a zero-service local runtime, while keeping shared wire schemas in a package imported by
-the SDK, server, and dashboard.
+使用 pnpm TypeScript 工作区，并在开发期间直接导出包源码。采用 Fastify 和 SQLite 实现无需外部
+服务的本地运行环境，同时将共享的传输 Schema 放在由 SDK、服务端和调查工作台共同引用的包中。
 
-## Consequences
+## 影响
 
-- A contributor can run the full product without Docker or a separate database.
-- Zod schemas prevent the three TypeScript surfaces from silently drifting.
-- SQLite-specific aggregate queries are acceptable in the MVP; storage migration remains isolated to
-  the server.
-- Each package still emits a production build so source-level exports do not hide packaging errors.
+- 贡献者无需 Docker 或独立数据库即可运行完整产品。
+- Zod Schema 可防止三个 TypeScript 边界的类型契约在无提示的情况下发生偏移。
+- MVP 阶段允许使用 SQLite 专属的聚合查询；存储迁移仍被限制在服务端内部。
+- 每个包仍会生成生产构建产物，避免源码级导出掩盖打包错误。

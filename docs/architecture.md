@@ -1,33 +1,32 @@
-# TracePilot architecture
+# TracePilot 架构
 
-TracePilot turns browser telemetry into an evidence chain that a developer can inspect before asking
-for a diagnosis.
+TracePilot 将浏览器遥测数据转换为证据链，让开发者在请求诊断前先自行核验事实。
 
 ```mermaid
 flowchart LR
-  Web[Web application] --> SDK[Monitor SDK]
-  SDK --> Ingest[Fastify ingest API]
+  Web[Web 应用] --> SDK[监控 SDK]
+  SDK --> Ingest[Fastify 接入 API]
   Ingest --> SQLite[(SQLite)]
-  Maps[Private source maps] --> Symbolicator[Symbolication service]
+  Maps[私有 Source Map] --> Symbolicator[堆栈还原服务]
   SQLite --> Symbolicator
-  SQLite --> Query[Issue and metric APIs]
-  Query --> Dashboard[React dashboard]
-  SQLite --> Diagnose[Evidence diagnosis]
+  SQLite --> Query[Issue 与指标 API]
+  Query --> Dashboard[React 调查工作台]
+  SQLite --> Diagnose[证据化诊断]
   Diagnose --> Dashboard
 ```
 
-## Workspace boundaries
+## 工作区边界
 
-- `packages/shared`: transport schemas, public response types, privacy helpers, and thresholds.
-- `packages/monitor-sdk`: browser-only collection core and plugins.
-- `apps/server`: ingestion, aggregation, queries, private source maps, and diagnosis.
-- `apps/dashboard`: the investigator-facing UI.
-- `apps/playground`: controlled scenarios that exercise the full telemetry path.
+- `packages/shared`：传输 Schema、公开响应类型、隐私工具与阈值。
+- `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件。
+- `apps/server`：数据接入、聚合、查询、私有 Source Map 与诊断。
+- `apps/dashboard`：面向调查人员的用户界面。
+- `apps/playground`：用于验证完整遥测链路的可控场景。
 
-## Operating principles
+## 运行原则
 
-1. Monitoring remains useful when the model provider is unavailable.
-2. All model claims must point back to stored evidence.
-3. Raw request bodies and common secret fields are excluded by default.
-4. Releases are the boundary for source-map resolution.
-5. SQLite is an MVP storage adapter, not a permanent scaling claim.
+1. 模型提供方不可用时，监控功能仍然可用。
+2. 模型给出的所有结论都必须能回指已存储的证据。
+3. 默认不采集原始请求体和常见敏感字段。
+4. Release 是 Source Map 解析的隔离边界。
+5. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。

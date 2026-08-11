@@ -1,22 +1,21 @@
-# ADR 0002: Read-only, evidence-grounded diagnosis
+# ADR 0002：只读、基于证据的诊断
 
-- Status: accepted
-- Date: 2026-08-12
+- 状态：已采纳
+- 日期：2026-08-12
 
-## Decision
+## 决策
 
-The diagnosis boundary receives a compact, twice-redacted snapshot of stored issue evidence and may
-only return a schema-validated report. It has no shell, filesystem, repository, browser, or mutation
-tools. The application remains fully usable without an external model key by using a deterministic
-local evidence engine whose output follows the same public schema and is visibly labeled as such.
+诊断边界仅接收经过两次脱敏的紧凑 Issue 证据快照，并且只能返回通过 Schema 校验的报告。它不具备
+Shell、文件系统、代码仓库、浏览器或任何写入工具。没有外部模型密钥时，应用会使用确定性的本地
+证据引擎，因此仍可完整使用；该引擎遵循相同的公开 Schema，并会在界面中明确标记。
 
-For OpenAI, use the Responses API with `text.format` and the JavaScript SDK's Zod parser. Validate the
-returned value again with the shared Zod schema before persistence.
+使用 OpenAI 时，通过 Responses API 的 `text.format` 和 JavaScript SDK 的 Zod 解析器获取结构化
+结果。持久化之前，再使用共享 Zod Schema 校验一次返回值。
 
-## Consequences
+## 影响
 
-- A model outage cannot block issue ingestion or investigation.
-- Every possible cause includes confidence and supporting evidence; unknowns are explicit.
-- A SHA-256 hash of prompt version plus redacted context provides safe reuse for unchanged evidence.
-- Regeneration updates the cached record instead of creating unbounded duplicates.
-- This MVP cannot autonomously verify or repair a diagnosis, by design.
+- 模型服务中断不会阻塞 Issue 接入或调查。
+- 每个可能原因都包含置信度和支持证据；未知信息会被明确列出。
+- 提示词版本与脱敏上下文的 SHA-256 哈希，可安全复用证据未变化时的结果。
+- 重新生成会更新缓存记录，而不会无限创建重复数据。
+- 按照设计，本 MVP 无法自主验证或修复诊断结论。

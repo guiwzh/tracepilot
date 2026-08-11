@@ -1,43 +1,41 @@
-# Local performance baseline
+# 本地性能基线
 
-- Measured: 2026-08-12 (Asia/Shanghai)
-- Runtime: Node.js v24.14.0
-- Storage: SQLite WAL in a temporary local file
-- Transport: Fastify `inject` in-process; no network or TLS cost
+- 测量时间：2026-08-12（Asia/Shanghai）
+- 运行时：Node.js v24.14.0
+- 存储：临时本地文件中的 SQLite WAL
+- 传输：进程内 Fastify `inject`，不包含网络或 TLS 开销
 
-## SDK artifact
+## SDK 构建产物
 
-Run after `pnpm build`:
+在 `pnpm build` 之后运行：
 
 ```bash
 pnpm measure:sdk
 ```
 
-| Artifact     |  Bytes |
-| ------------ | -----: |
-| Minified ESM | 12,502 |
-| Gzip level 9 |  4,183 |
+| 构建产物      | 字节数 |
+| ------------- | -----: |
+| 压缩后的 ESM  | 12,502 |
+| Gzip 9 级压缩 |  4,183 |
 
-Source maps and type declarations are not included in these numbers.
+以上数据不包含 Source Map 和类型声明文件。
 
-## Server micro-benchmark
+## 服务端微基准测试
 
 ```bash
 pnpm benchmark
 ```
 
-The script writes 1,000 events as 100 sequential batches of 10. All events normalize into one issue,
-with 200 distinct users. It then runs the first issue-list page 100 times.
+该脚本以 100 个连续批次写入 1,000 个事件，每批 10 个。所有事件归一化后聚合为一个 Issue，涉及
+200 个不同用户。随后，脚本会查询 Issue 列表第一页 100 次。
 
-| Operation          |     P50 |     P95 |
+| 操作               |     P50 |     P95 |
 | ------------------ | ------: | ------: |
-| Ingest batch of 10 | 1.79 ms | 2.23 ms |
-| Issue list query   | 0.13 ms | 0.16 ms |
+| 接入一批 10 个事件 | 1.79 ms | 2.23 ms |
+| Issue 列表查询     | 0.13 ms | 0.16 ms |
 
-## Interpretation limits
+## 解读限制
 
-This is a deterministic developer baseline, useful for detecting large regressions. It is not a load
-test: there is no HTTP network, concurrent writer contention, authentication, remote disk, model call,
-or production telemetry distribution. Do not use these values as capacity or SLA claims. A production
-claim requires a named machine profile, concurrency schedule, warm-up, multiple runs, raw samples, and
-networked deployment.
+这是一个确定性的开发基线，适合发现明显的性能回退，但并非负载测试：它不包含 HTTP 网络、并发
+写入竞争、身份认证、远程磁盘、模型调用或生产遥测数据分布。请勿将这些数值用作容量或 SLA 声明。
+生产指标必须注明机器配置、并发计划、预热过程、多轮运行、原始样本和联网部署环境。

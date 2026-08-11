@@ -1,35 +1,32 @@
-# 3–5 minute demo script
+# 3–5 分钟演示脚本
 
-## 0:00–0:35 — Establish the loop
+## 0:00–0:35 — 介绍完整闭环
 
-Open the project selector, choose **Checkout Web**, and explain the path: browser signal → grouped issue
-→ reconstructed evidence → source location → bounded diagnosis.
+打开项目选择器，选择 **Checkout Web**，并介绍完整路径：浏览器信号 → 聚合后的 Issue → 重建证据
+→ 源码位置 → 边界明确的诊断。
 
-## 0:35–1:20 — Create a real signal
+## 0:35–1:20 — 制造真实信号
 
-Open the Incident Playground at `http://localhost:4174`. Trigger **Fetch 503**, **SPA route change**, and
-**Captured warning**, then flush the buffer. Point out that these controls use the same SDK exported by
-the workspace, not hard-coded dashboard fixtures.
+打开 `http://localhost:4174` 的事故演练场，依次触发 **Fetch 503**、**SPA route change** 和
+**Captured warning**，然后刷新缓冲区。说明这些控件使用的是工作区实际导出的同一个 SDK，而非
+调查工作台中硬编码的模拟数据。
 
-## 1:20–2:15 — Triage
+## 1:20–2:15 — 分诊
 
-Return to Issues. Filter severity and show that the query lives in the URL. Open the payment 503 issue
-and identify count, affected users, latest release, route, browser share, and the indexed evidence chain.
+返回 Issue 列表，按严重程度筛选，并展示查询条件如何保存在 URL 中。打开支付 503 Issue，指出
+事件数量、受影响用户、最新 Release、路由、浏览器占比和带索引的证据链。
 
-## 2:15–3:00 — Source boundary
+## 2:15–3:00 — 源码解析边界
 
-Open Stack and Releases. Explain that minified filename plus Release selects a private source map; a
-missing map preserves the raw stack and clearly reports the fallback. Optionally upload the source-map
-fixture used by the unit test.
+打开堆栈与 Release 页面。说明压缩后的文件名与 Release 会共同选定私有 Source Map；缺少 Map
+时会保留原始堆栈，并明确提示已降级。也可以上传单元测试使用的 Source Map 测试样例进行演示。
 
-## 3:00–4:00 — Diagnosis
+## 3:00–4:00 — 诊断
 
-Open Diagnosis and generate a report. Show evidence citations, confidence bars, investigation steps,
-missing information, model/Token/latency metadata, and the read-only disclaimer. Generate it again to
-demonstrate the unchanged-context cache.
+打开诊断页并生成报告。展示证据引用、置信度条、调查步骤、缺失信息、模型/Token/延迟元数据，
+以及只读声明。再次生成报告，演示上下文未变化时的缓存复用。
 
-## 4:00–4:40 — Engineering proof
+## 4:00–4:40 — 工程质量证明
 
-Run `pnpm verify`, `pnpm test:e2e`, `pnpm benchmark`, and `pnpm evaluate:diagnosis`. Show that all resume
-numbers point to reproducible scripts and reports, and state that the local micro-benchmark is not a
-production SLA.
+运行 `pnpm verify`、`pnpm test:e2e`、`pnpm benchmark` 和 `pnpm evaluate:diagnosis`。说明简历中的
+所有数据都能追溯到可复现的脚本与报告，并明确本地微基准测试结果不代表生产 SLA。
