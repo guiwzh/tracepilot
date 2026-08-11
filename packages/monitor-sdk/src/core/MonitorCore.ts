@@ -7,18 +7,15 @@ import type {
   MonitorUser,
 } from '../types';
 import { Transport } from '../transport/Transport';
-import {
-  breadcrumbId,
-  createId,
-  errorPayload,
-  getDeviceContext,
-  getPageContext,
-} from './helpers';
+import { breadcrumbId, createId, errorPayload, getDeviceContext, getPageContext } from './helpers';
 
 export class MonitorCore implements MonitorClient {
   readonly transport: Transport;
   readonly options: Required<
-    Pick<MonitorOptions, 'sampleRate' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'dedupeWindow'>
+    Pick<
+      MonitorOptions,
+      'sampleRate' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'dedupeWindow'
+    >
   > &
     MonitorOptions;
   private readonly plugins: MonitorPlugin[] = [];

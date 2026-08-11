@@ -18,14 +18,17 @@ export function registerDiagnosisRoutes(
   app.get('/api/v1/issues/:issueId/diagnoses', async (request, reply) => {
     const issueId = idParam(request.params, 'issueId');
     const issue = database.sqlite.prepare('SELECT 1 FROM issues WHERE id = ?').get(issueId);
-    if (!issue) return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
+    if (!issue)
+      return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     return { items: listDiagnoses(database, issueId) };
   });
 
   app.post('/api/v1/issues/:issueId/diagnoses', async (request, reply) => {
     const parsed = requestSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'INVALID_DIAGNOSIS_REQUEST', message: 'The force flag must be boolean.' });
+      return reply
+        .code(400)
+        .send({ error: 'INVALID_DIAGNOSIS_REQUEST', message: 'The force flag must be boolean.' });
     }
     try {
       const diagnosis = await diagnoseIssue(
@@ -34,7 +37,8 @@ export function registerDiagnosisRoutes(
         idParam(request.params, 'issueId'),
         parsed.data.force,
       );
-      if (!diagnosis) return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
+      if (!diagnosis)
+        return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
       return reply.code(201).send(diagnosis);
     } catch (error) {
       request.log.error({ err: error }, 'diagnosis generation failed');
@@ -48,7 +52,9 @@ export function registerDiagnosisRoutes(
   app.get('/api/v1/diagnoses/:diagnosisId', async (request, reply) => {
     const diagnosis = getDiagnosis(database, idParam(request.params, 'diagnosisId'));
     if (!diagnosis) {
-      return reply.code(404).send({ error: 'DIAGNOSIS_NOT_FOUND', message: 'Diagnosis not found.' });
+      return reply
+        .code(404)
+        .send({ error: 'DIAGNOSIS_NOT_FOUND', message: 'Diagnosis not found.' });
     }
     return diagnosis;
   });

@@ -4,7 +4,11 @@ import type { MonitorCore } from '../core/MonitorCore';
 function elementLabel(target: EventTarget | null): string {
   if (!(target instanceof HTMLElement)) return 'unknown element';
   const label = target.getAttribute('aria-label') || target.textContent?.trim().slice(0, 80);
-  const identity = target.id ? `#${target.id}` : target.classList[0] ? `.${target.classList[0]}` : '';
+  const identity = target.id
+    ? `#${target.id}`
+    : target.classList[0]
+      ? `.${target.classList[0]}`
+      : '';
   return `${target.tagName.toLowerCase()}${identity}${label ? ` “${label}”` : ''}`;
 }
 
@@ -29,15 +33,17 @@ export class BehaviorPlugin implements MonitorPlugin {
     window.addEventListener('popstate', this.popStateListener);
     this.originalPushState = history.pushState;
     this.originalReplaceState = history.replaceState;
-    const plugin = this;
+    const originalPushState = this.originalPushState;
+    const originalReplaceState = this.originalReplaceState;
+    const recordNavigation = this.recordNavigation.bind(this);
     history.pushState = function (...args) {
-      const result = plugin.originalPushState!.apply(this, args);
-      plugin.recordNavigation('pushState');
+      const result = originalPushState.apply(this, args);
+      recordNavigation('pushState');
       return result;
     };
     history.replaceState = function (...args) {
-      const result = plugin.originalReplaceState!.apply(this, args);
-      plugin.recordNavigation('replaceState');
+      const result = originalReplaceState.apply(this, args);
+      recordNavigation('replaceState');
       return result;
     };
   }
@@ -52,8 +58,10 @@ export class BehaviorPlugin implements MonitorPlugin {
   }
 
   teardown(): void {
-    if (typeof document !== 'undefined') document.removeEventListener('click', this.clickListener, true);
-    if (typeof window !== 'undefined') window.removeEventListener('popstate', this.popStateListener);
+    if (typeof document !== 'undefined')
+      document.removeEventListener('click', this.clickListener, true);
+    if (typeof window !== 'undefined')
+      window.removeEventListener('popstate', this.popStateListener);
     if (typeof history !== 'undefined') {
       if (this.originalPushState) history.pushState = this.originalPushState;
       if (this.originalReplaceState) history.replaceState = this.originalReplaceState;

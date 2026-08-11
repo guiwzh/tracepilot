@@ -34,10 +34,15 @@ export class NetworkPlugin implements MonitorPlugin {
     const original = this.originalFetch;
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = inputUrl(input);
-      if (url.includes(core.options.dsn) || new Headers(init?.headers).has('x-tracepilot-internal')) {
+      if (
+        url.includes(core.options.dsn) ||
+        new Headers(init?.headers).has('x-tracepilot-internal')
+      ) {
         return original.call(window, input, init);
       }
-      const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+      const method = (
+        init?.method ?? (input instanceof Request ? input.method : 'GET')
+      ).toUpperCase();
       const startedAt = performance.now();
       try {
         const response = await original.call(window, input, init);
@@ -63,20 +68,25 @@ export class NetworkPlugin implements MonitorPlugin {
     if (typeof XMLHttpRequest === 'undefined') return;
     this.originalOpen = XMLHttpRequest.prototype.open;
     this.originalSend = XMLHttpRequest.prototype.send;
-    const plugin = this;
+    const xhrMeta = this.xhrMeta;
+    const record = this.record.bind(this);
     const originalOpen = this.originalOpen;
     const originalSend = this.originalSend;
-    XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: unknown[]) {
-      plugin.xhrMeta.set(this, { method: method.toUpperCase(), url: String(url), startedAt: 0 });
+    XMLHttpRequest.prototype.open = function (
+      method: string,
+      url: string | URL,
+      ...rest: unknown[]
+    ) {
+      xhrMeta.set(this, { method: method.toUpperCase(), url: String(url), startedAt: 0 });
       return originalOpen.apply(this, [method, url, ...rest] as Parameters<typeof originalOpen>);
     };
     XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
-      const meta = plugin.xhrMeta.get(this);
+      const meta = xhrMeta.get(this);
       if (!meta || meta.url.includes(core.options.dsn)) return originalSend.call(this, body);
       meta.startedAt = performance.now();
       const done = () => {
         this.removeEventListener('loadend', done);
-        plugin.record(core, {
+        record(core, {
           method: meta.method,
           url: meta.url,
           status: this.status,

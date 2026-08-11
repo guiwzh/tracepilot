@@ -130,15 +130,21 @@ export function listIssues(
     params.push(filters.level);
   }
   if (filters.release) {
-    conditions.push('EXISTS (SELECT 1 FROM events er JOIN releases rr ON rr.id = er.release_id WHERE er.issue_id = i.id AND rr.version = ?)');
+    conditions.push(
+      'EXISTS (SELECT 1 FROM events er JOIN releases rr ON rr.id = er.release_id WHERE er.issue_id = i.id AND rr.version = ?)',
+    );
     params.push(filters.release);
   }
   if (filters.browser) {
-    conditions.push("EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND json_extract(eb.context_json, '$.device.userAgent') LIKE ?)");
+    conditions.push(
+      "EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND json_extract(eb.context_json, '$.device.userAgent') LIKE ?)",
+    );
     params.push(`%${filters.browser}%`);
   }
   if (filters.route) {
-    conditions.push('EXISTS (SELECT 1 FROM events ep WHERE ep.issue_id = i.id AND ep.page_url LIKE ?)');
+    conditions.push(
+      'EXISTS (SELECT 1 FROM events ep WHERE ep.issue_id = i.id AND ep.page_url LIKE ?)',
+    );
     params.push(`%${filters.route}%`);
   }
   if (filters.search) {
@@ -155,8 +161,11 @@ export function listIssues(
   }
   const where = conditions.join(' AND ');
   const total = number(
-    (database.sqlite.prepare(`SELECT COUNT(*) AS count FROM issues i WHERE ${where}`).get(...params) as Row)
-      .count,
+    (
+      database.sqlite
+        .prepare(`SELECT COUNT(*) AS count FROM issues i WHERE ${where}`)
+        .get(...params) as Row
+    ).count,
   );
   const sortColumns: Record<string, string> = {
     lastSeen: 'i.last_seen_at',
@@ -298,7 +307,10 @@ function metricRating(metric: keyof typeof WEB_VITAL_THRESHOLDS, value: number) 
   return value <= good ? 'good' : value <= poor ? 'needs-improvement' : 'poor';
 }
 
-export function getPerformanceMetrics(database: TraceDatabase, projectId: string): PerformanceMetric[] {
+export function getPerformanceMetrics(
+  database: TraceDatabase,
+  projectId: string,
+): PerformanceMetric[] {
   const rows = database.sqlite
     .prepare(
       `SELECT e.context_json FROM events e
@@ -308,10 +320,14 @@ export function getPerformanceMetrics(database: TraceDatabase, projectId: string
     .all(projectId, Date.now() - 7 * 24 * 60 * 60 * 1000) as Row[];
   const grouped = new Map<string, number[]>();
   for (const row of rows) {
-    const context = parseJson<{ payload?: { metric?: string; value?: number } }>(String(row.context_json), {});
+    const context = parseJson<{ payload?: { metric?: string; value?: number } }>(
+      String(row.context_json),
+      {},
+    );
     const metric = context.payload?.metric?.toUpperCase();
     const value = Number(context.payload?.value);
-    if (metric && Number.isFinite(value)) grouped.set(metric, [...(grouped.get(metric) ?? []), value]);
+    if (metric && Number.isFinite(value))
+      grouped.set(metric, [...(grouped.get(metric) ?? []), value]);
   }
   return (['LCP', 'INP', 'CLS', 'FCP', 'TTFB'] as const).map((metric) => {
     const values = grouped.get(metric) ?? [];

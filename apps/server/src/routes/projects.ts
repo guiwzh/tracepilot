@@ -40,14 +40,16 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
   app.get('/api/v1/projects/:projectId/overview', async (request, reply) => {
     const projectId = paramId(request.params);
     const exists = database.sqlite.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId);
-    if (!exists) return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
+    if (!exists)
+      return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
     return getProjectOverview(database, projectId);
   });
 
   app.get('/api/v1/projects/:projectId/performance', async (request, reply) => {
     const projectId = paramId(request.params);
     const exists = database.sqlite.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId);
-    if (!exists) return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
+    if (!exists)
+      return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
     return { items: getPerformanceMetrics(database, projectId) };
   });
 
@@ -66,12 +68,15 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
       });
     }
     const exists = database.sqlite.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId);
-    if (!exists) return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
+    if (!exists)
+      return reply.code(404).send({ error: 'PROJECT_NOT_FOUND', message: 'Project not found.' });
     const duplicate = database.sqlite
       .prepare('SELECT id FROM releases WHERE project_id = ? AND version = ?')
       .get(projectId, parsed.data.version) as { id: string } | undefined;
     if (duplicate) {
-      return reply.code(409).send({ error: 'RELEASE_EXISTS', message: 'This release already exists.' });
+      return reply
+        .code(409)
+        .send({ error: 'RELEASE_EXISTS', message: 'This release already exists.' });
     }
     const release = {
       id: randomUUID(),

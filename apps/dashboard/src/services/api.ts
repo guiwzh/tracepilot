@@ -25,11 +25,18 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: init?.body instanceof FormData ? init.headers : { 'content-type': 'application/json', ...init?.headers },
+    headers:
+      init?.body instanceof FormData
+        ? init.headers
+        : { 'content-type': 'application/json', ...init?.headers },
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
-    throw new ApiError(body.message ?? `Request failed with ${response.status}`, response.status, body.error);
+    throw new ApiError(
+      body.message ?? `Request failed with ${response.status}`,
+      response.status,
+      body.error,
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -38,7 +45,8 @@ export const api = {
   projects: () => request<{ items: Project[] }>('/api/v1/projects'),
   createProject: (name: string) =>
     request<Project>('/api/v1/projects', { method: 'POST', body: JSON.stringify({ name }) }),
-  overview: (projectId: string) => request<ProjectOverview>(`/api/v1/projects/${projectId}/overview`),
+  overview: (projectId: string) =>
+    request<ProjectOverview>(`/api/v1/projects/${projectId}/overview`),
   issues: (projectId: string, search: URLSearchParams) =>
     request<IssueListResponse>(`/api/v1/projects/${projectId}/issues?${search}`),
   issue: (issueId: string) => request<IssueDetail>(`/api/v1/issues/${issueId}`),

@@ -54,7 +54,10 @@ function failedRequests(event: StoredEvent): Array<Record<string, unknown>> {
     }));
 }
 
-export function buildDiagnosisContext(database: TraceDatabase, issueId: string): DiagnosisContext | null {
+export function buildDiagnosisContext(
+  database: TraceDatabase,
+  issueId: string,
+): DiagnosisContext | null {
   const issue = getIssue(database, issueId);
   if (!issue) return null;
   const events = listIssueEvents(database, issueId, 8);
@@ -92,9 +95,12 @@ export function buildDiagnosisContext(database: TraceDatabase, issueId: string):
     .all(issue.projectId) as Array<{ metric?: string; value?: number }>;
   const performance: DiagnosisContext['performance'] = {};
   for (const metric of metrics) {
-    if (metric.metric === 'LCP' && performance.lcp === undefined) performance.lcp = Number(metric.value);
-    if (metric.metric === 'INP' && performance.inp === undefined) performance.inp = Number(metric.value);
-    if (metric.metric === 'CLS' && performance.cls === undefined) performance.cls = Number(metric.value);
+    if (metric.metric === 'LCP' && performance.lcp === undefined)
+      performance.lcp = Number(metric.value);
+    if (metric.metric === 'INP' && performance.inp === undefined)
+      performance.inp = Number(metric.value);
+    if (metric.metric === 'CLS' && performance.cls === undefined)
+      performance.cls = Number(metric.value);
   }
   if (Object.keys(performance).length > 0) context.performance = performance;
   return redactSensitive(context);
@@ -104,7 +110,11 @@ function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['eviden
   const evidence: DiagnosisResult['evidence'] = [];
   const stack = context.stack.original ?? context.stack.minified;
   if (stack) {
-    const frame = stack.split('\n').find((line) => line.includes(' at '))?.trim() ?? stack.split('\n')[0]!;
+    const frame =
+      stack
+        .split('\n')
+        .find((line) => line.includes(' at '))
+        ?.trim() ?? stack.split('\n')[0]!;
     evidence.push({ description: `Captured stack points to ${frame}`, source: 'stack' });
   }
   const failed = context.recentEvents.flatMap((event) => event.failedRequests)[0];
@@ -117,11 +127,22 @@ function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['eviden
   const click = [...context.recentEvents.flatMap((event) => event.breadcrumbs)]
     .reverse()
     .find((item) => item.type === 'click');
-  if (click) evidence.push({ description: `The last captured user action was ${click.message}.`, source: 'breadcrumb' });
+  if (click)
+    evidence.push({
+      description: `The last captured user action was ${click.message}.`,
+      source: 'breadcrumb',
+    });
   const release = context.recentEvents[0]?.release;
-  if (release) evidence.push({ description: `The most recent samples occurred on release ${release}.`, source: 'release' });
+  if (release)
+    evidence.push({
+      description: `The most recent samples occurred on release ${release}.`,
+      source: 'release',
+    });
   if (context.performance?.lcp !== undefined) {
-    evidence.push({ description: `Recent LCP evidence is ${context.performance.lcp} ms.`, source: 'performance' });
+    evidence.push({
+      description: `Recent LCP evidence is ${context.performance.lcp} ms.`,
+      source: 'performance',
+    });
   }
   return evidence.slice(0, 6);
 }
@@ -133,22 +154,67 @@ function localDiagnosis(context: DiagnosisContext): DiagnosisResult {
   let suggestions: string[];
   if (/→\s*(?:5\d\d|failed)|network|request/.test(lower)) {
     causes = [
-      { cause: 'The upstream endpoint was unavailable or rejected the request.', confidence: 0.88, supportingEvidence: evidence.filter((item) => item.source === 'network').map((item) => item.description) },
-      { cause: 'A client retry or timeout policy amplified a transient service failure.', confidence: 0.46, supportingEvidence: [`${context.issue.count} events were grouped for this failure.`] },
+      {
+        cause: 'The upstream endpoint was unavailable or rejected the request.',
+        confidence: 0.88,
+        supportingEvidence: evidence
+          .filter((item) => item.source === 'network')
+          .map((item) => item.description),
+      },
+      {
+        cause: 'A client retry or timeout policy amplified a transient service failure.',
+        confidence: 0.46,
+        supportingEvidence: [`${context.issue.count} events were grouped for this failure.`],
+      },
     ];
-    suggestions = ['Handle the failing status explicitly and keep the user action retryable.', 'Correlate the endpoint status with service logs for the same release window.', 'Add a bounded backoff only for idempotent requests.'];
+    suggestions = [
+      'Handle the failing status explicitly and keep the user action retryable.',
+      'Correlate the endpoint status with service logs for the same release window.',
+      'Add a bounded backoff only for idempotent requests.',
+    ];
   } else if (/resource|chunk|load/.test(lower)) {
     causes = [
-      { cause: 'The deployed HTML referenced an asset that was absent or no longer cached at the CDN.', confidence: 0.81, supportingEvidence: evidence.filter((item) => item.source === 'release' || item.source === 'stack').map((item) => item.description) },
-      { cause: 'A release transition left a stale page pointing at an older dynamic chunk.', confidence: 0.64, supportingEvidence: [`The issue spans ${context.issue.count} captured loads.`] },
+      {
+        cause:
+          'The deployed HTML referenced an asset that was absent or no longer cached at the CDN.',
+        confidence: 0.81,
+        supportingEvidence: evidence
+          .filter((item) => item.source === 'release' || item.source === 'stack')
+          .map((item) => item.description),
+      },
+      {
+        cause: 'A release transition left a stale page pointing at an older dynamic chunk.',
+        confidence: 0.64,
+        supportingEvidence: [`The issue spans ${context.issue.count} captured loads.`],
+      },
     ];
-    suggestions = ['Retain immutable assets for the maximum HTML cache lifetime.', 'Offer one guarded page refresh after a dynamic import failure.', 'Compare CDN asset availability for the affected release.'];
+    suggestions = [
+      'Retain immutable assets for the maximum HTML cache lifetime.',
+      'Offer one guarded page refresh after a dynamic import failure.',
+      'Compare CDN asset availability for the affected release.',
+    ];
   } else {
     causes = [
-      { cause: 'The runtime received a state shape that the failing code path did not guard.', confidence: 0.82, supportingEvidence: evidence.filter((item) => item.source === 'stack' || item.source === 'breadcrumb').map((item) => item.description) },
-      { cause: 'A release changed the response or initialization timing before this action.', confidence: 0.53, supportingEvidence: evidence.filter((item) => item.source === 'release').map((item) => item.description) },
+      {
+        cause: 'The runtime received a state shape that the failing code path did not guard.',
+        confidence: 0.82,
+        supportingEvidence: evidence
+          .filter((item) => item.source === 'stack' || item.source === 'breadcrumb')
+          .map((item) => item.description),
+      },
+      {
+        cause: 'A release changed the response or initialization timing before this action.',
+        confidence: 0.53,
+        supportingEvidence: evidence
+          .filter((item) => item.source === 'release')
+          .map((item) => item.description),
+      },
     ];
-    suggestions = ['Guard the nullable value at the mapped source frame and preserve a safe UI state.', 'Add a fixture for the missing data shape to the unit test around this path.', 'Compare payload shape and initialization order with the prior release.'];
+    suggestions = [
+      'Guard the nullable value at the mapped source frame and preserve a safe UI state.',
+      'Add a fixture for the missing data shape to the unit test around this path.',
+      'Compare payload shape and initialization order with the prior release.',
+    ];
   }
 
   return {
@@ -162,10 +228,13 @@ function localDiagnosis(context: DiagnosisContext): DiagnosisResult {
     ],
     suggestions,
     missingInformation: [
-      context.stack.original ? 'A correlated backend trace or request ID.' : 'The matching source map for the affected release.',
+      context.stack.original
+        ? 'A correlated backend trace or request ID.'
+        : 'The matching source map for the affected release.',
       'The expected response or state schema at the failing boundary.',
     ],
-    disclaimer: 'This diagnosis is a read-only hypothesis generated from captured evidence. No code, command, or production state was changed or verified.',
+    disclaimer:
+      'This diagnosis is a read-only hypothesis generated from captured evidence. No code, command, or production state was changed or verified.',
   };
 }
 
@@ -236,8 +305,7 @@ export function listDiagnoses(database: TraceDatabase, issueId: string): Diagnos
 
 export function getDiagnosis(database: TraceDatabase, diagnosisId: string): DiagnosisRecord | null {
   const row = database.sqlite.prepare('SELECT * FROM diagnoses WHERE id = ?').get(diagnosisId) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   return row ? mapDiagnosis(row) : null;
 }
 

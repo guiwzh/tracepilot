@@ -39,7 +39,9 @@ export interface MonitorClient {
   captureException(error: unknown, context?: CapturePayload): string | null;
   captureMessage(message: string, level?: 'error' | 'warning' | 'info'): string | null;
   captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null;
-  addBreadcrumb(breadcrumb: Omit<Breadcrumb, 'id' | 'timestamp'> & Partial<Pick<Breadcrumb, 'timestamp'>>): void;
+  addBreadcrumb(
+    breadcrumb: Omit<Breadcrumb, 'id' | 'timestamp'> & Partial<Pick<Breadcrumb, 'timestamp'>>,
+  ): void;
   flush(): Promise<void>;
   destroy(): void;
 }

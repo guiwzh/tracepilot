@@ -22,7 +22,8 @@ export class Transport {
   private readonly fetchImpl?: typeof fetch;
   private readonly onPageHide = () => void this.flush(true);
   private readonly onVisibilityChange = () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') void this.flush(true);
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+      void this.flush(true);
   };
 
   constructor(private readonly options: TransportOptions) {
@@ -68,7 +69,11 @@ export class Transport {
     if (this.inFlight) return this.inFlight;
     if (this.queue.length === 0) return;
     const batch = this.queue.splice(0, this.options.batchSize);
-    const envelope: EventEnvelope = { dsnKey: this.options.dsnKey, sentAt: Date.now(), events: batch };
+    const envelope: EventEnvelope = {
+      dsnKey: this.options.dsnKey,
+      sentAt: Date.now(),
+      events: batch,
+    };
     const body = JSON.stringify(envelope);
 
     if (

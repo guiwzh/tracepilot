@@ -13,8 +13,8 @@ describe('issue fingerprint normalization', () => {
   });
 
   it('keeps a readable title while replacing volatile identifiers', () => {
-    expect(normalizeDisplayTitle('Order 39843992 failed for 550e8400-e29b-41d4-a716-446655440000')).toBe(
-      'Order {id} failed for {uuid}',
-    );
+    expect(
+      normalizeDisplayTitle('Order 39843992 failed for 550e8400-e29b-41d4-a716-446655440000'),
+    ).toBe('Order {id} failed for {uuid}');
   });
 });

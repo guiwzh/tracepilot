@@ -31,8 +31,8 @@ pnpm --filter @trace-pilot/playground typecheck
 pnpm --filter @trace-pilot/playground build
 ```
 
-Result: 4 SDK tests passed. ESM and CommonJS packages built successfully. The minified ESM artifact is
-12.19 KB and 4,194 bytes when gzip-compressed on this machine; the number is recorded as a local build
+Result: 4 SDK tests passed. ESM and CommonJS packages built successfully. The final verified minified
+ESM artifact is 12,502 bytes and 4,183 bytes when gzip-compressed on this machine; the number is recorded as a local build
 measurement, not a production benchmark.
 
 ## Key choices

@@ -19,8 +19,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     port: Number(env.PORT ?? 4318),
     databasePath: resolve(env.DATABASE_PATH ?? resolve(serverRoot, '.tracepilot/tracepilot.db')),
     sourceMapDir: resolve(env.SOURCEMAP_DIR ?? resolve(serverRoot, '.tracepilot/source-maps')),
-    modelApiUrl:
-      env.MODEL_API_URL ?? (env.MODEL_API_KEY ? 'https://api.openai.com/v1' : undefined),
+    modelApiUrl: env.MODEL_API_URL ?? (env.MODEL_API_KEY ? 'https://api.openai.com/v1' : undefined),
     modelApiKey: env.MODEL_API_KEY,
     modelName: env.MODEL_NAME ?? 'gpt-5.6-terra',
   };

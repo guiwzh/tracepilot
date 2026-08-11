@@ -1,5 +1,7 @@
 export function formatNumber(value: number): string {
-  return new Intl.NumberFormat('en', { notation: value > 9_999 ? 'compact' : 'standard' }).format(value);
+  return new Intl.NumberFormat('en', { notation: value > 9_999 ? 'compact' : 'standard' }).format(
+    value,
+  );
 }
 
 export function relativeTime(value: number): string {

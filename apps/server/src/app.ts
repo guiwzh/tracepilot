@@ -27,7 +27,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(multipart, {
     limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4 },
   });
-  app.get('/health', async () => ({ status: 'ok', service: 'tracepilot-server', time: Date.now() }));
+  app.get('/health', async () => ({
+    status: 'ok',
+    service: 'tracepilot-server',
+    time: Date.now(),
+  }));
 
   registerEventRoutes(app, database);
   registerProjectRoutes(app, database);

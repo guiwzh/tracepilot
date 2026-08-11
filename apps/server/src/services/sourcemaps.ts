@@ -14,7 +14,9 @@ interface StackFrame {
 }
 
 function parseStackFrame(line: string): StackFrame | null {
-  const match = line.match(/(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/);
+  const match = line.match(
+    /(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/,
+  );
   if (!match?.[2] || !match[3] || !match[4]) return null;
   return {
     line,
@@ -65,8 +67,15 @@ export async function saveSourceMap(
 
 export function listSourceMaps(database: TraceDatabase, releaseId: string): SourceMapRecord[] {
   const rows = database.sqlite
-    .prepare('SELECT id, release_id, minified_file, created_at FROM source_maps WHERE release_id = ? ORDER BY created_at DESC')
-    .all(releaseId) as Array<{ id: string; release_id: string; minified_file: string; created_at: number }>;
+    .prepare(
+      'SELECT id, release_id, minified_file, created_at FROM source_maps WHERE release_id = ? ORDER BY created_at DESC',
+    )
+    .all(releaseId) as Array<{
+    id: string;
+    release_id: string;
+    minified_file: string;
+    created_at: number;
+  }>;
   return rows.map((row) => ({
     id: row.id,
     releaseId: row.release_id,
@@ -121,7 +130,10 @@ export async function symbolicateStack(
   return mapped > 0 ? result.join('\n') : null;
 }
 
-export async function symbolicateReleaseEvents(database: TraceDatabase, releaseId: string): Promise<number> {
+export async function symbolicateReleaseEvents(
+  database: TraceDatabase,
+  releaseId: string,
+): Promise<number> {
   const rows = database.sqlite
     .prepare('SELECT id, stack FROM events WHERE release_id = ? AND stack IS NOT NULL')
     .all(releaseId) as Array<{ id: string; stack: string }>;
@@ -129,7 +141,9 @@ export async function symbolicateReleaseEvents(database: TraceDatabase, releaseI
   for (const row of rows) {
     const originalStack = await symbolicateStack(database, releaseId, row.stack);
     if (originalStack) {
-      database.sqlite.prepare('UPDATE events SET original_stack = ? WHERE id = ?').run(originalStack, row.id);
+      database.sqlite
+        .prepare('UPDATE events SET original_stack = ? WHERE id = ?')
+        .run(originalStack, row.id);
       count += 1;
     }
   }

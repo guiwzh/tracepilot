@@ -36,7 +36,8 @@ export class PerformancePlugin implements MonitorPlugin {
       this.report('INP', this.inp);
     });
     queueMicrotask(() => {
-      const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+      const navigation = performance.getEntriesByType('navigation')[0] as
+        PerformanceNavigationTiming | undefined;
       if (navigation) this.report('TTFB', navigation.responseStart);
     });
   }

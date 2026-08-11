@@ -49,7 +49,11 @@ afterEach(async () => {
 
 describe('telemetry ingestion', () => {
   it('rejects malformed input without crashing', async () => {
-    const response = await app.inject({ method: 'POST', url: '/api/v1/envelopes', payload: { events: [] } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: { events: [] },
+    });
     expect(response.statusCode).toBe(400);
     expect((await app.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
   });
@@ -99,7 +103,9 @@ describe('telemetry ingestion', () => {
       method: 'GET',
       url: '/api/v1/projects/demo-project/performance',
     });
-    expect(metrics.json().items.find((item: { metric: string }) => item.metric === 'LCP')).toMatchObject({
+    expect(
+      metrics.json().items.find((item: { metric: string }) => item.metric === 'LCP'),
+    ).toMatchObject({
       p75: 2100,
       samples: 1,
     });

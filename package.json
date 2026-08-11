@@ -3,16 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "description": "TracePilot — frontend observability and evidence-grounded AI diagnosis",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "concurrently -n shared,sdk,server,dashboard,playground -c blue,magenta,yellow,cyan,green \"pnpm --filter @trace-pilot/shared dev\" \"pnpm --filter @trace-pilot/monitor-sdk dev\" \"pnpm --filter @trace-pilot/server dev\" \"pnpm --filter @trace-pilot/dashboard dev\" \"pnpm --filter @trace-pilot/playground dev\"",
     "build": "pnpm -r --sort run build",
-    "typecheck": "pnpm -r --sort run typecheck",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --sort run typecheck",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm -r --if-present run test",
     "test:e2e": "playwright test",
+    "benchmark": "pnpm --filter @trace-pilot/server benchmark",
+    "evaluate:diagnosis": "pnpm --filter @trace-pilot/server evaluate:diagnosis",
+    "measure:sdk": "node scripts/measure-sdk.mjs",
     "seed": "pnpm --filter @trace-pilot/server seed",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },

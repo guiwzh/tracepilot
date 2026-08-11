@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 import { loadConfig } from './config';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from './db/client';
@@ -23,7 +25,11 @@ function breadcrumb(
   return { id: `${eventId}-crumb-${index}`, type, category, message, timestamp, data };
 }
 
-function baseEvent(id: string, timestamp: number, index: number): Omit<MonitorEvent, 'eventType' | 'payload'> {
+function baseEvent(
+  id: string,
+  timestamp: number,
+  index: number,
+): Omit<MonitorEvent, 'eventType' | 'payload'> {
   const route = index % 4 === 0 ? '/checkout/review' : index % 3 === 0 ? '/cart' : '/checkout';
   return {
     eventId: id,
@@ -40,10 +46,28 @@ function baseEvent(id: string, timestamp: number, index: number): Omit<MonitorEv
     },
     breadcrumbs: [
       breadcrumb(id, 1, timestamp - 9_200, 'navigation', 'route', `pushState → ${route}`),
-      breadcrumb(id, 2, timestamp - 6_800, 'click', 'ui.click', 'button.checkout-step “Continue to payment”'),
-      breadcrumb(id, 3, timestamp - 3_100, 'network', 'http', 'GET https://api.shop.example/cart → 200', {
-        method: 'GET', url: 'https://api.shop.example/cart?token=removed', status: 200, duration: 142 + index,
-      }),
+      breadcrumb(
+        id,
+        2,
+        timestamp - 6_800,
+        'click',
+        'ui.click',
+        'button.checkout-step “Continue to payment”',
+      ),
+      breadcrumb(
+        id,
+        3,
+        timestamp - 3_100,
+        'network',
+        'http',
+        'GET https://api.shop.example/cart → 200',
+        {
+          method: 'GET',
+          url: 'https://api.shop.example/cart?token=removed',
+          status: 200,
+          duration: 142 + index,
+        },
+      ),
     ],
   };
 }
@@ -59,10 +83,14 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   `);
   const now = Date.now();
   database.sqlite
-    .prepare('INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)')
+    .prepare(
+      'INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
     .run('demo-release-2-4-1', 'demo-project', '2.4.1', '7f3ac91', now - 3_600_000);
   database.sqlite
-    .prepare('INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)')
+    .prepare(
+      'INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)',
+    )
     .run('demo-release-2-3-9', 'demo-project', '2.3.9', '4b2e210', now - 5 * 24 * 3_600_000);
 
   const events: MonitorEvent[] = [];
@@ -80,7 +108,14 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
       },
       breadcrumbs: [
         ...baseEvent(id, timestamp, index).breadcrumbs,
-        breadcrumb(id, 4, timestamp - 380, 'error', 'runtime', "cart.summary was undefined in calculateTotal"),
+        breadcrumb(
+          id,
+          4,
+          timestamp - 380,
+          'error',
+          'runtime',
+          'cart.summary was undefined in calculateTotal',
+        ),
       ],
     });
   }
@@ -91,21 +126,55 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
     events.push({
       ...baseEvent(id, timestamp, index + 100),
       eventType: 'network',
-      payload: { method: 'POST', url: 'https://api.shop.example/payment/authorize?token=demo', status: 503, duration: 1820 + index * 9, success: false, error: 'upstream unavailable' },
-      breadcrumbs: [...baseEvent(id, timestamp, index + 100).breadcrumbs, breadcrumb(id, 4, timestamp, 'network', 'http', 'POST /payment/authorize → 503', { method: 'POST', url: 'https://api.shop.example/payment/authorize', status: 503, duration: 1820 + index * 9 })],
+      payload: {
+        method: 'POST',
+        url: 'https://api.shop.example/payment/authorize?token=demo',
+        status: 503,
+        duration: 1820 + index * 9,
+        success: false,
+        error: 'upstream unavailable',
+      },
+      breadcrumbs: [
+        ...baseEvent(id, timestamp, index + 100).breadcrumbs,
+        breadcrumb(id, 4, timestamp, 'network', 'http', 'POST /payment/authorize → 503', {
+          method: 'POST',
+          url: 'https://api.shop.example/payment/authorize',
+          status: 503,
+          duration: 1820 + index * 9,
+        }),
+      ],
     });
   }
 
   for (let index = 0; index < 18; index += 1) {
     const timestamp = now - index * 61 * 60_000;
     const id = `demo-resource-${String(index).padStart(3, '0')}`;
-    events.push({ ...baseEvent(id, timestamp, index + 200), eventType: 'resource', payload: { tagName: 'script', resourceType: 'script', url: 'https://shop.example/assets/address-lookup.d2b334ac.js', message: 'Failed to load address lookup chunk' } });
+    events.push({
+      ...baseEvent(id, timestamp, index + 200),
+      eventType: 'resource',
+      payload: {
+        tagName: 'script',
+        resourceType: 'script',
+        url: 'https://shop.example/assets/address-lookup.d2b334ac.js',
+        message: 'Failed to load address lookup chunk',
+      },
+    });
   }
 
   for (let index = 0; index < 11; index += 1) {
     const timestamp = now - index * 77 * 60_000;
     const id = `demo-inventory-${String(index).padStart(3, '0')}`;
-    events.push({ ...baseEvent(id, timestamp, index + 300), eventType: 'error', payload: { name: 'Message', message: 'Inventory response omitted warehouseId', level: 'warning', stack: 'Message: Inventory response omitted warehouseId\n    at normalizeInventory (https://shop.example/assets/inventory.29ad00ef.js:1:88)' } });
+    events.push({
+      ...baseEvent(id, timestamp, index + 300),
+      eventType: 'error',
+      payload: {
+        name: 'Message',
+        message: 'Inventory response omitted warehouseId',
+        level: 'warning',
+        stack:
+          'Message: Inventory response omitted warehouseId\n    at normalizeInventory (https://shop.example/assets/inventory.29ad00ef.js:1:88)',
+      },
+    });
   }
 
   const vitalValues = { LCP: 2280, INP: 184, CLS: 0.082, FCP: 1420, TTFB: 620 } as const;
@@ -115,22 +184,37 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
       const id = `demo-vital-${metric}-${sample}`;
       const timestamp = now - sample * 3 * 60 * 60_000;
       const variance = metric === 'CLS' ? sample * 0.0015 : (sample % 7) * 72;
-      events.push({ ...baseEvent(id, timestamp, metricIndex + 400), eventType: 'performance', payload: { metric, value: base + variance, rating: sample > 23 ? 'needs-improvement' : 'good' }, breadcrumbs: [] });
+      events.push({
+        ...baseEvent(id, timestamp, metricIndex + 400),
+        eventType: 'performance',
+        payload: {
+          metric,
+          value: base + variance,
+          rating: sample > 23 ? 'needs-improvement' : 'good',
+        },
+        breadcrumbs: [],
+      });
       metricIndex += 1;
     }
   }
 
   for (let start = 0; start < events.length; start += 100) {
-    ingestEnvelope(database, { dsnKey: 'demo-dsn-key', sentAt: now, events: events.slice(start, start + 100) });
+    ingestEnvelope(database, {
+      dsnKey: 'demo-dsn-key',
+      sentAt: now,
+      events: events.slice(start, start + 100),
+    });
   }
   return { events: events.length };
 }
 
-const config = loadConfig();
-const database = createDatabase(config.databasePath);
-try {
-  const result = seedDemoData(database);
-  process.stdout.write(`Seeded ${result.events} fictional browser events for demo-project.\n`);
-} finally {
-  database.close();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const config = loadConfig();
+  const database = createDatabase(config.databasePath);
+  try {
+    const result = seedDemoData(database);
+    process.stdout.write(`Seeded ${result.events} fictional browser events for demo-project.\n`);
+  } finally {
+    database.close();
+  }
 }

@@ -33,7 +33,9 @@ export const monitorEventSchema = z.object({
   device: z.object({
     userAgent: z.string().max(1000),
     language: z.string().max(40).optional(),
-    viewport: z.object({ width: z.number().nonnegative(), height: z.number().nonnegative() }).optional(),
+    viewport: z
+      .object({ width: z.number().nonnegative(), height: z.number().nonnegative() })
+      .optional(),
   }),
   payload: z.record(z.unknown()),
   breadcrumbs: z.array(breadcrumbSchema).max(100),

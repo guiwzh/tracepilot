@@ -9,7 +9,9 @@
     "build": "tsup src/index.ts --format esm --sourcemap --clean --external better-sqlite3",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "benchmark": "tsx src/benchmark.ts",
+    "evaluate:diagnosis": "tsx src/evaluate.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

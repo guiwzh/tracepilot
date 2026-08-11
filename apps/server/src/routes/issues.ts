@@ -32,14 +32,16 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
 
   app.get('/api/v1/issues/:issueId', async (request, reply) => {
     const issue = getIssue(database, stringParam(request.params, 'issueId'));
-    if (!issue) return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
+    if (!issue)
+      return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     return issue;
   });
 
   app.get('/api/v1/issues/:issueId/events', async (request, reply) => {
     const issueId = stringParam(request.params, 'issueId');
     const issue = database.sqlite.prepare('SELECT 1 FROM issues WHERE id = ?').get(issueId);
-    if (!issue) return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
+    if (!issue)
+      return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     const limit = Number(queryRecord(request.query).limit ?? 50);
     return { items: listIssueEvents(database, issueId, limit) };
   });

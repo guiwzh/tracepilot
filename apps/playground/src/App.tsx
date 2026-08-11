@@ -19,7 +19,9 @@ const scenarios: Scenario[] = [
     description: 'Throws outside the React event call stack so window.error observes it.',
     run: () => {
       window.setTimeout(() => {
-        throw new TypeError(`Cannot read properties of undefined (reading 'total') — order ${Date.now()}`);
+        throw new TypeError(
+          `Cannot read properties of undefined (reading 'total') — order ${Date.now()}`,
+        );
       });
     },
   },
@@ -152,15 +154,21 @@ export function App() {
       <section className="intro">
         <div>
           <p className="eyebrow">Controlled environment · release 2.4.1</p>
-          <h1>Break the checkout.<br />Keep the evidence.</h1>
+          <h1>
+            Break the checkout.
+            <br />
+            Keep the evidence.
+          </h1>
         </div>
         <div className="intro-note">
           <span className="signal-line" />
           <p>
-            Every control below creates a real browser signal. Run several in sequence to produce the
-            breadcrumbs an investigator would see around an incident.
+            Every control below creates a real browser signal. Run several in sequence to produce
+            the breadcrumbs an investigator would see around an incident.
           </p>
-          <button className="flush-button" onClick={flush}>Flush event buffer</button>
+          <button className="flush-button" onClick={flush}>
+            Flush event buffer
+          </button>
         </div>
       </section>
 
@@ -172,7 +180,9 @@ export function App() {
               <strong>{scenario.title}</strong>
               <small>{scenario.description}</small>
             </span>
-            <span className="trigger" aria-hidden="true">Trigger ↗</span>
+            <span className="trigger" aria-hidden="true">
+              Trigger ↗
+            </span>
           </button>
         ))}
       </section>

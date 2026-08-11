@@ -120,7 +120,9 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
   const ingest = database.sqlite.transaction(() => {
     for (const rawEvent of envelope.events) {
       if (rawEvent.projectId !== project.id) throw new Error('PROJECT_DSN_MISMATCH');
-      const duplicate = database.sqlite.prepare('SELECT 1 FROM events WHERE id = ?').get(rawEvent.eventId);
+      const duplicate = database.sqlite
+        .prepare('SELECT 1 FROM events WHERE id = ?')
+        .get(rawEvent.eventId);
       if (duplicate) {
         duplicates += 1;
         continue;

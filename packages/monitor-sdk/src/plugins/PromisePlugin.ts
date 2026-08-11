@@ -20,7 +20,8 @@ export class PromisePlugin implements MonitorPlugin {
   }
 
   teardown(): void {
-    if (typeof window !== 'undefined') window.removeEventListener('unhandledrejection', this.listener);
+    if (typeof window !== 'undefined')
+      window.removeEventListener('unhandledrejection', this.listener);
     this.core = undefined;
   }
 }
