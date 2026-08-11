@@ -55,6 +55,9 @@ pnpm dev
 - 事故演练场：[http://localhost:4174](http://localhost:4174)
 - 服务健康检查：[http://localhost:4318/health](http://localhost:4318/health)
 
+首次使用建议阅读[平台使用手册](docs/user-guide.md)，其中包含逐页面操作、SDK 接入、日常排障、
+Source Map、AI 诊断和常见问题。
+
 `pnpm seed` 会重建 `demo-project` 的虚构数据；它不包含真实公司或用户信息。
 
 ### 可选外部模型
@@ -63,10 +66,13 @@ pnpm dev
 完成。若要调用 OpenAI：
 
 ```bash
-cp .env.example .env
-# 在 .env 中设置 MODEL_API_KEY；可按需覆盖 MODEL_NAME 和 MODEL_API_URL
+cp .env.example apps/server/.env
+# 在 apps/server/.env 中设置 MODEL_API_KEY；可按需覆盖 MODEL_NAME 和 MODEL_API_URL
 pnpm dev
 ```
+
+通过 pnpm filter 启动包脚本时，Server 的工作目录是 apps/server，因此服务端环境文件应放在该
+目录。
 
 外部适配层使用 Responses API 的 Zod 结构化输出；返回结果仍会再经过共享 Schema 校验后才写入
 数据库。API Key 仅由 Server 读取。
@@ -171,7 +177,8 @@ docs/stages          每阶段实现与验证记录
 tests/e2e            浏览器闭环测试
 ```
 
-详细设计见 [architecture.md](docs/architecture.md)，3–5 分钟演示顺序见
+完整操作见[平台使用手册](docs/user-guide.md)，详细设计见
+[architecture.md](docs/architecture.md)，3–5 分钟演示顺序见
 [demo-script.md](docs/demo-script.md)。
 
 ## 仍然不做
