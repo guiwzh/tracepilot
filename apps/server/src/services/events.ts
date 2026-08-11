@@ -8,7 +8,7 @@ import {
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { events, issues, releases } from '../db/schema';
-import { eventFingerprint } from '../lib/fingerprint';
+import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
 
 export interface IngestResult {
   accepted: number;
@@ -34,7 +34,9 @@ function eventTitle(event: MonitorEvent): string {
     return `Resource failed: ${stripUrlQuery(String(payload.url ?? payload.tagName ?? 'unknown'))}`;
   }
   if (event.eventType === 'performance') return `${String(payload.metric ?? 'Metric')} sample`;
-  return String(payload.message ?? payload.name ?? 'Unknown client error').slice(0, 500);
+  return normalizeDisplayTitle(
+    String(payload.message ?? payload.name ?? 'Unknown client error').slice(0, 500),
+  );
 }
 
 function eventLevel(event: MonitorEvent): 'error' | 'warning' | 'info' {

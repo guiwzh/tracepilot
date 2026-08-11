@@ -13,6 +13,15 @@ export function normalizeMessage(input: string): string {
     .toLowerCase();
 }
 
+export function normalizeDisplayTitle(input: string): string {
+  return input
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, '{uuid}')
+    .replace(/\b(?:1[6-9]|2\d)\d{11}\b/g, '{timestamp}')
+    .replace(/\b\d{4,}\b/g, '{id}')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function topStackFrame(stack?: string): string {
   if (!stack) return 'no-stack';
   const line = stack
