@@ -1,0 +1,32 @@
+{
+  "name": "@trace-pilot/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsup src/index.ts --format esm --sourcemap --clean --external better-sqlite3",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "seed": "tsx src/seed.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/multipart": "^9.2.1",
+    "@trace-pilot/shared": "workspace:*",
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^17.2.1",
+    "drizzle-orm": "^0.44.5",
+    "fastify": "^5.5.0",
+    "source-map": "^0.7.6",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.3.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "vitest": "^3.2.4"
+  }
+}

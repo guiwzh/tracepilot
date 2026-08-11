@@ -1,0 +1,32 @@
+{
+  "name": "trace-pilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TracePilot — frontend observability and evidence-grounded AI diagnosis",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "concurrently -n shared,sdk,server,dashboard,playground -c blue,magenta,yellow,cyan,green \"pnpm --filter @trace-pilot/shared dev\" \"pnpm --filter @trace-pilot/monitor-sdk dev\" \"pnpm --filter @trace-pilot/server dev\" \"pnpm --filter @trace-pilot/dashboard dev\" \"pnpm --filter @trace-pilot/playground dev\"",
+    "build": "pnpm -r --sort run build",
+    "typecheck": "pnpm -r --sort run typecheck",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r --if-present run test",
+    "test:e2e": "playwright test",
+    "seed": "pnpm --filter @trace-pilot/server seed",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.3.0",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.34.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0"
+  }
+}
