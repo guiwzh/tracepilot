@@ -1,0 +1,23 @@
+{
+  "name": "@trace-pilot/monitor-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --minify --sourcemap",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@trace-pilot/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^18.0.1",
+    "tsup": "^8.5.0",
+    "vitest": "^3.2.4"
+  }
+}

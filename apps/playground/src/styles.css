@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Manrope:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'Manrope', system-ui, sans-serif;
+  color: #15212a;
+  background: #f1f3f2;
+  font-synthesis: none;
+  --ink: #15212a;
+  --muted: #657078;
+  --line: #cbd1d1;
+  --signal: #e75f2b;
+  --paper: #f8f9f7;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, a { font: inherit; }
+button:focus-visible, a:focus-visible { outline: 3px solid rgba(231, 95, 43, 0.35); outline-offset: 3px; }
+
+main { width: min(1240px, calc(100% - 48px)); margin: 0 auto; padding-bottom: 72px; }
+.lab-header { min-height: 80px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.wordmark { color: var(--ink); text-decoration: none; display: flex; align-items: center; gap: 12px; font-weight: 700; letter-spacing: -0.02em; }
+.mark { display: grid; place-items: center; width: 35px; height: 35px; background: var(--ink); color: white; font: 500 12px 'DM Mono', monospace; }
+.connection { font: 500 12px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.connection span { width: 8px; height: 8px; border-radius: 50%; background: #97a0a4; }
+.connection[data-state='connected'] span { background: #2f8a69; box-shadow: 0 0 0 4px rgba(47,138,105,.12); }
+.intro { padding: 76px 0 60px; display: grid; grid-template-columns: 1.45fr .55fr; gap: 72px; align-items: end; }
+.eyebrow { margin: 0 0 18px; color: var(--signal); font: 500 11px 'DM Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin: 0; font-size: clamp(46px, 7vw, 94px); line-height: .95; letter-spacing: -.065em; font-weight: 600; }
+.intro-note { color: var(--muted); line-height: 1.7; font-size: 14px; }
+.signal-line { display: block; width: 72px; height: 3px; background: var(--signal); margin-bottom: 20px; }
+.flush-button { border: 0; padding: 0; color: var(--ink); background: none; border-bottom: 1px solid var(--ink); cursor: pointer; font: 500 12px 'DM Mono', monospace; }
+.scenario-grid { border-top: 1px solid var(--ink); }
+.scenario { width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; display: grid; grid-template-columns: 64px 1fr auto; gap: 24px; text-align: left; align-items: center; padding: 25px 12px; cursor: pointer; transition: background .2s, padding .2s; }
+.scenario:hover { background: var(--paper); padding-left: 24px; }
+.scenario-number { font: 400 12px 'DM Mono', monospace; color: var(--signal); }
+.scenario-content { display: grid; grid-template-columns: minmax(190px, .65fr) 1fr; gap: 32px; align-items: baseline; }
+.scenario-content strong { font-size: 18px; letter-spacing: -.02em; }
+.scenario-content small { color: var(--muted); line-height: 1.5; max-width: 520px; }
+.trigger { font: 500 11px 'DM Mono', monospace; text-transform: uppercase; letter-spacing: .08em; }
+.activity { margin-top: 72px; display: grid; grid-template-columns: 240px 1fr; gap: 48px; }
+.activity h2 { font-size: 22px; margin: 0; }
+.activity ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.activity li { display: grid; grid-template-columns: 120px 1fr; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.activity time { font: 400 11px 'DM Mono', monospace; color: var(--muted); }
+.activity .empty { color: var(--muted); display: block; }
+
+@media (max-width: 760px) {
+  main { width: min(100% - 28px, 1240px); }
+  .lab-header { min-height: 68px; }
+  .connection { font-size: 10px; }
+  .intro { grid-template-columns: 1fr; gap: 36px; padding: 50px 0 42px; }
+  h1 { font-size: clamp(44px, 14vw, 68px); }
+  .scenario { grid-template-columns: 38px 1fr; gap: 12px; padding: 22px 4px; }
+  .scenario-content { grid-template-columns: 1fr; gap: 7px; }
+  .trigger { display: none; }
+  .activity { grid-template-columns: 1fr; gap: 20px; margin-top: 50px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scenario { transition: none; }
+}
