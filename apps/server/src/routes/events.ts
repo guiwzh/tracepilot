@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { envelopeSchema } from '@trace-pilot/shared';
+import { envelopeSchema, redactSensitive } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { ingestEnvelope } from '../services/events';
 import { symbolicateStack } from '../services/sourcemaps';
@@ -27,7 +27,7 @@ export function registerEventRoutes(app: FastifyInstance, database: TraceDatabas
         if (originalStack) {
           database.sqlite
             .prepare('UPDATE events SET original_stack = ? WHERE id = ?')
-            .run(originalStack, event.eventId);
+            .run(redactSensitive(originalStack), event.eventId);
         }
       }
       return reply.code(202).send(result);

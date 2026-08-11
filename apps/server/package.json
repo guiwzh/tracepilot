@@ -19,7 +19,7 @@
     "@trace-pilot/shared": "workspace:*",
     "better-sqlite3": "^12.2.0",
     "dotenv": "^17.2.1",
-    "drizzle-orm": "^0.44.5",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^5.5.0",
     "openai": "^5.20.0",
     "source-map": "^0.7.6",

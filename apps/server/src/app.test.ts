@@ -9,11 +9,11 @@ import type { ServerConfig } from './config';
 let directory: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
 
-function event(id: string, dynamicId: string): MonitorEvent {
+function event(id: string, dynamicId: string, timestamp = Date.now()): MonitorEvent {
   return {
     eventId: id,
     eventType: 'error',
-    timestamp: Date.now(),
+    timestamp,
     projectId: 'demo-project',
     release: '2.4.1',
     environment: 'production',
@@ -85,6 +85,82 @@ describe('telemetry ingestion', () => {
     expect(detail.body).not.toContain('should-never-be-stored');
     expect(detail.body).toContain('[REDACTED]');
     expect(detail.json().sampleEvent.pageUrl).toBe('https://shop.test/checkout');
+  });
+
+  it('keeps first and last seen timestamps correct when events arrive out of order', async () => {
+    const olderTimestamp = 1_750_000_000_000;
+    const newerTimestamp = olderTimestamp + 60_000;
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [
+          event('newer-event', '93849202', newerTimestamp),
+          event('older-event', '72849201', olderTimestamp),
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(202);
+
+    const issues = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/issues?page=1&pageSize=25',
+    });
+    expect(issues.json().items[0]).toMatchObject({
+      firstSeenAt: olderTimestamp,
+      lastSeenAt: newerTimestamp,
+      eventCount: 2,
+    });
+  });
+
+  it('removes arbitrary URL query values from stored payloads and breadcrumbs', async () => {
+    const unsafe = event('privacy-event', '93849202');
+    unsafe.page.url = 'https://shop.test/checkout?campaign=private-campaign#payment';
+    unsafe.page.referrer = 'https://search.test/results?query=private-search';
+    unsafe.payload.requestUrl = 'https://api.test/orders?experiment=private-variant';
+    unsafe.breadcrumbs = [
+      {
+        id: 'network-breadcrumb',
+        type: 'network',
+        category: 'http',
+        message: 'GET /orders?source=private-source → 503',
+        timestamp: unsafe.timestamp - 1,
+        data: { url: '/orders?source=private-source', callbackUrl: '/done?code=private-code' },
+      },
+    ];
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [unsafe] },
+    });
+    expect(response.statusCode).toBe(202);
+    const issueId = response.json().issueIds[0] as string;
+    const detail = await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}` });
+
+    expect(detail.body).not.toContain('private-campaign');
+    expect(detail.body).not.toContain('private-search');
+    expect(detail.body).not.toContain('private-variant');
+    expect(detail.body).not.toContain('private-source');
+    expect(detail.body).not.toContain('private-code');
+    expect(detail.json().sampleEvent).toMatchObject({
+      pageUrl: 'https://shop.test/checkout',
+      context: {
+        page: {
+          url: 'https://shop.test/checkout',
+          referrer: 'https://search.test/results',
+        },
+        payload: { requestUrl: 'https://api.test/orders' },
+      },
+      breadcrumbs: [
+        {
+          message: 'GET /orders → 503',
+          data: { url: '/orders', callbackUrl: '/done' },
+        },
+      ],
+    });
   });
 
   it('keeps performance samples outside the issue stream', async () => {

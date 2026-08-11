@@ -14,6 +14,11 @@ interface TransportOptions {
   fetchImpl?: typeof fetch;
 }
 
+function boundedInteger(value: number, fallback: number, minimum: number, maximum: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(value)));
+}
+
 export class Transport {
   private readonly queue: MonitorEvent[] = [];
   private timer?: ReturnType<typeof setInterval>;
@@ -26,7 +31,15 @@ export class Transport {
       void this.flush(true);
   };
 
-  constructor(private readonly options: TransportOptions) {
+  private readonly options: TransportOptions;
+
+  constructor(options: TransportOptions) {
+    this.options = {
+      ...options,
+      batchSize: boundedInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 100),
+      flushInterval: boundedInteger(options.flushInterval, DEFAULT_FLUSH_INTERVAL, 100, 86_400_000),
+      maxRetries: boundedInteger(options.maxRetries, 2, 0, 10),
+    };
     this.fetchImpl =
       options.fetchImpl ??
       (typeof window !== 'undefined' && typeof window.fetch === 'function'
@@ -85,15 +98,20 @@ export class Transport {
       return;
     }
 
-    this.inFlight = this.sendWithRetry(body).catch(() => {
-      this.queue.unshift(...batch);
-    });
+    let delivered = false;
+    this.inFlight = this.sendWithRetry(body)
+      .then(() => {
+        delivered = true;
+      })
+      .catch(() => {
+        this.queue.unshift(...batch);
+      });
     try {
       await this.inFlight;
     } finally {
       this.inFlight = undefined;
     }
-    if (this.queue.length >= this.options.batchSize) await this.flush();
+    if (delivered && this.queue.length >= this.options.batchSize) await this.flush();
   }
 
   private async sendWithRetry(body: string): Promise<void> {

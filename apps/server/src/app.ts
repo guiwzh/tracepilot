@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
+import { stripUrlQuery } from '@trace-pilot/shared';
 import type { ServerConfig } from './config';
 import { createDatabase, ensureDemoProject } from './db/client';
 import { registerEventRoutes } from './routes/events';
@@ -16,7 +17,21 @@ export interface BuildAppOptions {
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: options.logger ?? true,
+    logger:
+      options.logger === false
+        ? false
+        : {
+            serializers: {
+              req(request) {
+                return {
+                  method: request.method,
+                  url: stripUrlQuery(request.url),
+                  host: request.hostname,
+                  remoteAddress: request.ip,
+                };
+              },
+            },
+          },
     bodyLimit: 1_048_576,
     requestTimeout: 20_000,
   });

@@ -49,4 +49,22 @@ describe('MonitorCore', () => {
     expect(monitor.captureMessage('keep')).toBeTruthy();
     monitor.destroy();
   });
+
+  it('normalizes invalid numeric options to safe transport bounds', () => {
+    const monitor = core({
+      sampleRate: Number.NaN,
+      batchSize: 0,
+      flushInterval: -1,
+      maxRetries: -2,
+      dedupeWindow: -10,
+    });
+
+    expect(monitor.options).toMatchObject({
+      sampleRate: 1,
+      batchSize: 1,
+      flushInterval: 100,
+      maxRetries: 0,
+      dedupeWindow: 0,
+    });
+  });
 });

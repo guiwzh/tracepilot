@@ -9,6 +9,25 @@ import type {
 import { Transport } from '../transport/Transport';
 import { breadcrumbId, createId, errorPayload, getDeviceContext, getPageContext } from './helpers';
 
+function boundedNumber(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  return Math.floor(boundedNumber(value, fallback, minimum, maximum));
+}
+
 export class MonitorCore implements MonitorClient {
   readonly transport: Transport;
   readonly options: Required<
@@ -29,11 +48,11 @@ export class MonitorCore implements MonitorClient {
   constructor(options: MonitorOptions) {
     this.options = {
       ...options,
-      sampleRate: Math.max(0, Math.min(1, options.sampleRate ?? 1)),
-      batchSize: options.batchSize ?? 10,
-      flushInterval: options.flushInterval ?? 5_000,
-      maxRetries: options.maxRetries ?? 2,
-      dedupeWindow: options.dedupeWindow ?? 5_000,
+      sampleRate: boundedNumber(options.sampleRate, 1, 0, 1),
+      batchSize: boundedInteger(options.batchSize, 10, 1, 100),
+      flushInterval: boundedInteger(options.flushInterval, 5_000, 100, 86_400_000),
+      maxRetries: boundedInteger(options.maxRetries, 2, 0, 10),
+      dedupeWindow: boundedInteger(options.dedupeWindow, 5_000, 0, 600_000),
     };
     this.user = options.user;
     this.transport = new Transport({

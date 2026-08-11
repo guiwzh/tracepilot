@@ -64,14 +64,21 @@ function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | nul
   if (!shouldCreateIssue(event)) return null;
   const fingerprint = eventFingerprint(event);
   const existing = database.sqlite
-    .prepare('SELECT id FROM issues WHERE project_id = ? AND fingerprint = ?')
-    .get(event.projectId, fingerprint) as { id: string } | undefined;
+    .prepare(
+      'SELECT id, first_seen_at, last_seen_at FROM issues WHERE project_id = ? AND fingerprint = ?',
+    )
+    .get(event.projectId, fingerprint) as
+    { id: string; first_seen_at: number; last_seen_at: number } | undefined;
   const userId = event.user?.id ?? event.user?.anonymousId;
 
   if (existing) {
     database.db
       .update(issues)
-      .set({ lastSeenAt: event.timestamp, title: eventTitle(event) })
+      .set({
+        firstSeenAt: Math.min(existing.first_seen_at, event.timestamp),
+        lastSeenAt: Math.max(existing.last_seen_at, event.timestamp),
+        ...(event.timestamp >= existing.last_seen_at ? { title: eventTitle(event) } : {}),
+      })
       .where(eq(issues.id, existing.id))
       .run();
     return existing.id;

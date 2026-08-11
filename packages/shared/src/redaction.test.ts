@@ -12,4 +12,18 @@ describe('privacy helpers', () => {
       password: '[REDACTED]',
     });
   });
+
+  it('removes arbitrary query and fragment values from URL fields and telemetry text', () => {
+    expect(
+      redactSensitive({
+        requestUrl: 'https://api.test/orders?campaign=private#receipt',
+        message: 'GET https://api.test/orders?campaign=private → 503',
+        nested: { url: '/checkout?experiment=variant-a' },
+      }),
+    ).toEqual({
+      requestUrl: 'https://api.test/orders',
+      message: 'GET https://api.test/orders → 503',
+      nested: { url: '/checkout' },
+    });
+  });
 });
