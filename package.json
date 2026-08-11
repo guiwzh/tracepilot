@@ -21,7 +21,8 @@
     "evaluate:diagnosis": "pnpm --filter @trace-pilot/server evaluate:diagnosis",
     "measure:sdk": "node scripts/measure-sdk.mjs",
     "seed": "pnpm --filter @trace-pilot/server seed",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "smoke:production": "node scripts/smoke-production.mjs",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm smoke:production"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
