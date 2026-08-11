@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
 import { Transport } from './Transport';
 
+// 注入假的 fetch 让重试路径完全可控，不依赖真实网络。
 const event: MonitorEvent = {
   eventId: 'event-1',
   eventType: 'error',

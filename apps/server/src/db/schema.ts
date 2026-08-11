@@ -1,5 +1,9 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
+/**
+ * Drizzle Schema 为 TypeScript 写入提供列名和类型推导。
+ * 当前表的实际创建由 client.ts 中的幂等 DDL 完成，两处结构变更必须保持同步。
+ */
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
@@ -38,6 +42,7 @@ export const issues = sqliteTable(
     userCount: integer('user_count').notNull().default(0),
   },
   (table) => [
+    // 一个项目内相同指纹只能对应一个 Issue，这是事件聚合的数据库级兜底。
     uniqueIndex('issues_project_fingerprint').on(table.projectId, table.fingerprint),
     index('issues_project_last_seen').on(table.projectId, table.lastSeenAt),
   ],
@@ -98,6 +103,7 @@ export const diagnoses = sqliteTable(
   },
   (table) => [
     index('diagnoses_issue_created').on(table.issueId, table.createdAt),
+    // 同一 Issue + 同一证据上下文只存一份诊断，用于幂等缓存。
     uniqueIndex('diagnoses_issue_input').on(table.issueId, table.inputHash),
   ],
 );

@@ -12,6 +12,7 @@ import type {
 
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4318';
 
+/** 把 HTTP 状态和服务端业务错误码一起保留下来，页面可展示统一错误状态。 */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -23,14 +24,17 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // 泛型 T 只约束调用方看到的类型；真实 JSON 的运行时校验由 Server 的 Zod Schema 负责。
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers:
+      // 浏览器会为 FormData 自动生成带 boundary 的 Content-Type，手动设置反而会破坏上传。
       init?.body instanceof FormData
         ? init.headers
         : { 'content-type': 'application/json', ...init?.headers },
   });
   if (!response.ok) {
+    // 错误响应不一定是 JSON（例如代理错误页），因此解析失败时回退为空对象。
     const body = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
     throw new ApiError(
       body.message ?? `Request failed with ${response.status}`,
@@ -42,6 +46,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // 所有 URL 和 HTTP 方法集中在这里，页面组件不直接拼接 fetch。
   projects: () => request<{ items: Project[] }>('/api/v1/projects'),
   createProject: (name: string) =>
     request<Project>('/api/v1/projects', { method: 'POST', body: JSON.stringify({ name }) }),

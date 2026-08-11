@@ -12,14 +12,17 @@ function SourceMapUploader({ release }: { release: Release }) {
   const queryClient = useQueryClient();
   const [minifiedFile, setMinifiedFile] = useState('app.js');
   const [file, setFile] = useState<File>();
+  // 每个 Release 使用独立 queryKey，展开某一项不会覆盖其他版本的 Source Map 列表。
   const maps = useQuery({
     queryKey: ['source-maps', release.id],
     queryFn: () => api.sourceMaps(release.id),
   });
   const upload = useMutation({
+    // 表单提交前已检查 file，因此这里的非空断言只是在告诉 TypeScript 该运行时事实。
     mutationFn: () => api.uploadSourceMap(release.id, minifiedFile, file!),
     onSuccess: async () => {
       setFile(undefined);
+      // 同时刷新 map 明细和 Release 上的 sourceMapCount 汇总。
       await queryClient.invalidateQueries({ queryKey: ['source-maps', release.id] });
       await queryClient.invalidateQueries({ queryKey: ['releases', release.projectId] });
     },
@@ -99,6 +102,7 @@ export function ReleasesPage() {
   const create = useMutation({
     mutationFn: () => api.createRelease(projectId, version, commitSha),
     onSuccess: async () => {
+      // 清空受控表单，再通过缓存失效读取服务端最终记录。
       setCreating(false);
       setVersion('');
       setCommitSha('');

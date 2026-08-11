@@ -4,6 +4,7 @@ import type { MonitorCore } from '../core/MonitorCore';
 
 type VitalName = keyof typeof WEB_VITAL_THRESHOLDS;
 
+// 将原始数值映射到 Dashboard 使用的三档评级，阈值由 shared 包统一提供。
 function rating(metric: VitalName, value: number): 'good' | 'needs-improvement' | 'poor' {
   const [good, poor] = WEB_VITAL_THRESHOLDS[metric];
   return value <= good ? 'good' : value <= poor ? 'needs-improvement' : 'poor';
@@ -31,6 +32,7 @@ export class PerformancePlugin implements MonitorPlugin {
     if (typeof PerformanceObserver === 'undefined') return;
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    // buffered: true 会把 observer 创建前已发生的性能条目也补回来。
     this.observe('paint', (entry) => {
       if (entry.name === 'first-contentful-paint') this.reportOnce('FCP', entry.startTime);
     });
@@ -39,16 +41,19 @@ export class PerformancePlugin implements MonitorPlugin {
     });
     this.observe('layout-shift', (entry) => {
       const shift = entry as PerformanceEntry & { value?: number; hadRecentInput?: boolean };
+      // 用户主动点击导致的布局变化不计入 CLS。
       if (!shift.hadRecentInput) {
         this.cls += shift.value ?? 0;
         this.hasCls = true;
       }
     });
     this.observe('event', (entry) => {
+      // INP 关注最慢交互，本地 MVP 取观察期内最大的 event duration。
       this.inp = Math.max(this.inp, entry.duration);
       this.hasInp = true;
     });
     queueMicrotask(() => {
+      // Navigation Timing 的 responseStart 近似当前页面的 TTFB。
       const navigation = performance.getEntriesByType('navigation')[0] as
         PerformanceNavigationTiming | undefined;
       if (navigation) this.reportOnce('TTFB', navigation.responseStart);
@@ -63,7 +68,7 @@ export class PerformancePlugin implements MonitorPlugin {
       observer.observe({ type, buffered: true });
       this.observers.push(observer);
     } catch {
-      // Unsupported entry types are expected across browser versions.
+      // 各浏览器支持的 entry type 不同；单个指标不可用不应影响其他采集。
     }
   }
 
@@ -78,6 +83,7 @@ export class PerformancePlugin implements MonitorPlugin {
   }
 
   private finalize(): void {
+    // LCP/CLS/INP 在页面生命周期中会变化，页面隐藏时才提交最终值。
     if (this.finalized) return;
     this.finalized = true;
     if (this.lcp !== undefined) this.reportOnce('LCP', this.lcp);

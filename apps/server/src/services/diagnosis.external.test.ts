@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { buildApp } from '../app';
 import type { ServerConfig } from '../config';
 
+// 本地 HTTP Server 模拟 Responses API，验证外部适配器而不发送真实模型请求或产生费用。
 interface MockModel {
   url: string;
   requests: Array<{ url?: string; body: Record<string, unknown> }>;

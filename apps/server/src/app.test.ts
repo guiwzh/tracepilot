@@ -6,6 +6,7 @@ import type { MonitorEvent } from '@trace-pilot/shared';
 import { buildApp } from './app';
 import type { ServerConfig } from './config';
 
+// Fastify app.inject 测试真实路由和 SQLite 行为，同时避免监听网络端口。
 let directory: string;
 let app: Awaited<ReturnType<typeof buildApp>>;
 

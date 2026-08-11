@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+/** 可选 ReactNode 插槽让各页面传入自己的操作控件，而不复制标题布局。 */
 export function PageHeader({
   eyebrow,
   title,

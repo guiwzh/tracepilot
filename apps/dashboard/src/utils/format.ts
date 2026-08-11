@@ -1,3 +1,4 @@
+// 使用 Intl 而不是手写字符串，浏览器会处理千位分隔、相对时间和本地时区。
 export function formatNumber(value: number): string {
   return new Intl.NumberFormat('en', { notation: value > 9_999 ? 'compact' : 'standard' }).format(
     value,
@@ -26,6 +27,7 @@ export function absoluteTime(value: number): string {
 }
 
 export function metricValue(metric: string, value: number): string {
+  // CLS 是无单位比例，其余 Web Vital 在本项目中都以毫秒存储。
   if (metric === 'CLS') return value.toFixed(3);
   return `${Math.round(value)} ms`;
 }

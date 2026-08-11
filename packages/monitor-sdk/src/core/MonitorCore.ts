@@ -9,6 +9,7 @@ import type {
 import { Transport } from '../transport/Transport';
 import { breadcrumbId, createId, errorPayload, getDeviceContext, getPageContext } from './helpers';
 
+// 所有外部数字配置都在边界处夹紧，避免 0 批量、无限重试等配置让 SDK 失控。
 function boundedNumber(
   value: number | undefined,
   fallback: number,
@@ -46,6 +47,7 @@ export class MonitorCore implements MonitorClient {
   private protecting = false;
 
   constructor(options: MonitorOptions) {
+    // Required<Pick<...>> 对应的默认值只在这一处生成，后续插件拿到的一定是合法范围。
     this.options = {
       ...options,
       sampleRate: boundedNumber(options.sampleRate, 1, 0, 1),
@@ -65,6 +67,7 @@ export class MonitorCore implements MonitorClient {
   }
 
   use(plugin: MonitorPlugin): this {
+    // 同名插件只注册一次；start 之后动态 use 时也能立即挂载。
     if (this.plugins.some((candidate) => candidate.name === plugin.name)) return this;
     this.plugins.push(plugin);
     if (this.started) this.protect(() => plugin.setup(this));
@@ -72,6 +75,7 @@ export class MonitorCore implements MonitorClient {
   }
 
   start(): void {
+    // start/destroy 都设计为幂等，适配 React StrictMode 中开发期的重复生命周期。
     if (this.started || this.destroyed) return;
     this.started = true;
     for (const plugin of this.plugins) this.protect(() => plugin.setup(this));
@@ -89,6 +93,7 @@ export class MonitorCore implements MonitorClient {
     breadcrumb: Omit<Breadcrumb, 'id' | 'timestamp'> & Partial<Pick<Breadcrumb, 'timestamp'>>,
   ): void {
     if (this.destroyed) return;
+    // Breadcrumb 是一个有界环形历史：超过上限时丢弃最旧项，控制每个事件的体积。
     this.breadcrumbs.push(
       breadcrumbId({ ...breadcrumb, timestamp: breadcrumb.timestamp ?? Date.now() }),
     );
@@ -96,6 +101,7 @@ export class MonitorCore implements MonitorClient {
   }
 
   getBreadcrumbs(): Breadcrumb[] {
+    // 返回浅拷贝，避免调用方修改 SDK 内部正在积累的数组。
     return this.breadcrumbs.map((item) => ({ ...item }));
   }
 
@@ -109,6 +115,7 @@ export class MonitorCore implements MonitorClient {
 
   captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null {
     if (!this.started || this.destroyed || this.protecting) return null;
+    // 先采样、再去重，尽量在创建完整上下文前快速退出。
     if (Math.random() > this.options.sampleRate) return null;
     if (eventType === 'error' && this.isDuplicate(payload)) return null;
 
@@ -127,6 +134,7 @@ export class MonitorCore implements MonitorClient {
     };
 
     try {
+      // beforeSend 是业务方最后一次删除字段或取消事件的机会。
       const processed = this.options.beforeSend ? this.options.beforeSend(event) : event;
       if (!processed) return null;
       this.transport.enqueue(processed);
@@ -137,6 +145,7 @@ export class MonitorCore implements MonitorClient {
   }
 
   private isDuplicate(payload: CapturePayload): boolean {
+    // 行列号常随构建变化；签名只保留错误类型、消息和归一化后的首个调用帧。
     const frame = (String(payload.stack ?? '').split('\n')[1] ?? '').replace(
       /:\d+:\d+(?=\)?$)/,
       ':line:column',
@@ -145,6 +154,7 @@ export class MonitorCore implements MonitorClient {
     const now = Date.now();
     const last = this.recentErrors.get(signature);
     this.recentErrors.set(signature, now);
+    // 顺便淘汰过期签名，避免长时间打开的页面让 Map 无限增长。
     for (const [key, timestamp] of this.recentErrors) {
       if (now - timestamp > this.options.dedupeWindow * 2) this.recentErrors.delete(key);
     }
@@ -152,12 +162,13 @@ export class MonitorCore implements MonitorClient {
   }
 
   protect(action: () => void): void {
+    // 监控代码绝不能破坏宿主应用，也不能把自身异常再次采集形成递归风暴。
     if (this.protecting) return;
     this.protecting = true;
     try {
       action();
     } catch {
-      // Monitoring must never break the host page or report its own failure recursively.
+      // 插件异常被隔离；其他插件和业务页面继续运行。
     } finally {
       this.protecting = false;
     }
@@ -169,8 +180,7 @@ export class MonitorCore implements MonitorClient {
 
   destroy(): void {
     if (this.destroyed) return;
-    // Transport is registered last, so forward teardown lets signal plugins enqueue final samples
-    // before the transport performs its closing beacon/flush.
+    // Transport 最后注册，因此正序 teardown 会先让信号插件提交最终样本，再由传输层冲刷队列。
     for (const plugin of this.plugins) this.protect(() => plugin.teardown());
     this.destroyed = true;
     this.started = false;

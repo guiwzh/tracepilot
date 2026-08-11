@@ -1,4 +1,5 @@
 export function Sparkline({ values }: { values: number[] }) {
+  // 把任意计数序列归一化到固定 84×28 viewBox，无需额外图表依赖。
   const max = Math.max(...values, 1);
   const points = values
     .map(

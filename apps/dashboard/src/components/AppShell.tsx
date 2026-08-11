@@ -4,9 +4,11 @@ import { Activity, Boxes, ChevronDown, Gauge, LayoutList, Radio, Search } from '
 import { Link, NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../services/api';
 
+/** 项目内页面共用的侧栏与顶栏；Outlet 是 React Router 留给当前子路由的插槽。 */
 export function AppShell() {
   const { projectId = 'demo-project' } = useParams();
   const navigate = useNavigate();
+  // 相同 ['projects'] queryKey 会复用全局 QueryClient 中的项目列表缓存。
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const project = projects.data?.items.find((item) => item.id === projectId);
   const openSearch = useCallback(() => {
@@ -14,6 +16,7 @@ export function AppShell() {
   }, [navigate, projectId]);
 
   useEffect(() => {
+    // 全局快捷键属于副作用，组件卸载时必须移除监听器。
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -88,6 +91,7 @@ export function AppShell() {
             GW
           </div>
         </header>
+        {/* 当前 Issues / Performance / Releases / IssueDetail 页面在此渲染。 */}
         <Outlet />
       </div>
     </div>

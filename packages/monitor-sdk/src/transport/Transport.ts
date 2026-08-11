@@ -5,6 +5,7 @@ import {
   type MonitorEvent,
 } from '@trace-pilot/shared';
 
+/** 传输层只负责排队、批量、重试和页面退出发送，不理解具体事件语义。 */
 interface TransportOptions {
   endpoint: string;
   dsnKey: string;
@@ -22,6 +23,7 @@ function boundedInteger(value: number, fallback: number, minimum: number, maximu
 export class Transport {
   private readonly queue: MonitorEvent[] = [];
   private timer?: ReturnType<typeof setInterval>;
+  // 同一时间只允许一个 flush，防止定时器和 batchSize 同时触发重复发送。
   private inFlight?: Promise<void>;
   private started = false;
   private readonly fetchImpl?: typeof fetch;
@@ -42,6 +44,7 @@ export class Transport {
     };
     this.fetchImpl =
       options.fetchImpl ??
+      // 保存绑定后的原生 fetch；直接传 window.fetch 可能丢失其 this。
       (typeof window !== 'undefined' && typeof window.fetch === 'function'
         ? window.fetch.bind(window)
         : typeof fetch === 'function'
@@ -71,6 +74,7 @@ export class Transport {
 
   enqueue(event: MonitorEvent): void {
     this.queue.push(event);
+    // fire-and-forget：采集 API 保持同步，不让业务代码等待网络。
     if (this.queue.length >= this.options.batchSize) void this.flush();
   }
 
@@ -81,6 +85,7 @@ export class Transport {
   async flush(preferBeacon = false): Promise<void> {
     if (this.inFlight) return this.inFlight;
     if (this.queue.length === 0) return;
+    // 先从队列取出批次；若最终失败，会在 catch 中按原顺序放回队首。
     const batch = this.queue.splice(0, this.options.batchSize);
     const envelope: EventEnvelope = {
       dsnKey: this.options.dsnKey,
@@ -95,6 +100,7 @@ export class Transport {
       typeof navigator.sendBeacon === 'function' &&
       navigator.sendBeacon(this.options.endpoint, new Blob([body], { type: 'application/json' }))
     ) {
+      // sendBeacon 专门用于页面离开阶段；浏览器接管请求，无需等待 Promise。
       return;
     }
 
@@ -104,6 +110,7 @@ export class Transport {
         delivered = true;
       })
       .catch(() => {
+        // 达到重试上限也不丢数据，留给下一次 flush 再尝试。
         this.queue.unshift(...batch);
       });
     try {
@@ -130,6 +137,7 @@ export class Transport {
       } catch (error) {
         lastError = error;
         if (attempt < this.options.maxRetries) {
+          // 100ms、200ms、400ms……指数退避，且次数有硬上限。
           await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
         }
       }
@@ -138,6 +146,7 @@ export class Transport {
   }
 
   destroy(): void {
+    // 对称移除所有全局监听，避免 SPA 重挂载时重复上报。
     if (this.timer) clearInterval(this.timer);
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
     if (typeof document !== 'undefined') {

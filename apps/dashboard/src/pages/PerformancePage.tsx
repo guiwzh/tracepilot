@@ -58,11 +58,13 @@ function ComparisonPanel({
 
 export function PerformancePage() {
   const { projectId = '' } = useParams();
+  // selectedMetric 只影响前端比较视图，不需要写回 Server 或 URL。
   const [selectedMetric, setSelectedMetric] = useState<MetricName>('LCP');
   const metrics = useQuery({
     queryKey: ['performance', projectId],
     queryFn: () => api.performance(projectId),
   });
+  // 柱状图比较所有指标的分位数，服务端数据变化时才重新生成配置。
   const option = useMemo<ChartOption>(
     () => ({
       grid: { left: 0, right: 10, top: 20, bottom: 8, containLabel: true },
@@ -107,6 +109,7 @@ export function PerformancePage() {
     }),
     [metrics.data],
   );
+  // 趋势图还依赖用户当前选择的指标。
   const trendOption = useMemo<ChartOption>(() => {
     const points = metrics.data?.trend.filter((item) => item.metric === selectedMetric) ?? [];
     return {
@@ -139,6 +142,7 @@ export function PerformancePage() {
         {
           name: `${selectedMetric} p75`,
           type: 'line',
+          // null 让 ECharts 画出缺口，避免把“无样本”误画成 0ms。
           data: points.map((item) => (item.samples > 0 ? item.p75 : null)),
           showSymbol: true,
           connectNulls: false,

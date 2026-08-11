@@ -437,6 +437,7 @@ pnpm seed
 ## 11. 相关文档
 
 - [README](../README.md)：项目概览、命令与技术边界。
+- [代码阅读指南](code-reading-guide.md)：技术栈地图、数据流和推荐源码阅读顺序。
 - [演示脚本](demo-script.md)：3 至 5 分钟演示讲解顺序。
 - [事件信封格式](event-schema.md)：SDK 和 Server 的传输契约。
 - [架构说明](architecture.md)：组件边界与数据流。

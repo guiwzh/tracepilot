@@ -6,6 +6,10 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * 冒烟脚本验证“构建产物真的可运行”，覆盖 ESM/CJS 包导入和 dist Server 健康检查。
+ * 它不复用开发 tsx 进程，因此能发现只在发布产物中出现的模块解析问题。
+ */
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 async function runNode(args, cwd) {
@@ -29,6 +33,7 @@ async function runNode(args, cwd) {
 }
 
 async function getAvailablePort() {
+  // 让操作系统分配空闲端口，再立即释放给待测 Server，避免硬编码端口冲突。
   const probe = createServer();
   await new Promise((resolveListen, reject) => {
     probe.once('error', reject);
@@ -43,6 +48,7 @@ async function getAvailablePort() {
 }
 
 async function waitForHealth(url, processExit) {
+  // 同时观察健康接口和子进程退出；服务提前崩溃时无需傻等完整超时。
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const exited = await Promise.race([
       processExit.then((result) => ({ exited: true, result })),

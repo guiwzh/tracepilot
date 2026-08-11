@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorCore } from '../core/MonitorCore';
 import { PerformancePlugin } from './PerformancePlugin';
 
+// FakePerformanceObserver 主动发出浏览器性能条目，精确验证最终上报时机和计算规则。
 type EmitEntries = (entries: PerformanceEntry[]) => void;
 
 const emitters = new Map<string, EmitEntries>();

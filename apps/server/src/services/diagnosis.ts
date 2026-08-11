@@ -14,6 +14,10 @@ import type { TraceDatabase } from '../db/client';
 import { parseJson } from '../lib/json';
 import { getIssue, listIssueEvents } from './queries';
 
+/**
+ * 诊断服务只接收经过裁剪和脱敏的证据快照，不把数据库、文件系统或命令工具交给模型。
+ * 外部模型不可用时使用确定性的本地引擎，监控主链路不受影响。
+ */
 interface DiagnosisContext {
   issue: {
     title: string;
@@ -43,6 +47,7 @@ interface ModelResult {
 }
 
 function failedRequests(event: StoredEvent): Array<Record<string, unknown>> {
+  // 只保留最近 5 个失败请求和少量字段，控制模型输入大小并排除请求体。
   return event.breadcrumbs
     .filter((item) => item.type === 'network' && Number(item.data?.status ?? 0) >= 400)
     .slice(-5)
@@ -60,6 +65,7 @@ export function buildDiagnosisContext(
 ): DiagnosisContext | null {
   const issue = getIssue(database, issueId);
   if (!issue) return null;
+  // 上下文有明确上限：最近 8 个事件，每个事件最后 12 条 Breadcrumb。
   const events = listIssueEvents(database, issueId, 8);
   const sample = events[0];
   const context: DiagnosisContext = {
@@ -94,6 +100,7 @@ export function buildDiagnosisContext(
     )
     .all(issue.projectId) as Array<{ metric?: string; value?: number }>;
   const performance: DiagnosisContext['performance'] = {};
+  // 查询按时间倒序，因此每种指标第一次出现的值就是最新样本。
   for (const metric of metrics) {
     if (metric.metric === 'LCP' && performance.lcp === undefined)
       performance.lcp = Number(metric.value);
@@ -103,10 +110,12 @@ export function buildDiagnosisContext(
       performance.cls = Number(metric.value);
   }
   if (Object.keys(performance).length > 0) context.performance = performance;
+  // 这是入库脱敏之后的第三道防线，防止历史脏数据进入外部模型。
   return redactSensitive(context);
 }
 
 function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['evidence'] {
+  // 本地引擎也生成带 source 枚举的引用，使 UI 和外部模型输出使用同一契约。
   const evidence: DiagnosisResult['evidence'] = [];
   const stack = context.stack.original ?? context.stack.minified;
   if (stack) {
@@ -148,6 +157,7 @@ function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['eviden
 }
 
 function localDiagnosis(context: DiagnosisContext): DiagnosisResult {
+  // 这是可重复的规则型降级结果，用于离线演示和契约测试，不伪装成大模型推理。
   const lower = context.issue.title.toLowerCase();
   const evidence = evidenceFromContext(context);
   let causes: DiagnosisResult['possibleCauses'];
@@ -258,6 +268,7 @@ async function callModel(config: ServerConfig, context: DiagnosisContext): Promi
     apiKey: config.modelApiKey,
     baseURL,
     timeout: 30_000,
+    // SDK 层关闭自动重试，避免一次用户操作产生不可见的重复模型费用。
     maxRetries: 0,
   });
   const response = await client.responses.parse({
@@ -271,6 +282,7 @@ async function callModel(config: ServerConfig, context: DiagnosisContext): Promi
     ],
     text: { format: zodTextFormat(diagnosisResultSchema, 'diagnosis_result') },
   });
+  // Responses API 先按 Zod 格式解析，随后再 parse 一次作为持久化前的最终校验。
   if (!response.output_parsed) throw new Error('MODEL_EMPTY_OR_REFUSED_RESPONSE');
   return {
     result: diagnosisResultSchema.parse(response.output_parsed),
@@ -317,12 +329,14 @@ export async function diagnoseIssue(
 ): Promise<DiagnosisRecord | null> {
   const context = buildDiagnosisContext(database, issueId);
   if (!context) return null;
+  // 缓存键包含 Prompt 版本和完整证据；任一证据变化都会自然失效。
   const inputHash = createHash('sha256')
     .update(`${PROMPT_VERSION}|${JSON.stringify(context)}`)
     .digest('hex');
   const existing = database.sqlite
     .prepare('SELECT * FROM diagnoses WHERE issue_id = ? AND input_hash = ?')
     .get(issueId, inputHash) as Record<string, unknown> | undefined;
+  // force 只跳过读取缓存，数据库仍通过唯一键覆盖同一上下文，避免产生重复行。
   if (existing && !force) return mapDiagnosis(existing, true);
 
   const startedAt = performance.now();

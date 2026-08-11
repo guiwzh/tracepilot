@@ -4,6 +4,10 @@ import BetterSqlite3 from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema';
 
+/**
+ * MVP 使用启动时幂等 DDL，而不是额外迁移服务。
+ * IF NOT EXISTS 让开发启动可重复执行；正式演进时应替换为版本化 migration。
+ */
 const INITIAL_SCHEMA = `
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -52,13 +56,16 @@ export type TraceDatabase = ReturnType<typeof createDatabase>;
 export function createDatabase(databasePath: string) {
   mkdirSync(dirname(databasePath), { recursive: true });
   const sqlite = new BetterSqlite3(databasePath);
+  // WAL 允许读请求与单个写事务更好地并行；busy_timeout 避免短暂写锁立刻报错。
   sqlite.pragma('busy_timeout = 5000');
   sqlite.exec(INITIAL_SCHEMA);
+  // 保留两种访问面：Drizzle 用于类型安全写入，原生 prepared SQL 用于复杂聚合查询。
   const db = drizzle(sqlite, { schema });
   return { db, sqlite, close: () => sqlite.close() };
 }
 
 export function ensureDemoProject(database: TraceDatabase): void {
+  // ON CONFLICT DO NOTHING 只保证内置演示项目存在，不会覆盖用户已经产生的数据。
   const now = Date.now();
   database.sqlite
     .prepare(

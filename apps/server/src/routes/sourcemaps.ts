@@ -8,6 +8,7 @@ function releaseId(params: unknown): string {
 }
 
 function fieldValue(fields: Record<string, unknown>, name: string): string {
+  // @fastify/multipart 将普通字段包装成 part 对象，value 才是表单字符串。
   const field = fields[name];
   if (field && typeof field === 'object' && 'value' in field) {
     return String((field as { value: unknown }).value);
@@ -33,6 +34,7 @@ export function registerSourceMapRoutes(
     const release = database.sqlite.prepare('SELECT 1 FROM releases WHERE id = ?').get(id);
     if (!release)
       return reply.code(404).send({ error: 'RELEASE_NOT_FOUND', message: 'Release not found.' });
+    // 在读取 Buffer 前限制文件数量和大小，避免把超大上传完整载入内存。
     const part = await request.file({
       limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4 },
     });
@@ -53,6 +55,7 @@ export function registerSourceMapRoutes(
         .send({ error: 'INVALID_SOURCE_MAP_FILE', message: 'Only .map files are accepted.' });
     }
     try {
+      // saveSourceMap 还会验证 JSON、version 和 mappings，扩展名检查不是唯一防线。
       const record = await saveSourceMap(
         database,
         config.sourceMapDir,

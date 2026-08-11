@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeDisplayTitle, normalizeMessage } from './fingerprint';
 
+// 指纹测试确保动态 ID/时间戳被归一化，而不同根因仍保持不同摘要。
 describe('issue fingerprint normalization', () => {
   it('collapses dynamic ids, UUIDs, hashes, and URL queries', () => {
     const first = normalizeMessage(

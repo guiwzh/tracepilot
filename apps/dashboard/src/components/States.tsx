@@ -1,5 +1,6 @@
 import { AlertTriangle, Inbox, LoaderCircle } from 'lucide-react';
 
+// 统一异步页面的 loading/error/empty 视觉，避免每个页面重复三套分支。
 export function LoadingState({ label = 'Loading evidence' }: { label?: string }) {
   return (
     <div className="state-panel">

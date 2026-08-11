@@ -10,12 +10,14 @@ export function ProjectsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const queryClient = useQueryClient();
+  // useQuery 表示可缓存的读取；useMutation 表示会改变服务端状态的写操作。
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects });
   const create = useMutation({
     mutationFn: () => api.createProject(name),
     onSuccess: async () => {
       setName('');
       setCreating(false);
+      // 写入成功后把项目列表标记为过期，React Query 会重新请求而不是手工拼接缓存。
       await queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
   });

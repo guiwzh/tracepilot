@@ -6,6 +6,7 @@ import { buildApp } from './app';
 import type { ServerConfig } from './config';
 import { percentile } from './lib/json';
 
+// 基准全部运行在临时目录，结束后删除，避免污染开发数据库或把本机结果误当生产容量。
 const directory = await mkdtemp(join(tmpdir(), 'tracepilot-benchmark-'));
 const config: ServerConfig = {
   host: '127.0.0.1',
@@ -40,6 +41,7 @@ try {
       };
     });
     const startedAt = performance.now();
+    // app.inject 直接经过完整 Fastify 路由栈，但不占用真实网络端口，减少网络噪声。
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/envelopes',
