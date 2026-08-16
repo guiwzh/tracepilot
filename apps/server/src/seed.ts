@@ -6,6 +6,10 @@ import { loadConfig } from './config';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from './db/client';
 import { ingestEnvelope } from './services/events';
 
+/**
+ * 种子脚本通过正式 ingestEnvelope 写入虚构事件，而不是直接伪造最终 Issue，
+ * 因此演示数据也会经过指纹、脱敏、聚合和计数的真实生产代码。
+ */
 const browsers = [
   'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/132.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/131.0 Safari/537.36 Edg/131.0',
@@ -74,6 +78,7 @@ function baseEvent(
 
 export function seedDemoData(database: TraceDatabase): { events: number } {
   ensureDemoProject(database);
+  // 只重建内置 demo-project，用户自行创建的其他项目不会被删除。
   database.sqlite.exec(`
     DELETE FROM diagnoses WHERE issue_id IN (SELECT id FROM issues WHERE project_id = 'demo-project');
     DELETE FROM events WHERE issue_id IN (SELECT id FROM issues WHERE project_id = 'demo-project')
@@ -199,6 +204,7 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   }
 
   for (let start = 0; start < events.length; start += 100) {
+    // 公共 Schema 规定单个 envelope 最多 100 条，所以按真实限制切批。
     ingestEnvelope(database, {
       dsnKey: 'demo-dsn-key',
       sentAt: now,
@@ -208,6 +214,7 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   return { events: events.length };
 }
 
+// 既允许测试 import seedDemoData，也允许 pnpm seed 直接执行；只有后者进入 CLI 分支。
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const config = loadConfig();
   const database = createDatabase(config.databasePath);

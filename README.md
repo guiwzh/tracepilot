@@ -181,6 +181,12 @@ tests/e2e            浏览器闭环测试
 [architecture.md](docs/architecture.md)，3–5 分钟演示顺序见
 [demo-script.md](docs/demo-script.md)。
 
+## 代码阅读
+
+如果你不熟悉项目中的 TypeScript、Zod、浏览器 SDK、Fastify、SQLite/Drizzle、React Query 或
+Playwright，可以按[代码阅读指南](docs/code-reading-guide.md)给出的数据流和文件顺序学习。
+核心源码也已补充中文注释，重点解释生命周期、缓存、事务、隐私和降级策略。
+
 ## 仍然不做
 
 Session Replay、自动改代码、Shell/测试执行、Agent 工具调用、Kafka/ClickHouse、Kubernetes 和

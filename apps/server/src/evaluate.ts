@@ -8,6 +8,10 @@ import { diagnoseIssue } from './services/diagnosis';
 import { listIssues } from './services/queries';
 import { seedDemoData } from './seed';
 
+/**
+ * 这是诊断契约冒烟评测：检查结构化输出、证据数量和缓存命中，
+ * 不把确定性本地引擎的结果包装成语义质量或模型准确率。
+ */
 const directory = await mkdtemp(join(tmpdir(), 'tracepilot-eval-'));
 const database = createDatabase(join(directory, 'eval.db'));
 const config: ServerConfig = {

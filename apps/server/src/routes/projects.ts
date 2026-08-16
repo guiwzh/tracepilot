@@ -10,6 +10,7 @@ import {
 } from '../services/queries';
 
 function paramId(params: unknown): string {
+  // Fastify 未配置泛型时 params 是 unknown；在路由边界集中做安全字符串转换。
   return String((params as { projectId?: string }).projectId ?? '');
 }
 
@@ -28,6 +29,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
     const project = {
       id: randomUUID(),
       name: parsed.data.name,
+      // DSN Key 会进入浏览器，属于公开接入凭据；随机值用于隔离项目，不是管理员密钥。
       dsnKey: randomBytes(24).toString('base64url'),
       createdAt: Date.now(),
     };
@@ -74,6 +76,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
       .prepare('SELECT id FROM releases WHERE project_id = ? AND version = ?')
       .get(projectId, parsed.data.version) as { id: string } | undefined;
     if (duplicate) {
+      // 同项目版本号是 Source Map 的隔离边界，重复创建返回明确冲突。
       return reply
         .code(409)
         .send({ error: 'RELEASE_EXISTS', message: 'This release already exists.' });

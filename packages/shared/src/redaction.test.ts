@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { redactSensitive, stripUrlQuery } from './redaction';
 
+// 隐私测试既覆盖结构化 URL 字段，也覆盖嵌在错误消息中的 URL。
 describe('privacy helpers', () => {
   it('removes URL query and fragment values', () => {
     expect(stripUrlQuery('https://shop.test/pay?token=secret#step')).toBe('https://shop.test/pay');

@@ -2,6 +2,7 @@ import type { MonitorPlugin } from '../types';
 import type { MonitorCore } from '../core/MonitorCore';
 import { errorPayload } from '../core/helpers';
 
+/** 捕获没有 catch 的 Promise rejection，并复用 errorPayload 兼容任意 reason 类型。 */
 export class PromisePlugin implements MonitorPlugin {
   readonly name = 'PromisePlugin';
   private core?: MonitorCore;

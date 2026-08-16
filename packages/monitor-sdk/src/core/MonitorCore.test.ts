@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MonitorPlugin } from '../types';
 import { MonitorCore } from './MonitorCore';
 
+// 直接实例化核心，隔离验证插件幂等、短窗口去重和 beforeSend 边界。
 function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> = {}) {
   return new MonitorCore({
     dsn: 'http://localhost/envelopes',

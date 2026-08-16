@@ -4,6 +4,7 @@ import type { ServerConfig } from '../config';
 import type { TraceDatabase } from '../db/client';
 import { diagnoseIssue, getDiagnosis, listDiagnoses } from '../services/diagnosis';
 
+// 即使只有一个布尔字段也使用 Schema，避免字符串 "false" 被当作 true。
 const requestSchema = z.object({ force: z.boolean().optional().default(false) });
 
 function idParam(params: unknown, key: string): string {
@@ -41,6 +42,7 @@ export function registerDiagnosisRoutes(
         return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
       return reply.code(201).send(diagnosis);
     } catch (error) {
+      // 模型或结构化输出失败被隔离为 502；已存储的 Issue 证据仍然可以查询。
       request.log.error({ err: error }, 'diagnosis generation failed');
       return reply.code(502).send({
         error: 'DIAGNOSIS_FAILED',

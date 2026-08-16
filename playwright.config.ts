@@ -1,8 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
+/**
+ * Playwright 驱动真实 Chromium，覆盖 Playground → Server → Dashboard 的完整链路。
+ * 三个 webServer 会按健康 URL 等待就绪，本地已有服务时直接复用。
+ */
 export default defineConfig({
   testDir: './tests/e2e',
   globalSetup: './tests/e2e/global-setup.ts',
+  // E2E 共用由 globalSetup 重建的 demo-project 数据，串行可避免用例互相竞争状态。
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 2 : 0,

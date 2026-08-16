@@ -10,6 +10,10 @@ import type { TraceDatabase } from '../db/client';
 import { events, issues, releases } from '../db/schema';
 import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
 
+/**
+ * 接入服务是遥测写入的事务边界：鉴权、幂等、脱敏、Release 关联、
+ * Issue 聚合和事件落库要么一起成功，要么整批回滚。
+ */
 export interface IngestResult {
   accepted: number;
   duplicates: number;
@@ -17,6 +21,7 @@ export interface IngestResult {
 }
 
 function shouldCreateIssue(event: MonitorEvent): boolean {
+  // 性能样本只进入指标流；成功网络请求只做证据，失败请求才需要形成 Issue。
   if (event.eventType === 'performance') return false;
   if (event.eventType === 'network') {
     const status = Number(event.payload.status ?? 0);
@@ -48,6 +53,7 @@ function eventLevel(event: MonitorEvent): 'error' | 'warning' | 'info' {
 }
 
 function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
+  // SDK 可能先于人工创建 Release 上线，因此接入时按版本号惰性补建记录。
   const existing = database.sqlite
     .prepare('SELECT id FROM releases WHERE project_id = ? AND version = ?')
     .get(event.projectId, event.release) as { id: string } | undefined;
@@ -62,6 +68,7 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
 
 function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | null {
   if (!shouldCreateIssue(event)) return null;
+  // 指纹是聚合键；同项目相同指纹复用 Issue，只更新出现时间和最新标题。
   const fingerprint = eventFingerprint(event);
   const existing = database.sqlite
     .prepare(
@@ -104,6 +111,7 @@ function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | nul
 }
 
 function updateIssueCounters(database: TraceDatabase, issueId: string): void {
+  // 计数由 events 表重新派生，而不是盲目 +1，因此重复 eventId 不会污染统计。
   database.sqlite
     .prepare(
       `UPDATE issues SET
@@ -115,6 +123,7 @@ function updateIssueCounters(database: TraceDatabase, issueId: string): void {
 }
 
 export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope): IngestResult {
+  // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
   const project = database.sqlite
     .prepare('SELECT id FROM projects WHERE dsn_key = ?')
     .get(envelope.dsnKey) as { id: string } | undefined;
@@ -124,6 +133,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
   let duplicates = 0;
   const issueIds = new Set<string>();
 
+  // better-sqlite3 transaction 接受同步回调，回调抛错时会自动 ROLLBACK。
   const ingest = database.sqlite.transaction(() => {
     for (const rawEvent of envelope.events) {
       if (rawEvent.projectId !== project.id) throw new Error('PROJECT_DSN_MISMATCH');
@@ -131,10 +141,12 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
         .prepare('SELECT 1 FROM events WHERE id = ?')
         .get(rawEvent.eventId);
       if (duplicate) {
+        // eventId 是幂等键，浏览器重试同一批次不会重复写入。
         duplicates += 1;
         continue;
       }
 
+      // 即使 SDK 已运行 beforeSend，Server 仍把客户端数据视为不可信并二次脱敏。
       const event = redactSensitive(rawEvent);
       const releaseId = ensureRelease(database, event);
       const issueId = upsertIssue(database, event);

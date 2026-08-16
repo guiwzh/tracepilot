@@ -12,6 +12,7 @@ function queryRecord(query: unknown): Record<string, string | undefined> {
 }
 
 function positiveInteger(value: string | undefined, fallback: number, maximum: number): number {
+  // 查询参数均来自字符串；夹紧范围可避免负 LIMIT 或一次读取过多事件。
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(maximum, Math.floor(parsed)));
@@ -25,6 +26,7 @@ function optionalTimestamp(value: string | undefined): number | undefined {
 
 export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabase): void {
   app.get('/api/v1/projects/:projectId/issues', async (request) => {
+    // 路由层只负责规范化 HTTP 参数，动态 SQL 的参数化拼装留给 queries 服务。
     const query = queryRecord(request.query);
     return listIssues(database, stringParam(request.params, 'projectId'), {
       page: positiveInteger(query.page, 1, 1_000_000),
@@ -67,6 +69,7 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
         message: 'Status must be unresolved, resolved, or ignored.',
       });
     }
+    // prepared statement 的占位符确保状态和 ID 不会被解释为 SQL。
     const result = database.sqlite
       .prepare('UPDATE issues SET status = ? WHERE id = ?')
       .run(parsed.data.status, issueId);

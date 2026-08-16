@@ -12,6 +12,7 @@ import {
 import { CanvasRenderer } from 'echarts/renderers';
 import type { BarSeriesOption, LineSeriesOption, PieSeriesOption } from 'echarts/charts';
 
+// ECharts 按需注册图表、组件和 Canvas 渲染器，避免引入完整包的全部能力。
 echarts.use([
   BarChart,
   LineChart,
@@ -32,6 +33,7 @@ export type ChartOption = echarts.ComposeOption<
 > & { xAxis?: unknown; yAxis?: unknown };
 
 export function Chart({ option, height = 260 }: { option: ChartOption; height?: number }) {
+  // ref 指向 React 管理的 DOM 节点，ECharts 在该节点内部执行命令式绘制。
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -41,6 +43,7 @@ export function Chart({ option, height = 260 }: { option: ChartOption; height?: 
     const resize = () => chart.resize();
     window.addEventListener('resize', resize);
     return () => {
+      // dispose 会释放 Canvas、事件和 ECharts 内部引用，防止路由切换后内存泄漏。
       window.removeEventListener('resize', resize);
       chart.dispose();
     };

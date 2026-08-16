@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+/**
+ * Zod Schema 是运行时契约：浏览器传来的 JSON 即使通过了 TypeScript 编译，
+ * 到达 Server 时仍是不可信的 unknown，必须在这里重新校验长度、枚举和嵌套结构。
+ */
 export const environmentSchema = z.enum(['development', 'test', 'production']);
 export const eventTypeSchema = z.enum(['error', 'resource', 'network', 'performance']);
 export const issueStatusSchema = z.enum(['unresolved', 'resolved', 'ignored']);
@@ -79,6 +83,7 @@ export const diagnosisResultSchema = z.object({
   disclaimer: z.string().min(1),
 });
 
+// z.infer 从运行时 Schema 推导 TypeScript 类型，避免“校验规则”和“静态类型”维护两份。
 export type Breadcrumb = z.infer<typeof breadcrumbSchema>;
 export type MonitorEvent = z.infer<typeof monitorEventSchema>;
 export type EventEnvelope = z.infer<typeof envelopeSchema>;

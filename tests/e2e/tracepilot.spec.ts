@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+/** Playwright 端到端测试跨越真实浏览器、SDK、HTTP Server、SQLite 和 Dashboard。 */
 interface IssueItem {
   id: string;
   title: string;

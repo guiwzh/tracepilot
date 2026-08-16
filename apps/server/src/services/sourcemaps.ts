@@ -5,6 +5,10 @@ import { SourceMapConsumer, type RawSourceMap } from 'source-map';
 import { redactSensitive, type SourceMapRecord } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 
+/**
+ * Source Map 仅在 Server 读取：浏览器上传压缩堆栈，Server 用 Release + 文件名
+ * 找到私有 map，再把生成代码的行列映射回原始源码。
+ */
 interface StackFrame {
   line: string;
   file: string;
@@ -14,6 +18,7 @@ interface StackFrame {
 }
 
 function parseStackFrame(line: string): StackFrame | null {
+  // 支持常见 V8 “at fn (url:line:column)” 和无函数名 frame。
   const match = line.match(
     /(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/,
   );
@@ -28,6 +33,7 @@ function parseStackFrame(line: string): StackFrame | null {
 }
 
 export function normalizeMinifiedFile(value: string): string {
+  // 只保留 basename，使完整 CDN URL 与上传表单中的 app.hash.js 可以匹配。
   try {
     return basename(new URL(value).pathname);
   } catch {
@@ -42,6 +48,7 @@ export async function saveSourceMap(
   minifiedFile: string,
   content: Buffer,
 ): Promise<SourceMapRecord> {
+  // 扩展名之外再验证 Source Map v3 的关键字段，拒绝任意 JSON 文件。
   const parsed = JSON.parse(content.toString('utf8')) as Partial<RawSourceMap>;
   if (parsed.version !== 3 || typeof parsed.mappings !== 'string') {
     throw new Error('INVALID_SOURCE_MAP');
@@ -53,6 +60,7 @@ export async function saveSourceMap(
     .get(releaseId, normalized) as { id: string; map_path: string } | undefined;
   const id = existing?.id ?? randomUUID();
   const mapPath = existing?.map_path ?? join(sourceMapDir, `${id}.map`);
+  // 0600 表示只有当前服务进程用户可读写，降低源码泄露风险。
   await writeFile(mapPath, content, { mode: 0o600 });
   database.sqlite
     .prepare(
@@ -61,6 +69,7 @@ export async function saveSourceMap(
        ON CONFLICT(release_id, minified_file) DO UPDATE SET map_path = excluded.map_path, created_at = excluded.created_at`,
     )
     .run(id, releaseId, normalized, mapPath, Date.now());
+  // 上传后回填该 Release 的历史事件，所以不必等待新错误才能看到源码栈。
   await symbolicateReleaseEvents(database, releaseId);
   return { id, releaseId, minifiedFile: normalized, createdAt: Date.now() };
 }
@@ -92,6 +101,7 @@ export async function symbolicateStack(
   const lines = stack.split('\n');
   let mapped = 0;
   const result: string[] = [];
+  // 同一堆栈常包含同一文件的多个 frame，每次调用只读一次 map 文件。
   const sourceMapCache = new Map<string, RawSourceMap>();
 
   for (const line of lines) {
@@ -115,6 +125,7 @@ export async function symbolicateStack(
     }
     let mappedLine = line;
     await SourceMapConsumer.with(rawMap, null, (consumer) => {
+      // 浏览器列号从 1 开始，source-map 库列号从 0 开始；读写时各转换一次。
       const original = consumer.originalPositionFor({
         line: frame.lineNumber,
         column: Math.max(0, frame.columnNumber - 1),
@@ -128,6 +139,7 @@ export async function symbolicateStack(
     });
     result.push(mappedLine);
   }
+  // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
   return mapped > 0 ? result.join('\n') : null;
 }
 

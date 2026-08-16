@@ -1,5 +1,9 @@
 import type { Breadcrumb, DiagnosisResult, IssueLevel, IssueStatus, MonitorEvent } from './schemas';
 
+/**
+ * 这些接口描述 Server 返回给 Dashboard 的公开 DTO。
+ * 数据库使用 snake_case，前端使用 camelCase，转换集中在 Server 的 queries 服务中完成。
+ */
 export interface Project {
   id: string;
   name: string;

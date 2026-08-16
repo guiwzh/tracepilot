@@ -11,6 +11,7 @@ import { api } from '../services/api';
 import { usePreferences } from '../stores/preferences';
 import { formatNumber, relativeTime } from '../utils/format';
 
+/** Issue 列表把 URL 查询参数作为筛选状态的唯一事实来源，链接可复制、刷新可恢复。 */
 export function IssuesPage() {
   const { projectId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -19,6 +20,7 @@ export function IssuesPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const compactRows = usePreferences((state) => state.compactRows);
   const setCompactRows = usePreferences((state) => state.setCompactRows);
+  // useMemo 避免每次渲染都创建新 URLSearchParams，并把 UI 的 window 选项转换为绝对时间。
   const requestParams = useMemo(() => {
     const params = new URLSearchParams(searchParams);
     const durations: Record<string, number> = {
@@ -35,6 +37,7 @@ export function IssuesPage() {
     return params;
   }, [searchParams]);
   const issues = useQuery({
+    // queryKey 包含项目和完整查询串，任一筛选变化都会对应独立缓存。
     queryKey: ['issues', projectId, requestParams.toString()],
     queryFn: () => api.issues(projectId, requestParams),
   });
@@ -50,6 +53,7 @@ export function IssuesPage() {
   const project = projects.data?.items.find((item) => item.id === projectId);
 
   useEffect(() => {
+    // AppShell 用 focus=search 跨路由传递一次性意图，聚焦后立刻从 URL 删除。
     if (searchParams.get('focus') !== 'search') return;
     searchRef.current?.focus();
     const next = new URLSearchParams(searchParams);
@@ -57,6 +61,7 @@ export function IssuesPage() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  // ECharts option 只在服务端趋势数据变化时重建，避免 Chart effect 反复 dispose/init。
   const trendOption = useMemo<ChartOption>(
     () => ({
       animationDuration: 450,
@@ -99,6 +104,7 @@ export function IssuesPage() {
   );
 
   function updateFilter(key: string, value: string) {
+    // 改变任一筛选都回到第一页，避免新结果总数较少时停在不存在的页码。
     const next = new URLSearchParams(searchParams);
     if (!value || value === 'all') next.delete(key);
     else next.set(key, value);
@@ -107,6 +113,7 @@ export function IssuesPage() {
   }
 
   const requestedPageSize = Number(requestParams.get('pageSize') ?? 25);
+  // 最终分页优先信任 Server 规范化后的值，首屏未返回前才使用本地安全回退。
   const pageSize =
     issues.data?.pageSize ??
     (Number.isFinite(requestedPageSize) && requestedPageSize >= 1

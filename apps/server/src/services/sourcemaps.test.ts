@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from '../db/client';
 import { saveSourceMap, symbolicateStack } from './sourcemaps';
 
+// 用最小合法 Source Map 验证上传、行列映射和历史事件回填。
 let directory: string;
 let database: TraceDatabase;
 

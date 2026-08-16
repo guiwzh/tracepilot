@@ -15,6 +15,10 @@ import {
 import type { TraceDatabase } from '../db/client';
 import { parseJson, percentile } from '../lib/json';
 
+/**
+ * 查询层把 SQLite 的 snake_case 行映射成 shared 包定义的 camelCase DTO。
+ * 复杂聚合保留为参数化 SQL，便于清楚控制分页、JSON 提取和时间桶。
+ */
 type Row = Record<string, unknown>;
 
 function number(value: unknown): number {
@@ -39,6 +43,7 @@ function mapIssue(row: Row): Issue {
 }
 
 function mapEvent(row: Row): StoredEvent {
+  // context/breadcrumbs 以 JSON 文本存储；解析失败时返回最小可用上下文而不是让整个页面报错。
   return {
     id: String(row.id),
     issueId: row.issue_id ? String(row.issue_id) : null,
@@ -119,6 +124,7 @@ export function listIssues(
   projectId: string,
   filters: IssueFilters,
 ): IssueListResponse {
+  // SQL 片段来自固定代码，所有用户值都进入 params 占位符，避免字符串拼接注入。
   const conditions = ['i.project_id = ?'];
   const params: unknown[] = [projectId];
   if (filters.status && filters.status !== 'all') {
@@ -188,6 +194,7 @@ export function listIssues(
     events: 'i.event_count',
     users: 'i.user_count',
   };
+  // ORDER BY 列名不能用普通占位符，因此必须通过白名单映射。
   const sort = sortColumns[filters.sort ?? 'lastSeen'] ?? 'i.last_seen_at';
   const order = filters.order === 'asc' ? 'ASC' : 'DESC';
   const offset = (filters.page - 1) * filters.pageSize;
@@ -202,6 +209,7 @@ export function listIssues(
     .all(...params, filters.pageSize, offset) as Row[];
 
   for (const row of rows) {
+    // 每个 Issue 生成最近 6 小时的 7 个点，空桶显式补 0，Sparkline 才不会错位。
     const since = Date.now() - 6 * 60 * 60 * 1000;
     const points = database.sqlite
       .prepare(
@@ -224,6 +232,7 @@ function distribution(
   issueId: string,
   expression: string,
 ): Array<{ name: string; value: number }> {
+  // expression 只由本文件内固定调用传入，绝不直接接受 HTTP 查询参数。
   const rows = database.sqlite
     .prepare(
       `SELECT ${expression} AS name, COUNT(*) AS value FROM events e
@@ -356,6 +365,7 @@ function routeName(pageUrl: string, route?: string): string {
 }
 
 function getPerformanceSamples(database: TraceDatabase, projectId: string): PerformanceSample[] {
+  // MVP 将可变事件上下文存为 JSON；SQLite json_extract/应用层解析可在不扩表时增加指标。
   const rows = database.sqlite
     .prepare(
       `SELECT e.context_json, e.page_url, e.created_at, r.version
@@ -388,6 +398,7 @@ function getPerformanceSamples(database: TraceDatabase, projectId: string): Perf
 }
 
 function performanceMetrics(samples: PerformanceSample[]): PerformanceMetric[] {
+  // 先按指标分组，再对每组计算 p50/p75/p95；p75 同时用于体验评级。
   const grouped = new Map<PerformanceMetricName, number[]>();
   for (const sample of samples) {
     grouped.set(sample.metric, [...(grouped.get(sample.metric) ?? []), sample.value]);
@@ -410,6 +421,7 @@ function performanceComparison(
   samples: PerformanceSample[],
   dimension: 'release' | 'route' | 'browser',
 ): PerformanceComparison[] {
+  // 先按维度总样本数选 Top 8，避免高基数路由把 Dashboard 撑成无限列表。
   const totals = new Map<string, number>();
   for (const sample of samples)
     totals.set(sample[dimension], (totals.get(sample[dimension]) ?? 0) + 1);
@@ -452,6 +464,7 @@ export function getPerformanceOverview(
   database: TraceDatabase,
   projectId: string,
 ): PerformanceOverview {
+  // 趋势桶固定为 7 天；没有样本的日期仍返回 samples=0，前端显示断点而不是伪造 0ms。
   const samples = getPerformanceSamples(database, projectId);
   const windowStart = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const day = 24 * 60 * 60 * 1000;

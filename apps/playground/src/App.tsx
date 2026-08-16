@@ -3,6 +3,7 @@ import { createMonitor, type MonitorCore } from '@trace-pilot/monitor-sdk';
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:4318';
 
+/** 每个场景都通过浏览器真实 API 制造信号，验证 SDK 插件而不是伪造 Dashboard 数据。 */
 interface Scenario {
   id: string;
   number: string;
@@ -18,6 +19,7 @@ const scenarios: Scenario[] = [
     title: 'Runtime exception',
     description: 'Throws outside the React event call stack so window.error observes it.',
     run: () => {
+      // 抛到当前 React 点击回调之外，错误才会到达 window.error 全局监听器。
       window.setTimeout(() => {
         throw new TypeError(
           `Cannot read properties of undefined (reading 'total') — order ${Date.now()}`,
@@ -40,6 +42,7 @@ const scenarios: Scenario[] = [
     title: 'Broken resource',
     description: 'Adds an image whose URL returns no asset.',
     run: () => {
+      // DOM 资源加载失败使用 error 捕获阶段传播，与普通 JavaScript 异常机制不同。
       const image = new Image();
       image.alt = 'Deliberately missing checkout badge';
       image.src = `/missing-checkout-badge-${Date.now()}.png`;
@@ -97,11 +100,13 @@ function timeLabel(value: number): string {
 }
 
 export function App() {
+  // SDK 实例是可变对象但不参与渲染，用 useRef 保存可避免每次更新 activity 都重新创建。
   const monitorRef = useRef<MonitorCore | null>(null);
   const [activity, setActivity] = useState<Array<{ label: string; time: number }>>([]);
   const [status, setStatus] = useState<'starting' | 'connected'>('starting');
 
   useEffect(() => {
+    // effect 负责 SDK 的完整生命周期；cleanup 在路由卸载和 StrictMode 检查时都会执行。
     const monitor = createMonitor({
       dsn: `${apiUrl}/api/v1/envelopes`,
       dsnKey: import.meta.env.VITE_DEMO_DSN_KEY ?? 'demo-dsn-key',
@@ -112,6 +117,7 @@ export function App() {
       batchSize: 3,
       flushInterval: 2_000,
       beforeSend(event) {
+        // 演示业务侧 beforeSend：可追加标记，也可提前移除敏感字段。
         return {
           ...event,
           payload: { ...event.payload, labScenario: true, password: '[removed by playground]' },
@@ -122,6 +128,7 @@ export function App() {
     monitorRef.current = monitor;
     setStatus('connected');
     return () => {
+      // destroy 会移除所有全局监听器并尝试冲刷剩余队列。
       monitor.destroy();
       monitorRef.current = null;
     };

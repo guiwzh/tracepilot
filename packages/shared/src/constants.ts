@@ -1,8 +1,14 @@
+/**
+ * 跨 SDK、Server 和 Dashboard 共享的业务常量。
+ * 放在 shared 包中可以避免各端各写一套默认值，导致采集与展示口径不一致。
+ */
 export const DEFAULT_BATCH_SIZE = 10;
 export const DEFAULT_FLUSH_INTERVAL = 5_000;
 export const MAX_BREADCRUMBS = 50;
 export const PROMPT_VERSION = 'diagnosis-evidence-v1';
 
+// Web Vitals 官方分级的两个边界值：[良好上限, 较差起点]。
+// CLS 是无单位分数，其余指标的单位都是毫秒。
 export const WEB_VITAL_THRESHOLDS = {
   LCP: [2_500, 4_000],
   INP: [200, 500],

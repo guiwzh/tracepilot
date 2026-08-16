@@ -8,6 +8,10 @@ import { ResourcePlugin } from './plugins/ResourcePlugin';
 import { TransportPlugin } from './plugins/TransportPlugin';
 import type { MonitorOptions } from './types';
 
+/**
+ * SDK 的工厂函数。默认插件按“信号采集在前、传输启动在后”的顺序注册，
+ * 这样销毁时按相同顺序 teardown，最后由 TransportPlugin 冲刷剩余队列。
+ */
 export function createMonitor(options: MonitorOptions): MonitorCore {
   return new MonitorCore(options)
     .use(new ErrorPlugin())
@@ -19,6 +23,7 @@ export function createMonitor(options: MonitorOptions): MonitorCore {
     .use(new TransportPlugin());
 }
 
+// 同时导出底层类，方便高级调用方按需组合插件，也方便单元测试隔离各层。
 export { MonitorCore } from './core/MonitorCore';
 export { BehaviorPlugin } from './plugins/BehaviorPlugin';
 export { ErrorPlugin } from './plugins/ErrorPlugin';

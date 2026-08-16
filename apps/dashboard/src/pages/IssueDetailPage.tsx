@@ -28,10 +28,12 @@ import { IssueStatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
 
+// as const 把数组元素收窄为字面量联合类型，非法 tab 在编译期就会报错。
 const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'diagnosis'] as const;
 type Tab = (typeof tabs)[number];
 
 function DistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
+  // 分布数据不变时复用 option 对象，避免命令式 ECharts 实例无谓重建。
   const option = useMemo<ChartOption>(
     () => ({
       animationDuration: 400,
@@ -135,6 +137,7 @@ function StackBlock({
 
 function DiagnosisPanel({ issueId }: { issueId: string }) {
   const queryClient = useQueryClient();
+  // 历史查询和“生成诊断”写操作分开建模；生成成功后再失效历史缓存。
   const records = useQuery({
     queryKey: ['diagnoses', issueId],
     queryFn: () => api.diagnoses(issueId),
@@ -143,6 +146,7 @@ function DiagnosisPanel({ issueId }: { issueId: string }) {
     mutationFn: (force: boolean) => api.diagnose(issueId, force),
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['diagnoses', issueId] }),
   });
+  // 当前操作结果优先显示；没有新结果时展示服务端返回的最近一条历史记录。
   const record: DiagnosisRecord | undefined = diagnose.data ?? records.data?.items[0];
 
   if (records.isLoading) return <LoadingState label="Loading diagnosis history" />;
@@ -271,10 +275,12 @@ function DiagnosisPanel({ issueId }: { issueId: string }) {
 export function IssueDetailPage() {
   const { projectId = '', issueId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
+  // tab 保存在 URL 中；未知值回退 overview，用户可直接分享某个证据标签链接。
   const activeTab = (
     tabs.includes(searchParams.get('tab') as Tab) ? searchParams.get('tab') : 'overview'
   ) as Tab;
   const queryClient = useQueryClient();
+  // Issue 摘要和事件样本可并行请求，React Query 分别缓存。
   const issue = useQuery({ queryKey: ['issue', issueId], queryFn: () => api.issue(issueId) });
   const events = useQuery({
     queryKey: ['issue-events', issueId],
@@ -283,6 +289,7 @@ export function IssueDetailPage() {
   const update = useMutation({
     mutationFn: (status: string) => api.updateIssue(issueId, status),
     onSuccess: async () => {
+      // 状态既出现在详情也出现在列表，因此两个 queryKey 都需要失效。
       await queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
       await queryClient.invalidateQueries({ queryKey: ['issues', projectId] });
     },
@@ -301,6 +308,7 @@ export function IssueDetailPage() {
       </main>
     );
   const data = issue.data;
+  // Server 已选择该 Issue 最新事件作为 sampleEvent，六个标签都围绕同一现场展示。
   const sample = data.sampleEvent;
   const networkBreadcrumbs = sample?.breadcrumbs.filter((item) => item.type === 'network') ?? [];
 

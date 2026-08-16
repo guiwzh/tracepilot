@@ -1,6 +1,7 @@
 import type { MonitorPlugin } from '../types';
 import type { MonitorCore } from '../core/MonitorCore';
 
+// 不同 DOM 元素把资源地址放在不同属性中，这里统一为一个 URL。
 function resourceUrl(target: EventTarget | null): string | undefined {
   if (target instanceof HTMLImageElement || target instanceof HTMLScriptElement) return target.src;
   if (target instanceof HTMLLinkElement) return target.href;
@@ -27,6 +28,7 @@ export class ResourcePlugin implements MonitorPlugin {
   setup(core: MonitorCore): void {
     if (this.core || typeof window === 'undefined') return;
     this.core = core;
+    // 资源 error 不冒泡，必须在捕获阶段（第三个参数 true）从 window 监听。
     window.addEventListener('error', this.listener, true);
   }
 
