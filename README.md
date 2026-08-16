@@ -19,7 +19,8 @@
 - Source Map：私有上传、Release 隔离、文件大小/格式限制、压缩堆栈还原、缺失地图降级。
 - 诊断：受控上下文、再次脱敏、Zod 结构化输出、证据/置信度/缺失信息、Token/耗时/版本记录、
   输入哈希缓存。
-- 演示与质量：307 条虚构种子事件、Incident Playground、单元/接口/E2E、基准和诊断冒烟评测。
+- 演示与质量：307 条虚构种子事件、16 个错误根因分组、Incident Playground、单元/接口/E2E、
+  基准和诊断冒烟评测。
 
 ## 架构
 
@@ -137,7 +138,7 @@ pnpm evaluate:diagnosis   # 本地诊断契约与缓存冒烟评测
 | Issue 列表查询 P50 / P95               | 0.13 ms / 0.16 ms |
 | 本地诊断结构化成功率（4 个固定 Issue） |              100% |
 | 未变化上下文缓存命中率                 |              100% |
-| Playwright 完整闭环                    |      7 / 7 passed |
+| Playwright 完整闭环                    |      8 / 8 passed |
 
 复现方式和限制见 [性能报告](docs/reports/performance.md) 与
 [诊断评测报告](docs/reports/diagnosis-evaluation.md)。简历或演示材料不应把这些本机数字包装成
@@ -179,7 +180,9 @@ tests/e2e            浏览器闭环测试
 
 完整操作见[平台使用手册](docs/user-guide.md)，详细设计见
 [architecture.md](docs/architecture.md)，3–5 分钟演示顺序见
-[demo-script.md](docs/demo-script.md)。
+[demo-script.md](docs/demo-script.md)。面向简历与面试的后续补强项见
+[TODO.md](TODO.md)，真实浏览器检查结果见
+[浏览器质量审查](docs/reports/browser-audit.md)。
 
 ## 代码阅读
 

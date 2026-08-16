@@ -148,19 +148,26 @@ Evidence volume 图表展示最近 24 小时的小时级错误趋势。
 
 筛选栏支持：
 
-| 控件                        | 作用                                    |
-| --------------------------- | --------------------------------------- |
-| Search title or fingerprint | 搜索 Issue 标题或指纹，输入后按 Enter   |
-| Issue status                | 筛选 unresolved、resolved 或 ignored    |
-| Severity                    | 筛选 error、warning 或 info             |
-| Release                     | 只看某个发布版本                        |
-| Browser                     | 只看 Chrome、Edge、Firefox 或 Safari    |
-| Time window                 | 查看最近 24 小时、7 天、30 天或全部时间 |
-| Route contains              | 按路由片段筛选，输入后按 Enter          |
-| Last seen                   | 在最近出现时间的升序和降序之间切换      |
+| 控件                        | 作用                                            |
+| --------------------------- | ----------------------------------------------- |
+| Search title or fingerprint | 在当前列表搜索 Issue 标题或指纹，输入后按 Enter |
+| Issue status                | 筛选 unresolved、resolved 或 ignored            |
+| Severity                    | 筛选 error、warning 或 info                     |
+| Release                     | 只看某个发布版本                                |
+| Browser                     | 只看 Chrome、Edge、Firefox 或 Safari            |
+| Time window                 | 查看最近 24 小时、7 天、30 天或全部时间         |
+| Route contains              | 按路由片段筛选，输入后按 Enter                  |
+| Last seen                   | 在最近出现时间的升序和降序之间切换              |
 
-筛选条件会保存在 URL 查询参数中，因此刷新页面或复制链接后仍能恢复当前视图。按 Command+K
-或 Ctrl+K 可以快速把焦点移到搜索框。Compact rows 可在紧凑行和舒适行之间切换。
+筛选条件会保存在 URL 查询参数中，因此刷新页面或复制链接后仍能恢复当前视图。点击顶栏 Search
+evidence，或按 Command+K / Ctrl+K，会打开独立的全局搜索面板；输入标题或指纹后可以直接进入
+Issue，按 Enter 查看完整筛选结果，按 Esc 关闭面板并回到触发按钮。
+
+列表默认每页显示 10 个 Issue。底部分页栏明确显示当前范围和分组总数，并可切换每页 10、25、
+50 或 100 条。这里展示的是按指纹聚合后的 Issue 数，不是原始事件数；同一根因的重复事件会累加
+到同一行。
+
+Compact rows 可在紧凑行和舒适行之间切换。
 
 列表中的每一行依次展示级别、标题、指纹前缀、最新 Release、状态、事件数、用户数、趋势和最后
 出现时间。点击整行进入 Issue 详情。
@@ -443,3 +450,4 @@ pnpm seed
 - [架构说明](architecture.md)：组件边界与数据流。
 - [性能报告](reports/performance.md)：本地性能测量。
 - [诊断评测报告](reports/diagnosis-evaluation.md)：诊断契约与缓存评测。
+- [浏览器质量审查](reports/browser-audit.md)：Browser MCP 与 Playwright 的交互、响应式和控制台检查。

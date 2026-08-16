@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowDown, ChevronLeft, ChevronRight, Route, Rows3, Search } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -11,13 +11,14 @@ import { api } from '../services/api';
 import { usePreferences } from '../stores/preferences';
 import { formatNumber, relativeTime } from '../utils/format';
 
+const ISSUE_PAGE_SIZES = [10, 25, 50, 100] as const;
+
 /** Issue 列表把 URL 查询参数作为筛选状态的唯一事实来源，链接可复制、刷新可恢复。 */
 export function IssuesPage() {
   const { projectId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState(searchParams.get('search') ?? '');
   const [route, setRoute] = useState(searchParams.get('route') ?? '');
-  const searchRef = useRef<HTMLInputElement>(null);
   const compactRows = usePreferences((state) => state.compactRows);
   const setCompactRows = usePreferences((state) => state.setCompactRows);
   // useMemo 避免每次渲染都创建新 URLSearchParams，并把 UI 的 window 选项转换为绝对时间。
@@ -30,10 +31,12 @@ export function IssuesPage() {
     };
     const duration = durations[params.get('window') ?? ''];
     params.delete('window');
-    params.delete('focus');
     if (duration) params.set('from', String(Date.now() - duration));
     if (!params.has('page')) params.set('page', '1');
-    if (!params.has('pageSize')) params.set('pageSize', '25');
+    const requestedPageSize = Number(params.get('pageSize'));
+    if (!ISSUE_PAGE_SIZES.includes(requestedPageSize as (typeof ISSUE_PAGE_SIZES)[number])) {
+      params.set('pageSize', '10');
+    }
     return params;
   }, [searchParams]);
   const issues = useQuery({
@@ -53,13 +56,10 @@ export function IssuesPage() {
   const project = projects.data?.items.find((item) => item.id === projectId);
 
   useEffect(() => {
-    // AppShell 用 focus=search 跨路由传递一次性意图，聚焦后立刻从 URL 删除。
-    if (searchParams.get('focus') !== 'search') return;
-    searchRef.current?.focus();
-    const next = new URLSearchParams(searchParams);
-    next.delete('focus');
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+    // 浏览器前进/后退或全局搜索进入列表时，同步 URL 中已经提交的筛选值。
+    setSearch(searchParams.get('search') ?? '');
+    setRoute(searchParams.get('route') ?? '');
+  }, [searchParams]);
 
   // ECharts option 只在服务端趋势数据变化时重建，避免 Chart effect 反复 dispose/init。
   const trendOption = useMemo<ChartOption>(
@@ -112,17 +112,27 @@ export function IssuesPage() {
     setSearchParams(next);
   }
 
-  const requestedPageSize = Number(requestParams.get('pageSize') ?? 25);
+  const requestedPageSize = Number(requestParams.get('pageSize') ?? 10);
   // 最终分页优先信任 Server 规范化后的值，首屏未返回前才使用本地安全回退。
   const pageSize =
     issues.data?.pageSize ??
     (Number.isFinite(requestedPageSize) && requestedPageSize >= 1
       ? Math.min(100, Math.floor(requestedPageSize))
-      : 25);
+      : 10);
   const totalPages = Math.max(1, Math.ceil((issues.data?.total ?? 0) / pageSize));
   const requestedPage = Number(requestParams.get('page') ?? 1);
   const currentPage =
     Number.isFinite(requestedPage) && requestedPage >= 1 ? Math.floor(requestedPage) : 1;
+  const total = issues.data?.total ?? 0;
+  const firstVisible = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const lastVisible = Math.min(currentPage * pageSize, total);
+
+  useEffect(() => {
+    if (!issues.data || total === 0 || currentPage <= totalPages) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('page', String(totalPages));
+    setSearchParams(next, { replace: true });
+  }, [currentPage, issues.data, searchParams, setSearchParams, total, totalPages]);
 
   return (
     <main className="page-content">
@@ -180,7 +190,7 @@ export function IssuesPage() {
           >
             <Search size={15} />
             <input
-              ref={searchRef}
+              aria-label="Search issue title or fingerprint"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search title or fingerprint"
@@ -311,22 +321,43 @@ export function IssuesPage() {
         )}
 
         <footer className="pagination">
-          <span>{issues.data?.total ?? 0} grouped issues</span>
-          <div>
+          <p className="pagination-summary" aria-live="polite">
+            Showing <strong>{firstVisible}</strong>–<strong>{lastVisible}</strong> of{' '}
+            <strong>{total}</strong> grouped issues
+          </p>
+          <div className="pagination-controls">
+            <label className="page-size-control">
+              <span>Rows per page</span>
+              <select
+                aria-label="Issues per page"
+                value={String(pageSize)}
+                onChange={(event) => updateFilter('pageSize', event.target.value)}
+              >
+                {ISSUE_PAGE_SIZES.map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
+              type="button"
+              aria-label="Previous page"
               disabled={currentPage <= 1}
               onClick={() => updateFilter('page', String(currentPage - 1))}
             >
-              <ChevronLeft size={15} />
+              <ChevronLeft size={15} /> <span>Previous</span>
             </button>
-            <span>
+            <span className="pagination-page" aria-current="page">
               {currentPage} / {totalPages}
             </span>
             <button
+              type="button"
+              aria-label="Next page"
               disabled={currentPage >= totalPages}
               onClick={() => updateFilter('page', String(currentPage + 1))}
             >
-              <ChevronRight size={15} />
+              <span>Next</span> <ChevronRight size={15} />
             </button>
           </div>
         </footer>

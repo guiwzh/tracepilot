@@ -17,6 +17,22 @@ const browsers = [
   'Mozilla/5.0 (X11; Linux x86_64; rv:134.0) Gecko/20100101 Firefox/134.0',
 ];
 
+// 额外的错误根因让演示数据超过一页，分页、搜索和不同 Issue 详情都能在默认数据中实际操作。
+const checkoutFailureVariants = [
+  ['CheckoutStateError', 'Checkout state failed to hydrate', 'hydrateCheckoutState'],
+  ['PromotionError', 'Promotion response contained an invalid discount', 'applyPromotion'],
+  ['AddressError', 'Address validation service returned no candidates', 'validateAddress'],
+  ['DeliveryError', 'Selected delivery window is no longer available', 'reserveDeliveryWindow'],
+  ['CurrencyError', 'Currency formatter received a non-numeric total', 'formatCurrency'],
+  ['CartItemError', 'Cart item price was missing during checkout', 'normalizeCartItem'],
+  ['PaymentMountError', 'Payment method component failed to mount', 'mountPaymentMethod'],
+  ['ShippingError', 'Shipping country is not supported', 'resolveShippingMethod'],
+  ['TaxError', 'Tax estimate request exceeded its deadline', 'loadTaxEstimate'],
+  ['ReservationError', 'Inventory reservation conflicted with another session', 'reserveInventory'],
+  ['StateSyncError', 'Checkout state diverged from the server snapshot', 'reconcileCheckout'],
+  ['PaymentFrameError', 'Payment frame handshake was rejected', 'connectPaymentFrame'],
+] as const;
+
 function breadcrumb(
   eventId: string,
   index: number,
@@ -102,13 +118,21 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   for (let index = 0; index < 96; index += 1) {
     const timestamp = now - (95 - index) * 13 * 60_000;
     const id = `demo-cart-${String(index).padStart(3, '0')}`;
+    // 保留一个高频主问题，并把最后 24 条事件分散到 12 个可调查根因中。
+    const variantIndex = index >= 72 ? (index - 72) % checkoutFailureVariants.length : -1;
+    const variant = variantIndex >= 0 ? checkoutFailureVariants[variantIndex] : undefined;
+    const [name, message, functionName] = variant ?? [
+      'TypeError',
+      `Cannot read properties of undefined (reading 'total') — order ${83000000 + index}`,
+      'calculateTotal',
+    ];
     events.push({
       ...baseEvent(id, timestamp, index),
       eventType: 'error',
       payload: {
-        name: 'TypeError',
-        message: `Cannot read properties of undefined (reading 'total') — order ${83000000 + index}`,
-        stack: `TypeError: Cannot read properties of undefined (reading 'total')\n    at calculateTotal (https://shop.example/assets/checkout.a81e93bd.js:1:420)\n    at submitOrder (https://shop.example/assets/checkout.a81e93bd.js:1:612)`,
+        name,
+        message,
+        stack: `${name}: ${message}\n    at ${functionName} (https://shop.example/assets/checkout.a81e93bd.js:1:${variantIndex >= 0 ? 500 + variantIndex : 420})\n    at submitOrder (https://shop.example/assets/checkout.a81e93bd.js:1:612)`,
         level: 'error',
       },
       breadcrumbs: [
@@ -119,7 +143,9 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
           timestamp - 380,
           'error',
           'runtime',
-          'cart.summary was undefined in calculateTotal',
+          variant
+            ? `${functionName} rejected the checkout state`
+            : 'cart.summary was undefined in calculateTotal',
         ),
       ],
     });

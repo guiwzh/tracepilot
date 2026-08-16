@@ -29,7 +29,7 @@ test('triage view loads seeded telemetry and preserves filters in the URL', asyn
   await expect(
     page.locator('.summary-metrics article').filter({ hasText: 'Events / 24 h' }),
   ).toContainText('207');
-  await expect(page.locator('.issue-row')).toHaveCount(4);
+  await expect(page.locator('.issue-row')).toHaveCount(10);
 
   await page.getByLabel('Severity', { exact: true }).selectOption('warning');
   await expect(page).toHaveURL(/level=warning/);
@@ -38,7 +38,9 @@ test('triage view loads seeded telemetry and preserves filters in the URL', asyn
   await expect(page.getByLabel('Severity', { exact: true })).toHaveValue('warning');
 });
 
-test('advanced filters, global search, and pagination remain URL-driven', async ({ page }) => {
+test('advanced filters, global search dialog, and pagination remain URL-driven', async ({
+  page,
+}) => {
   await page.goto('/projects/demo-project/issues');
   await page.getByLabel('Release', { exact: true }).selectOption('2.3.9');
   await page.getByLabel('Browser', { exact: true }).selectOption('Edge');
@@ -47,13 +49,73 @@ test('advanced filters, global search, and pagination remain URL-driven', async 
   await expect(page).toHaveURL(/browser=Edge/);
   await expect(page).toHaveURL(/window=7d/);
 
+  const filteredUrl = page.url();
   await page.getByRole('button', { name: /Search evidence/ }).click();
-  await expect(page.getByPlaceholder('Search title or fingerprint')).toBeFocused();
+  const searchDialog = page.getByRole('dialog', { name: 'Search evidence' });
+  await expect(searchDialog).toBeVisible();
+  await expect(page.getByRole('searchbox', { name: 'Search issues' })).toBeFocused();
+  expect(page.url()).toBe(filteredUrl);
+  await page.getByRole('searchbox', { name: 'Search issues' }).fill('hydrate');
+  await expect(searchDialog.getByText('Matching evidence', { exact: true })).toBeVisible();
+  await expect(searchDialog.getByRole('link', { name: /Checkout state failed/ })).toBeVisible();
+  await page.getByRole('searchbox', { name: 'Search issues' }).press('Escape');
+  await expect(searchDialog).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Search evidence' })).toBeFocused();
+  await page.keyboard.press('Control+K');
+  await expect(searchDialog).toBeVisible();
+  await page.getByRole('searchbox', { name: 'Search issues' }).press('Escape');
 
-  await page.goto('/projects/demo-project/issues?pageSize=1');
-  await page.locator('.pagination button').last().click();
+  await page.goto('/projects/demo-project/issues?pageSize=10');
+  await expect(page.locator('.issue-row')).toHaveCount(10);
+  await expect(page.locator('.pagination')).toContainText('Showing 1–10 of 16 grouped issues');
+  await page.getByRole('button', { name: 'Next page' }).click();
   await expect(page).toHaveURL(/page=2/);
-  await expect(page.locator('.pagination')).toContainText('2 / 4');
+  await expect(page.locator('.issue-row')).toHaveCount(6);
+  await expect(page.locator('.pagination')).toContainText('Showing 11–16 of 16 grouped issues');
+  await expect(page.locator('.pagination')).toContainText('2 / 2');
+
+  await page.getByLabel('Issues per page').selectOption('25');
+  await expect(page).toHaveURL(/page=1/);
+  await expect(page).toHaveURL(/pageSize=25/);
+  await expect(page.locator('.issue-row')).toHaveCount(16);
+  await expect(page.getByRole('button', { name: 'Next page' })).toBeDisabled();
+});
+
+test('primary dashboard routes stay console-clean and avoid failed API responses', async ({
+  page,
+}) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const failedApiResponses: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('response', (response) => {
+    const url = new URL(response.url());
+    if (url.port === '4318' && response.status() >= 400) {
+      failedApiResponses.push(`${response.status()} ${url.pathname}`);
+    }
+  });
+
+  for (const [path, heading] of [
+    ['/projects/demo-project/issues', 'Issues'],
+    ['/projects/demo-project/performance', 'Performance'],
+    ['/projects/demo-project/releases', 'Releases'],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
+    await page.waitForLoadState('networkidle');
+  }
+
+  await page.goto('/projects/demo-project/issues');
+  await page.locator('.issue-row').first().click();
+  await expect(page.locator('.issue-heading h1')).toBeVisible();
+  await page.waitForLoadState('networkidle');
+
+  expect(consoleErrors).toEqual([]);
+  expect(pageErrors).toEqual([]);
+  expect(failedApiResponses).toEqual([]);
 });
 
 test('issue detail reconstructs its breadcrumb evidence chain', async ({ page }) => {
@@ -67,6 +129,7 @@ test('issue detail reconstructs its breadcrumb evidence chain', async ({ page })
 test('long issue titles do not overflow a mobile viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/projects/demo-project/issues');
+  await expect(page.getByRole('button', { name: 'Search evidence' })).toBeVisible();
   await page.locator('.issue-row').filter({ hasText: 'Resource failed' }).click();
   await expect(page.locator('.issue-heading h1')).toContainText('address-lookup');
 
