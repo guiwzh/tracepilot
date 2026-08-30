@@ -10,5 +10,6 @@ apps/server/.tracepilot
 playwright-report
 test-results
 pnpm-debug.log*
-# 本地规划草稿，不进入版本库
+# 生成的文档产物与本地规划草稿，不进入版本库
+output
 docs/plans
