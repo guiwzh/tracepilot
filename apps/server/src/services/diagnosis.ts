@@ -42,6 +42,8 @@ interface DiagnosisContext {
 interface ModelResult {
   result: DiagnosisResult;
   model: string;
+  /** 实际走通的结构化输出通道，用于日志与评测，不进入数据库。 */
+  transport: ModelTransport | 'local';
   inputTokens: number;
   outputTokens: number;
 }
@@ -253,12 +255,101 @@ Return one JSON object matching the requested schema. Every cause must cite supp
 Never invent a file, function, request, release, or verification. Put unknowns in missingInformation.
 Do not claim to have run code, commands, tests, or changed any system. Keep the diagnosis concise and actionable.`;
 
+function userPrompt(context: DiagnosisContext): string {
+  return `Evidence context:\n${JSON.stringify(context)}\n\nReturn a diagnosis grounded only in this context.`;
+}
+
+/**
+ * OpenAI 兼容端点对结构化输出的支持并不一致，而且不一定按直觉分布：
+ * 实测 DeepSeek 支持 Responses API 的 `text.format` 严格 json_schema，
+ * 却拒绝 `chat/completions` 的 `json_schema`（400 "This response_format type is unavailable now"）。
+ *
+ * 因此这里按端点能力降级，而不是按厂商名字硬编码：
+ *   1. Responses API + Zod 结构化输出——能力最强，模型侧就保证了形状。
+ *   2. chat/completions + `json_object` + 提示词内嵌 schema——只保证是合法 JSON，形状靠校验兜底。
+ *
+ * 两条路径最终都会经过同一个共享 Zod Schema。这就是 ADR 0002 说的冗余信任边界：
+ * 无论 Provider 承诺了什么，落库前的形状判断只认我们自己的契约。
+ */
+type ModelTransport = 'responses' | 'chat.completions';
+
+// 能力探测结果按 (baseURL, model) 缓存在进程内，避免每次诊断都为不支持的端点白付一次往返。
+const transportCache = new Map<string, ModelTransport>();
+
+function indicatesUnsupportedEndpoint(error: unknown): boolean {
+  const status = (error as { status?: number }).status;
+  // 404：端点根本不存在。400：端点在，但不接受这种结构化输出请求。
+  if (status === 404) return true;
+  if (status !== 400) return false;
+  const message = String((error as { message?: string }).message ?? '').toLowerCase();
+  return /response_format|text\.format|json_schema|unsupported|unavailable|not support/.test(
+    message,
+  );
+}
+
+async function viaResponses(
+  client: OpenAI,
+  config: ServerConfig,
+  context: DiagnosisContext,
+): Promise<ModelResult> {
+  const response = await client.responses.parse({
+    model: config.modelName,
+    input: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt(context) },
+    ],
+    text: { format: zodTextFormat(diagnosisResultSchema, 'diagnosis_result') },
+  });
+  // Responses API 先按 Zod 格式解析，随后再 parse 一次作为持久化前的最终校验。
+  if (!response.output_parsed) throw new Error('MODEL_EMPTY_OR_REFUSED_RESPONSE');
+  return {
+    result: diagnosisResultSchema.parse(response.output_parsed),
+    model: config.modelName,
+    transport: 'responses',
+    inputTokens: response.usage?.input_tokens ?? 0,
+    outputTokens: response.usage?.output_tokens ?? 0,
+  };
+}
+
+async function viaChatCompletions(
+  client: OpenAI,
+  config: ServerConfig,
+  context: DiagnosisContext,
+): Promise<ModelResult> {
+  // schema 从同一个 Zod 定义生成，避免降级路径的提示词和契约各写一份而漂移。
+  const { schema } = zodTextFormat(diagnosisResultSchema, 'diagnosis_result');
+  const response = await client.chat.completions.create({
+    model: config.modelName,
+    messages: [
+      {
+        role: 'system',
+        // json_object 模式要求提示词里出现 "JSON" 字样，同时也需要把形状讲清楚——
+        // 这一档只保证返回合法 JSON，不保证符合 schema。
+        content: `${SYSTEM_PROMPT}\n\nReturn JSON conforming exactly to this schema:\n${JSON.stringify(schema)}`,
+      },
+      { role: 'user', content: userPrompt(context) },
+    ],
+    response_format: { type: 'json_object' },
+  });
+  const text = response.choices[0]?.message?.content;
+  if (!text) throw new Error('MODEL_EMPTY_OR_REFUSED_RESPONSE');
+  // JSON.parse 与 Zod 校验都可能抛错，最终都会被路由隔离成 502，不影响已存储证据。
+  return {
+    result: diagnosisResultSchema.parse(JSON.parse(text)),
+    model: config.modelName,
+    transport: 'chat.completions',
+    inputTokens: response.usage?.prompt_tokens ?? 0,
+    outputTokens: response.usage?.completion_tokens ?? 0,
+  };
+}
+
 async function callModel(config: ServerConfig, context: DiagnosisContext): Promise<ModelResult> {
   if (!config.modelApiKey || !config.modelApiUrl) {
     const result = diagnosisResultSchema.parse(localDiagnosis(context));
     return {
       result,
       model: 'local-evidence-engine',
+      transport: 'local',
       inputTokens: Math.ceil(JSON.stringify(context).length / 4),
       outputTokens: Math.ceil(JSON.stringify(result).length / 4),
     };
@@ -271,25 +362,20 @@ async function callModel(config: ServerConfig, context: DiagnosisContext): Promi
     // SDK 层关闭自动重试，避免一次用户操作产生不可见的重复模型费用。
     maxRetries: 0,
   });
-  const response = await client.responses.parse({
-    model: config.modelName,
-    input: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: `Evidence context:\n${JSON.stringify(context)}\n\nReturn a diagnosis grounded only in this context.`,
-      },
-    ],
-    text: { format: zodTextFormat(diagnosisResultSchema, 'diagnosis_result') },
-  });
-  // Responses API 先按 Zod 格式解析，随后再 parse 一次作为持久化前的最终校验。
-  if (!response.output_parsed) throw new Error('MODEL_EMPTY_OR_REFUSED_RESPONSE');
-  return {
-    result: diagnosisResultSchema.parse(response.output_parsed),
-    model: config.modelName,
-    inputTokens: response.usage?.input_tokens ?? 0,
-    outputTokens: response.usage?.output_tokens ?? 0,
-  };
+
+  const cacheKey = `${baseURL}|${config.modelName}`;
+  if (transportCache.get(cacheKey) !== 'chat.completions') {
+    try {
+      const result = await viaResponses(client, config, context);
+      transportCache.set(cacheKey, 'responses');
+      return result;
+    } catch (error) {
+      // 只有"端点不支持"才降级；鉴权失败、限流、超时等仍然如实抛出。
+      if (!indicatesUnsupportedEndpoint(error)) throw error;
+      transportCache.set(cacheKey, 'chat.completions');
+    }
+  }
+  return viaChatCompletions(client, config, context);
 }
 
 function mapDiagnosis(row: Record<string, unknown>, cached = false): DiagnosisRecord {

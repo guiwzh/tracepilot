@@ -30,7 +30,20 @@ const validDiagnosis = {
   disclaimer: 'This is an evidence-bound hypothesis.',
 };
 
-async function startMockModel(outputText: string): Promise<MockModel> {
+/**
+ * mock 按 URL 分派，而不是对任何路径都返回同一种形状——否则测试无法证明适配层
+ * 究竟走了哪条通道，降级路径也就等于没被覆盖。
+ *
+ * `responsesStatus` 用来模拟「端点存在但不支持严格结构化输出」（400）
+ * 或「端点根本不存在」（404），驱动适配层降级到 chat/completions。
+ */
+interface MockOptions {
+  responsesText?: string;
+  responsesStatus?: number;
+  chatText?: string;
+}
+
+async function startMockModel(options: MockOptions): Promise<MockModel> {
   const requests: MockModel['requests'] = [];
   const server: Server = createServer((request, response) => {
     let rawBody = '';
@@ -39,13 +52,22 @@ async function startMockModel(outputText: string): Promise<MockModel> {
       rawBody += chunk;
     });
     request.on('end', () => {
-      requests.push({
-        url: request.url,
-        body: JSON.parse(rawBody) as Record<string, unknown>,
-      });
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
+      requests.push({ url: request.url, body: JSON.parse(rawBody) as Record<string, unknown> });
+      const json = (status: number, payload: unknown) => {
+        response.writeHead(status, { 'content-type': 'application/json' });
+        response.end(JSON.stringify(payload));
+      };
+
+      if (request.url?.endsWith('/responses')) {
+        if (options.responsesStatus && options.responsesStatus !== 200) {
+          return json(options.responsesStatus, {
+            error: {
+              message: 'This response_format type is unavailable now',
+              type: 'invalid_request_error',
+            },
+          });
+        }
+        return json(200, {
           id: 'response-test',
           object: 'response',
           created_at: Math.floor(Date.now() / 1000),
@@ -57,12 +79,33 @@ async function startMockModel(outputText: string): Promise<MockModel> {
               type: 'message',
               status: 'completed',
               role: 'assistant',
-              content: [{ type: 'output_text', text: outputText, annotations: [] }],
+              content: [
+                { type: 'output_text', text: options.responsesText ?? '', annotations: [] },
+              ],
             },
           ],
           usage: { input_tokens: 12, output_tokens: 34, total_tokens: 46 },
-        }),
-      );
+        });
+      }
+
+      if (request.url?.endsWith('/chat/completions')) {
+        return json(200, {
+          id: 'chat-test',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'mock-evidence-model',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: options.chatText ?? '' },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 21, completion_tokens: 43, total_tokens: 64 },
+        });
+      }
+
+      return json(404, { error: { message: 'Unknown endpoint', type: 'invalid_request_error' } });
     });
   });
   await new Promise<void>((resolveListen, reject) => {
@@ -140,7 +183,7 @@ async function ingestIssue(instance: Awaited<ReturnType<typeof buildApp>>): Prom
 
 describe('external diagnosis adapter', () => {
   it('parses a schema-valid Responses API result and records model usage', async () => {
-    const model = await startMockModel(JSON.stringify(validDiagnosis));
+    const model = await startMockModel({ responsesText: JSON.stringify(validDiagnosis) });
     try {
       const instance = await buildModelApp(model.url);
       const issueId = await ingestIssue(instance);
@@ -166,8 +209,66 @@ describe('external diagnosis adapter', () => {
     }
   });
 
+  it('falls back to chat/completions when the endpoint rejects structured Responses output', async () => {
+    // 实测过的真实分布：有的兼容端点支持 Responses API 的严格 json_schema，
+    // 有的只认 chat/completions 的 json_object。这里模拟后者。
+    const model = await startMockModel({
+      responsesStatus: 400,
+      chatText: JSON.stringify(validDiagnosis),
+    });
+    try {
+      const instance = await buildModelApp(model.url);
+      const issueId = await ingestIssue(instance);
+      const response = await instance.inject({
+        method: 'POST',
+        url: `/api/v1/issues/${issueId}/diagnoses`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(201);
+      // 降级路径的 token 用量来自 chat/completions 的字段名，不是 Responses 的。
+      expect(response.json()).toMatchObject({
+        inputTokens: 21,
+        outputTokens: 43,
+        result: validDiagnosis,
+      });
+      // 先试 Responses、被拒后再走 chat/completions——顺序本身就是断言的一部分。
+      expect(model.requests.map((item) => item.url)).toEqual([
+        '/v1/responses',
+        '/v1/chat/completions',
+      ]);
+      // 降级路径同样不得把脱敏前的原始值发出去。
+      expect(JSON.stringify(model.requests[1]?.body)).not.toContain('private-customer');
+      // json_object 模式要求提示词里出现 JSON 字样，并且要带上从 Zod 生成的 schema。
+      const chatBody = JSON.stringify(model.requests[1]?.body);
+      expect(chatBody).toContain('json_object');
+      expect(chatBody).toContain('possibleCauses');
+    } finally {
+      await model.close();
+    }
+  });
+
+  it('does not fall back when the endpoint fails for a reason other than capability', async () => {
+    // 鉴权失败、限流、超时都不该触发降级——那样只会把一次失败变成两次收费。
+    const model = await startMockModel({ responsesStatus: 401 });
+    try {
+      const instance = await buildModelApp(model.url);
+      const issueId = await ingestIssue(instance);
+      const response = await instance.inject({
+        method: 'POST',
+        url: `/api/v1/issues/${issueId}/diagnoses`,
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(502);
+      expect(model.requests.map((item) => item.url)).toEqual(['/v1/responses']);
+    } finally {
+      await model.close();
+    }
+  });
+
   it('isolates invalid model output while keeping issue evidence available', async () => {
-    const model = await startMockModel('not valid JSON');
+    const model = await startMockModel({ responsesText: 'not valid JSON' });
     try {
       const instance = await buildModelApp(model.url);
       const issueId = await ingestIssue(instance);
