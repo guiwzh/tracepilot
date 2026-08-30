@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
@@ -94,6 +95,15 @@ function baseEvent(
 
 export function seedDemoData(database: TraceDatabase): { events: number } {
   ensureDemoProject(database);
+  // 删除 releases 会级联清掉 source_maps 表行，但磁盘上的 .map 文件不会跟着消失。
+  // 先取出待删记录的路径，重建后逐个删除，避免反复 seed 在私有目录里堆积孤儿文件。
+  const orphanedMaps = database.sqlite
+    .prepare(
+      `SELECT map_path FROM source_maps
+       WHERE release_id IN (SELECT id FROM releases WHERE project_id = 'demo-project')`,
+    )
+    .all() as Array<{ map_path: string }>;
+
   // 只重建内置 demo-project，用户自行创建的其他项目不会被删除。
   database.sqlite.exec(`
     DELETE FROM diagnoses WHERE issue_id IN (SELECT id FROM issues WHERE project_id = 'demo-project');
@@ -102,6 +112,10 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
     DELETE FROM issues WHERE project_id = 'demo-project';
     DELETE FROM releases WHERE project_id = 'demo-project';
   `);
+  for (const { map_path: mapPath } of orphanedMaps) {
+    // 文件可能已被手动清理；删不掉不应让重建演示数据失败。
+    rmSync(mapPath, { force: true });
+  }
   const now = Date.now();
   database.sqlite
     .prepare(
