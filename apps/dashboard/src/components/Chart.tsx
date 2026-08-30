@@ -35,18 +35,31 @@ export type ChartOption = echarts.ComposeOption<
 export function Chart({ option, height = 260 }: { option: ChartOption; height?: number }) {
   // ref 指向 React 管理的 DOM 节点，ECharts 在该节点内部执行命令式绘制。
   const ref = useRef<HTMLDivElement>(null);
+  // 实例句柄跨 effect 共享：实例生命周期与数据更新分成两个 effect，
+  // 避免 option 引用变化（React Query 每次 refetch 都会产生新引用）触发整图销毁重建。
+  const instanceRef = useRef<echarts.ECharts | null>(null);
 
+  // effect 1：只在挂载/卸载时创建和销毁实例。
   useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    chart.setOption(option);
-    const resize = () => chart.resize();
-    window.addEventListener('resize', resize);
+    const container = ref.current;
+    if (!container) return;
+    const chart = echarts.init(container, undefined, { renderer: 'canvas' });
+    instanceRef.current = chart;
+    // ResizeObserver 观察容器本身，除窗口缩放外也能响应侧边栏折叠、布局变化。
+    const observer = new ResizeObserver(() => chart.resize());
+    observer.observe(container);
     return () => {
       // dispose 会释放 Canvas、事件和 ECharts 内部引用，防止路由切换后内存泄漏。
-      window.removeEventListener('resize', resize);
+      observer.disconnect();
       chart.dispose();
+      instanceRef.current = null;
     };
+  }, []);
+
+  // effect 2：option 变化时只更新数据。默认合并模式复用已有系列，保留过渡动画；
+  // 本项目各图表的 series 数量固定，不存在系列减少后残留的问题。
+  useEffect(() => {
+    instanceRef.current?.setOption(option);
   }, [option]);
 
   return <div ref={ref} style={{ height }} role="img" aria-label="Telemetry chart" />;
