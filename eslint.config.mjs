@@ -37,11 +37,17 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.{test,spec}.{ts,tsx}', 'playwright.config.ts'],
+    files: ['**/*.{test,spec}.{ts,tsx}', 'playwright*.config.ts'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
   {
     files: ['**/*.mjs'],
     languageOptions: { globals: globals.node },
+  },
+  {
+    // 这个脚本在 Node 里驱动 Playwright，但 page.evaluate / addInitScript 的回调体
+    // 实际在浏览器上下文执行，因此同一个文件里两套全局都是合法的。
+    files: ['scripts/measure-sdk-runtime.mjs'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 );

@@ -22,3 +22,8 @@ jobs:
       - run: pnpm test:e2e
         env:
           CI: '1'
+      # 运行时回归需要浏览器，因此放在 playwright install 之后，而不是并入 pnpm verify
+      # （verify 保持无浏览器依赖，本地可以直接跑）。
+      - run: pnpm measure:sdk-runtime
+        env:
+          CI: '1'

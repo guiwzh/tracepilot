@@ -22,7 +22,8 @@
     "measure:sdk": "node scripts/measure-sdk.mjs",
     "seed": "pnpm --filter @trace-pilot/server seed",
     "smoke:production": "node scripts/smoke-production.mjs",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm measure:sdk && pnpm smoke:production"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm measure:sdk && pnpm smoke:production",
+    "measure:sdk-runtime": "node scripts/measure-sdk-runtime.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
