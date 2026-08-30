@@ -399,9 +399,12 @@ function getPerformanceSamples(database: TraceDatabase, projectId: string): Perf
 
 function performanceMetrics(samples: PerformanceSample[]): PerformanceMetric[] {
   // 先按指标分组，再对每组计算 p50/p75/p95；p75 同时用于体验评级。
+  // 取出数组后 push，而不是每次展开重建：展开会让分组退化为 O(样本数²)。
   const grouped = new Map<PerformanceMetricName, number[]>();
   for (const sample of samples) {
-    grouped.set(sample.metric, [...(grouped.get(sample.metric) ?? []), sample.value]);
+    const values = grouped.get(sample.metric);
+    if (values) values.push(sample.value);
+    else grouped.set(sample.metric, [sample.value]);
   }
   return PERFORMANCE_METRICS.map((metric) => {
     const values = grouped.get(metric) ?? [];
@@ -435,7 +438,9 @@ function performanceComparison(
   for (const sample of samples) {
     if (!visibleNames.has(sample[dimension])) continue;
     const key = `${sample[dimension]}\u0000${sample.metric}`;
-    grouped.set(key, [...(grouped.get(key) ?? []), sample.value]);
+    const values = grouped.get(key);
+    if (values) values.push(sample.value);
+    else grouped.set(key, [sample.value]);
   }
   return [...grouped.entries()]
     .map(([key, values]) => {
@@ -472,7 +477,9 @@ export function getPerformanceOverview(
   for (const sample of samples) {
     const bucket = Math.max(0, Math.min(6, Math.floor((sample.createdAt - windowStart) / day)));
     const key = `${bucket}\u0000${sample.metric}`;
-    trendGroups.set(key, [...(trendGroups.get(key) ?? []), sample.value]);
+    const values = trendGroups.get(key);
+    if (values) values.push(sample.value);
+    else trendGroups.set(key, [sample.value]);
   }
   return {
     items: performanceMetrics(samples),

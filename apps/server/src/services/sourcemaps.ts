@@ -101,30 +101,34 @@ export async function symbolicateStack(
   const lines = stack.split('\n');
   let mapped = 0;
   const result: string[] = [];
-  // 同一堆栈常包含同一文件的多个 frame，每次调用只读一次 map 文件。
-  const sourceMapCache = new Map<string, RawSourceMap>();
+  /**
+   * 同一堆栈常包含同一文件的多个 frame，因此缓存的是 Consumer 而不是 map 的 JSON：
+   * 真正的开销在解析 mappings（VLQ 解码 + WASM 初始化），而不是读文件。
+   * 早期实现逐帧调用 SourceMapConsumer.with，10 帧堆栈会把同一份 map 重复解析 10 次。
+   */
+  const consumers = new Map<string, SourceMapConsumer>();
 
-  for (const line of lines) {
-    const frame = parseStackFrame(line);
-    if (!frame) {
-      result.push(line);
-      continue;
-    }
-    const minifiedFile = normalizeMinifiedFile(frame.file);
-    const sourceMapRow = database.sqlite
-      .prepare('SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
-      .get(releaseId, minifiedFile) as { map_path: string } | undefined;
-    if (!sourceMapRow) {
-      result.push(line);
-      continue;
-    }
-    let rawMap = sourceMapCache.get(sourceMapRow.map_path);
-    if (!rawMap) {
-      rawMap = JSON.parse(await readFile(sourceMapRow.map_path, 'utf8')) as RawSourceMap;
-      sourceMapCache.set(sourceMapRow.map_path, rawMap);
-    }
-    let mappedLine = line;
-    await SourceMapConsumer.with(rawMap, null, (consumer) => {
+  try {
+    for (const line of lines) {
+      const frame = parseStackFrame(line);
+      if (!frame) {
+        result.push(line);
+        continue;
+      }
+      const minifiedFile = normalizeMinifiedFile(frame.file);
+      const sourceMapRow = database.sqlite
+        .prepare('SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
+        .get(releaseId, minifiedFile) as { map_path: string } | undefined;
+      if (!sourceMapRow) {
+        result.push(line);
+        continue;
+      }
+      let consumer = consumers.get(sourceMapRow.map_path);
+      if (!consumer) {
+        const rawMap = JSON.parse(await readFile(sourceMapRow.map_path, 'utf8')) as RawSourceMap;
+        consumer = await new SourceMapConsumer(rawMap);
+        consumers.set(sourceMapRow.map_path, consumer);
+      }
       // 浏览器列号从 1 开始，source-map 库列号从 0 开始；读写时各转换一次。
       const original = consumer.originalPositionFor({
         line: frame.lineNumber,
@@ -133,11 +137,15 @@ export async function symbolicateStack(
       if (original.source && original.line != null && original.column != null) {
         const fn = original.name ?? frame.functionName ?? '<anonymous>';
         const source = original.source.replace(/[?#].*$/, '');
-        mappedLine = `    at ${fn} (${source}:${original.line}:${original.column + 1})`;
+        result.push(`    at ${fn} (${source}:${original.line}:${original.column + 1})`);
         mapped += 1;
+      } else {
+        result.push(line);
       }
-    });
-    result.push(mappedLine);
+    }
+  } finally {
+    // Consumer 持有 WASM 内存，必须显式释放，否则回填整个 Release 时会持续增长。
+    for (const consumer of consumers.values()) consumer.destroy();
   }
   // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
   return mapped > 0 ? result.join('\n') : null;
