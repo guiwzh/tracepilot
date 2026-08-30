@@ -1,4 +1,9 @@
-import { MAX_BREADCRUMBS, type Breadcrumb, type MonitorEvent } from '@trace-pilot/shared';
+import {
+  DEFAULT_MAX_QUEUE_SIZE,
+  MAX_BREADCRUMBS,
+  type Breadcrumb,
+  type MonitorEvent,
+} from '@trace-pilot/shared';
 import type {
   CapturePayload,
   MonitorClient,
@@ -34,7 +39,7 @@ export class MonitorCore implements MonitorClient {
   readonly options: Required<
     Pick<
       MonitorOptions,
-      'sampleRate' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'dedupeWindow'
+      'sampleRate' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'dedupeWindow' | 'maxQueueSize'
     >
   > &
     MonitorOptions;
@@ -44,7 +49,14 @@ export class MonitorCore implements MonitorClient {
   private started = false;
   private destroyed = false;
   private user?: MonitorUser;
+  // protect() 的重入标志：只负责“同一时刻不嵌套执行插件生命周期代码”。
   private protecting = false;
+  // 生命周期期间是否屏蔽采集。插件 setup 会包装全局 API，这个过程自身产生的信号属于
+  // SDK 的副作用而不是业务事件，因此要丢弃；teardown 则相反——提交最终指标正是它的职责，
+  // 所以 destroy 不设这个标志。两者曾共用 protecting 一个变量，导致最终 Web Vitals 被静默丢弃。
+  private suppressCapture = false;
+  // 采集路径自身的重入标志，防止 beforeSend 或插件回调在采集过程中再次触发采集。
+  private capturing = false;
 
   constructor(options: MonitorOptions) {
     // Required<Pick<...>> 对应的默认值只在这一处生成，后续插件拿到的一定是合法范围。
@@ -55,6 +67,7 @@ export class MonitorCore implements MonitorClient {
       flushInterval: boundedInteger(options.flushInterval, 5_000, 100, 86_400_000),
       maxRetries: boundedInteger(options.maxRetries, 2, 0, 10),
       dedupeWindow: boundedInteger(options.dedupeWindow, 5_000, 0, 600_000),
+      maxQueueSize: boundedInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE, 10, 10_000),
     };
     this.user = options.user;
     this.transport = new Transport({
@@ -63,6 +76,7 @@ export class MonitorCore implements MonitorClient {
       batchSize: this.options.batchSize,
       flushInterval: this.options.flushInterval,
       maxRetries: this.options.maxRetries,
+      maxQueueSize: this.options.maxQueueSize,
     });
   }
 
@@ -114,7 +128,10 @@ export class MonitorCore implements MonitorClient {
   }
 
   captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null {
-    if (!this.started || this.destroyed || this.protecting) return null;
+    if (!this.started || this.destroyed || this.suppressCapture) return null;
+    // 采集不能自我触发：beforeSend 若在回调里再次调用 captureException，
+    // 没有这道闸门就会无限递归下去。
+    if (this.capturing) return null;
     // 先采样、再去重，尽量在创建完整上下文前快速退出。
     if (Math.random() > this.options.sampleRate) return null;
     if (eventType === 'error' && this.isDuplicate(payload)) return null;
@@ -133,6 +150,7 @@ export class MonitorCore implements MonitorClient {
       breadcrumbs: this.getBreadcrumbs(),
     };
 
+    this.capturing = true;
     try {
       // beforeSend 是业务方最后一次删除字段或取消事件的机会。
       const processed = this.options.beforeSend ? this.options.beforeSend(event) : event;
@@ -141,6 +159,8 @@ export class MonitorCore implements MonitorClient {
       return processed.eventId;
     } catch {
       return null;
+    } finally {
+      this.capturing = false;
     }
   }
 
@@ -161,16 +181,26 @@ export class MonitorCore implements MonitorClient {
     return last !== undefined && now - last < this.options.dedupeWindow;
   }
 
-  protect(action: () => void): void {
-    // 监控代码绝不能破坏宿主应用，也不能把自身异常再次采集形成递归风暴。
+  /**
+   * 隔离插件生命周期代码：插件抛错绝不能波及宿主应用或其他插件。
+   *
+   * `allowCapture` 区分两种生命周期：
+   * - setup（默认 false）：包装全局 API 的过程若顺带产生信号，那是 SDK 自身的副作用，丢弃。
+   * - teardown（true）：提交最终 LCP/CLS/INP 正是它要做的事，必须放行。
+   *
+   * 递归风暴由 captureEvent 自己的 capturing 标志防护，与这里无关。
+   */
+  protect(action: () => void, allowCapture = false): void {
     if (this.protecting) return;
     this.protecting = true;
+    this.suppressCapture = !allowCapture;
     try {
       action();
     } catch {
       // 插件异常被隔离；其他插件和业务页面继续运行。
     } finally {
       this.protecting = false;
+      this.suppressCapture = false;
     }
   }
 
@@ -181,7 +211,9 @@ export class MonitorCore implements MonitorClient {
   destroy(): void {
     if (this.destroyed) return;
     // Transport 最后注册，因此正序 teardown 会先让信号插件提交最终样本，再由传输层冲刷队列。
-    for (const plugin of this.plugins) this.protect(() => plugin.teardown());
+    // 这里必须放行采集，否则 PerformancePlugin 的最终 LCP/CLS/INP 会被闸门拦掉——
+    // 而 destroy 在 SPA 组件卸载、热更新和 StrictMode 双次挂载时都会走到。
+    for (const plugin of this.plugins) this.protect(() => plugin.teardown(), true);
     this.destroyed = true;
     this.started = false;
     this.breadcrumbs.length = 0;

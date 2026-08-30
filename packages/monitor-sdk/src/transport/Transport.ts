@@ -1,6 +1,7 @@
 import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_FLUSH_INTERVAL,
+  DEFAULT_MAX_QUEUE_SIZE,
   type EventEnvelope,
   type MonitorEvent,
 } from '@trace-pilot/shared';
@@ -12,16 +13,27 @@ interface TransportOptions {
   batchSize: number;
   flushInterval: number;
   maxRetries: number;
+  /** 队列可保留的事件上限，超出后拒绝新事件。 */
+  maxQueueSize: number;
   fetchImpl?: typeof fetch;
 }
 
-function boundedInteger(value: number, fallback: number, minimum: number, maximum: number): number {
-  if (!Number.isFinite(value)) return fallback;
+/** 构造入参：数值项都会在构造函数里夹紧，因此调用方可以省略。 */
+export type TransportInit = Omit<TransportOptions, 'maxQueueSize'> & { maxQueueSize?: number };
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.floor(value)));
 }
 
 export class Transport {
   private readonly queue: MonitorEvent[] = [];
+  private droppedEvents = 0;
   private timer?: ReturnType<typeof setInterval>;
   // 同一时间只允许一个 flush，防止定时器和 batchSize 同时触发重复发送。
   private inFlight?: Promise<void>;
@@ -35,12 +47,13 @@ export class Transport {
 
   private readonly options: TransportOptions;
 
-  constructor(options: TransportOptions) {
+  constructor(options: TransportInit) {
     this.options = {
       ...options,
       batchSize: boundedInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 100),
       flushInterval: boundedInteger(options.flushInterval, DEFAULT_FLUSH_INTERVAL, 100, 86_400_000),
       maxRetries: boundedInteger(options.maxRetries, 2, 0, 10),
+      maxQueueSize: boundedInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE, 10, 10_000),
     };
     this.fetchImpl =
       options.fetchImpl ??
@@ -59,6 +72,7 @@ export class Transport {
       batchSize: DEFAULT_BATCH_SIZE,
       flushInterval: DEFAULT_FLUSH_INTERVAL,
       maxRetries: 2,
+      maxQueueSize: DEFAULT_MAX_QUEUE_SIZE,
     };
   }
 
@@ -73,6 +87,12 @@ export class Transport {
   }
 
   enqueue(event: MonitorEvent): void {
+    // 队列必须有上限：服务端不可达时失败批次会被放回队首，错误风暴下没有上限就会
+    // 一直占用宿主页面的内存。丢弃最新事件而不是最旧的——事故的最早证据诊断价值最高。
+    if (this.queue.length >= this.options.maxQueueSize) {
+      this.droppedEvents += 1;
+      return;
+    }
     this.queue.push(event);
     // fire-and-forget：采集 API 保持同步，不让业务代码等待网络。
     if (this.queue.length >= this.options.batchSize) void this.flush();
@@ -82,27 +102,58 @@ export class Transport {
     return this.queue.length;
   }
 
-  async flush(preferBeacon = false): Promise<void> {
-    if (this.inFlight) return this.inFlight;
-    if (this.queue.length === 0) return;
-    // 先从队列取出批次；若最终失败，会在 catch 中按原顺序放回队首。
-    const batch = this.queue.splice(0, this.options.batchSize);
+  /** 因队列已满而被丢弃的事件数，用于诊断错误风暴下的采集缺口。 */
+  dropped(): number {
+    return this.droppedEvents;
+  }
+
+  private envelopeBody(batch: MonitorEvent[]): string {
     const envelope: EventEnvelope = {
       dsnKey: this.options.dsnKey,
       sentAt: Date.now(),
       events: batch,
     };
-    const body = JSON.stringify(envelope);
+    return JSON.stringify(envelope);
+  }
 
-    if (
-      preferBeacon &&
-      typeof navigator !== 'undefined' &&
-      typeof navigator.sendBeacon === 'function' &&
-      navigator.sendBeacon(this.options.endpoint, new Blob([body], { type: 'application/json' }))
-    ) {
-      // sendBeacon 专门用于页面离开阶段；浏览器接管请求，无需等待 Promise。
+  /**
+   * 页面退出路径：把整个队列交给 sendBeacon，而不是只发一个批次。
+   * 卸载随时可能发生，所以这里既不 await 在途请求，也不等待任何 Promise。
+   * beacon 超出浏览器配额时返回 false，剩余事件退回 keepalive fetch 尽力送达。
+   */
+  private flushWithBeacon(): void {
+    const canBeacon =
+      typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function';
+    while (canBeacon && this.queue.length > 0) {
+      const batch = this.queue.slice(0, this.options.batchSize);
+      const body = this.envelopeBody(batch);
+      const accepted = navigator.sendBeacon(
+        this.options.endpoint,
+        new Blob([body], { type: 'application/json' }),
+      );
+      if (!accepted) break;
+      this.queue.splice(0, batch.length);
+    }
+    if (this.queue.length === 0) return;
+    // keepalive 允许请求在文档卸载后继续，是 beacon 不可用或被拒时的唯一兜底。
+    const batch = this.queue.splice(0, this.options.batchSize);
+    void this.sendWithRetry(this.envelopeBody(batch)).catch(() => {
+      // 页面正在离开，没有下一次重试的机会，只能放弃这一批。
+    });
+  }
+
+  async flush(preferBeacon = false): Promise<void> {
+    // 退出路径必须先于 inFlight 判断：只要有一个普通 flush 在途，
+    // 早期实现会直接返回那个 Promise，队列里的事件既不走 beacon 也随页面一起消失。
+    if (preferBeacon) {
+      this.flushWithBeacon();
       return;
     }
+    if (this.inFlight) return this.inFlight;
+    if (this.queue.length === 0) return;
+    // 先从队列取出批次；若最终失败，会在 catch 中按原顺序放回队首。
+    const batch = this.queue.splice(0, this.options.batchSize);
+    const body = this.envelopeBody(batch);
 
     let delivered = false;
     this.inFlight = this.sendWithRetry(body)
@@ -112,6 +163,12 @@ export class Transport {
       .catch(() => {
         // 达到重试上限也不丢数据，留给下一次 flush 再尝试。
         this.queue.unshift(...batch);
+        // 放回后可能超出上限：服务端持续不可达时，这条路径是队列增长的真正来源。
+        // 从队尾裁剪，保留最早的证据。
+        if (this.queue.length > this.options.maxQueueSize) {
+          this.droppedEvents += this.queue.length - this.options.maxQueueSize;
+          this.queue.length = this.options.maxQueueSize;
+        }
       });
     try {
       await this.inFlight;

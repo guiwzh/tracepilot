@@ -23,6 +23,8 @@ export interface MonitorOptions {
   flushInterval?: number;
   /** 网络失败后的最大重试次数。 */
   maxRetries?: number;
+  /** 待发送队列可保留的事件上限；服务端不可达时超出部分会被丢弃以保护宿主页面内存。 */
+  maxQueueSize?: number;
   /** 同类错误的短窗口去重时间，单位毫秒。 */
   dedupeWindow?: number;
   user?: MonitorUser;

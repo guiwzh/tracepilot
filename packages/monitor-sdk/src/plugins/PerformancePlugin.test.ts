@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MonitorCore } from '../core/MonitorCore';
+import { MonitorCore } from '../core/MonitorCore';
 import { PerformancePlugin } from './PerformancePlugin';
 
 // FakePerformanceObserver 主动发出浏览器性能条目，精确验证最终上报时机和计算规则。
@@ -62,5 +62,33 @@ describe('PerformancePlugin', () => {
       ['performance', { metric: 'INP', value: 180, rating: 'good' }],
     ]);
     plugin.teardown();
+  });
+
+  /**
+   * 上一条用 mock core 隔离验证计算规则，但正因为绕开了 MonitorCore，它无法发现
+   * 真实链路上的问题：核心的生命周期闸门曾把 teardown 里的提交一并拦掉，
+   * destroy() 于是静默丢弃全部最终指标。这条测试接真实核心，堵住那个盲区。
+   */
+  it('delivers final metrics to the transport when the real core is destroyed', async () => {
+    vi.stubGlobal('PerformanceObserver', FakePerformanceObserver);
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([]);
+    const monitor = new MonitorCore({
+      dsn: 'http://localhost/envelopes',
+      dsnKey: 'test-key',
+      projectId: 'test-project',
+      release: '1.0.0',
+      environment: 'test',
+      batchSize: 100,
+    });
+    monitor.use(new PerformancePlugin());
+    monitor.start();
+    await Promise.resolve();
+
+    emitters.get('largest-contentful-paint')?.([entry('largest-contentful-paint', 2_200)]);
+    // 页面还活着，最终值尚未提交。
+    expect(monitor.transport.pending()).toBe(0);
+
+    monitor.destroy();
+    expect(monitor.transport.pending()).toBe(1);
   });
 });

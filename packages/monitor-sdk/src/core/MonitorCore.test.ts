@@ -51,6 +51,59 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
+  it('lets a plugin submit its final sample while tearing down', () => {
+    // PerformancePlugin 的最终 LCP/CLS/INP 是在 teardown 里提交的。生命周期闸门
+    // 曾经把这些提交一并拦掉，导致 destroy() 静默丢指标——而 SPA 组件卸载、热更新
+    // 和 StrictMode 双次挂载都会走 destroy()。
+    const monitor = core();
+    monitor.use({
+      name: 'final-sample',
+      setup: () => {},
+      teardown: () => {
+        monitor.captureEvent('performance', { metric: 'LCP', value: 2_200, rating: 'good' });
+      },
+    });
+    monitor.start();
+    expect(monitor.transport.pending()).toBe(0);
+
+    monitor.destroy();
+    expect(monitor.transport.pending()).toBe(1);
+  });
+
+  it('discards signals that plugin setup produces as a side effect', () => {
+    // 与上一条相对：setup 期间包装全局 API 顺带产生的信号属于 SDK 自身副作用，
+    // 不应被当成业务事件记录。
+    const monitor = core();
+    monitor.use({
+      name: 'noisy-setup',
+      setup: () => {
+        monitor.captureMessage('instrumentation side effect');
+      },
+      teardown: () => {},
+    });
+    monitor.start();
+    expect(monitor.transport.pending()).toBe(0);
+    monitor.destroy();
+  });
+
+  it('stops beforeSend from recursing when it captures during capture', () => {
+    // beforeSend 在回调里再次采集会形成无限递归；采集路径需要自己的重入闸门。
+    let reentered = 0;
+    const monitor: MonitorCore = core({
+      beforeSend: (event) => {
+        reentered += 1;
+        // 这次嵌套调用必须被拒绝，否则 beforeSend 会被反复触发直到爆栈。
+        expect(monitor.captureMessage('nested')).toBeNull();
+        return event;
+      },
+    });
+    monitor.start();
+    expect(monitor.captureMessage('outer')).toBeTruthy();
+    expect(reentered).toBe(1);
+    expect(monitor.transport.pending()).toBe(1);
+    monitor.destroy();
+  });
+
   it('normalizes invalid numeric options to safe transport bounds', () => {
     const monitor = core({
       sampleRate: Number.NaN,

@@ -4,6 +4,9 @@
  */
 export const DEFAULT_BATCH_SIZE = 10;
 export const DEFAULT_FLUSH_INTERVAL = 5_000;
+// 传输队列的默认上限。按每个事件约 1-2 KB 估算，上限对应几 MB 量级的驻留内存，
+// 足以扛过一次短暂的服务端不可用，又不至于在错误风暴中拖垮宿主页面。
+export const DEFAULT_MAX_QUEUE_SIZE = 1_000;
 export const MAX_BREADCRUMBS = 50;
 export const PROMPT_VERSION = 'diagnosis-evidence-v1';
 
