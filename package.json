@@ -24,7 +24,8 @@
     "smoke:production": "node scripts/smoke-production.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm measure:sdk && pnpm smoke:production",
     "screenshots": "playwright test --config playwright.screenshots.config.ts",
-    "measure:sdk-runtime": "node scripts/measure-sdk-runtime.mjs"
+    "measure:sdk-runtime": "node scripts/measure-sdk-runtime.mjs",
+    "measure:chart": "node scripts/measure-chart-update.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",

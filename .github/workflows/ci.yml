@@ -27,3 +27,6 @@ jobs:
       - run: pnpm measure:sdk-runtime
         env:
           CI: '1'
+      - run: pnpm measure:chart
+        env:
+          CI: '1'

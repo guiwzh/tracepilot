@@ -122,6 +122,10 @@ React StrictMode 双次挂载都会走到这条路径。
   不同错误，不足会让一个错误炸成上千 Issue——这条线的位置见 `apps/server/src/lib/fingerprint.ts`。
 - **传输层的退出路径**　`pagehide` 触发的冲刷必须优先于「有请求在途」的判断，否则队列会随页面
   一起消失。队列有上限（默认 1000），满时丢弃**最新**事件而非最旧的——事故的最早证据诊断价值最高。
+- **命令式图表库与 React 的共存**　ECharts 实例的生命周期和数据更新必须拆成两个 effect。
+  写在一起、依赖 `[option]` 时，上游 `useMemo` 依赖 React Query 的 data，每次 refetch
+  都是新引用——于是每轮轮询所有图表整体重建（300 次更新新建 1,500 个 canvas）。
+  拆开后同一指标降到 0 个，同步开销约减半。
 - **AI 诊断的两层校验**　Provider 的结构化输出解析一次，落库前再用共享 Zod Schema 校验一次。
   两层刻意冗余，形成信任边界；模型返回无效 JSON 时隔离为 502，不影响已存储的 Issue 证据。
 
@@ -143,6 +147,8 @@ React StrictMode 双次挂载都会走到这条路径。
 | `createMonitor()` + `start()` P50 / P95  |          10 / 50 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95        |            4 / 7 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后残留监听器         |                0 个 | `pnpm measure:sdk-runtime` |
+| 图表轮询更新 P50（重建 → 复用）          |      2.51 → 1.35 ms | `pnpm measure:chart`       |
+| 300 次更新新建 canvas（重建 → 复用）     |        1,500 → 0 个 | `pnpm measure:chart`       |
 | 单元 / 集成测试                          |           36 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |        9 / 9 passed | `pnpm test:e2e`            |
 
@@ -287,6 +293,7 @@ pnpm screenshots          # 从运行中的应用重新生成 README 截图
 pnpm benchmark            # 本地 SQLite API 基准与写入放大分段
 pnpm measure:sdk          # SDK 产物体积与真实接入成本，含预算断言
 pnpm measure:sdk-runtime  # 真实浏览器里的运行时开销与泄漏回归
+pnpm measure:chart        # 图表更新策略的对照测量
 pnpm evaluate:diagnosis   # 本地诊断契约与缓存冒烟评测
 pnpm smoke:production     # 加载 ESM/CJS 包并启动构建后的服务端
 ```

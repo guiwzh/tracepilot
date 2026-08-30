@@ -45,9 +45,9 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
-    // 这个脚本在 Node 里驱动 Playwright，但 page.evaluate / addInitScript 的回调体
+    // 这些脚本在 Node 里驱动 Playwright，但 page.evaluate / addInitScript 的回调体
     // 实际在浏览器上下文执行，因此同一个文件里两套全局都是合法的。
-    files: ['scripts/measure-sdk-runtime.mjs'],
+    files: ['scripts/measure-sdk-runtime.mjs', 'scripts/measure-chart-update.mjs'],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 );
