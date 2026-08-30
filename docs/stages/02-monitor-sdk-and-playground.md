@@ -1,5 +1,9 @@
 # 阶段 02 — 监控 SDK 与事故演练场
 
+> **数字口径**：本文记录的是该阶段完成当时的测量值，仅作历史留档。
+> 最新基线以 [`docs/reports/performance.md`](../reports/performance.md) 为唯一权威来源；
+> 两者不一致时以报告为准。
+
 ## 阶段成果
 
 交付插件化浏览器 SDK 和专用 React 事故实验场。SDK 可采集运行时、Promise、资源、Fetch、XHR、
