@@ -68,6 +68,8 @@ export const events = sqliteTable(
     index('events_issue_created').on(table.issueId, table.createdAt),
     index('events_release').on(table.releaseId),
     index('events_created').on(table.createdAt),
+    // 接入时判定“该用户是否已在此 Issue 出现过”，让 user_count 的增量更新与事件数无关。
+    index('events_issue_user').on(table.issueId, table.userId),
   ],
 );
 

@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_issue_created ON events(issue_id, created_at);
 CREATE INDEX IF NOT EXISTS events_release ON events(release_id);
 CREATE INDEX IF NOT EXISTS events_created ON events(created_at);
+-- 支撑接入时“该用户是否已在此 Issue 出现过”的判定，使 user_count 增量更新与事件数无关。
+CREATE INDEX IF NOT EXISTS events_issue_user ON events(issue_id, user_id);
 CREATE TABLE IF NOT EXISTS source_maps (
   id TEXT PRIMARY KEY, release_id TEXT NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
   minified_file TEXT NOT NULL, map_path TEXT NOT NULL, created_at INTEGER NOT NULL,

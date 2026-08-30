@@ -88,6 +88,60 @@ describe('telemetry ingestion', () => {
     expect(detail.json().sampleEvent.pageUrl).toBe('https://shop.test/checkout');
   });
 
+  it('counts each affected user once no matter how many events they send', async () => {
+    // Issue 计数是增量累加的，因此“该用户是否已出现过”必须在事件落库之前判定。
+    // 若判定挪到插入之后，就会查到刚写入的那一行，user_count 将永远停在 0。
+    const repeatUser = (id: string, dynamicId: string): MonitorEvent => ({
+      ...event(id, dynamicId),
+      user: { id: 'shopper-7' },
+    });
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [repeatUser('evt-a', '11110001'), repeatUser('evt-b', '11110002')],
+      },
+    });
+    expect(first.json()).toMatchObject({ accepted: 2 });
+
+    // 第二个信封是独立事务，用来覆盖跨批次的去重判定。
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [repeatUser('evt-c', '11110003')],
+      },
+    });
+
+    const issues = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/issues?page=1&pageSize=25',
+    });
+    expect(issues.json().total).toBe(1);
+    expect(issues.json().items[0]).toMatchObject({ eventCount: 3, userCount: 1 });
+
+    // 再来一个不同用户，确认计数确实还会增长，而不是被卡死在 1。
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [{ ...event('evt-d', '11110004'), user: { id: 'shopper-9' } }],
+      },
+    });
+    const updated = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/issues?page=1&pageSize=25',
+    });
+    expect(updated.json().items[0]).toMatchObject({ eventCount: 4, userCount: 2 });
+  });
+
   it('keeps first and last seen timestamps correct when events arrive out of order', async () => {
     const olderTimestamp = 1_750_000_000_000;
     const newerTimestamp = olderTimestamp + 60_000;
