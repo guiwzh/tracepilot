@@ -1,19 +1,145 @@
+import { spawn } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as esbuild from 'esbuild';
 
-// 同时报告 minified 与 gzip 体积；网络传输成本更接近 gzipBytes。
-const artifact = resolve('packages/monitor-sdk/dist/index.js');
-const content = await readFile(artifact);
-process.stdout.write(
-  `${JSON.stringify(
-    {
-      artifact: 'packages/monitor-sdk/dist/index.js',
-      minifiedBytes: content.byteLength,
-      gzipBytes: gzipSync(content, { level: 9 }).byteLength,
-      measuredAt: new Date().toISOString(),
-    },
-    null,
-    2,
-  )}\n`,
-);
+/**
+ * SDK 体积测量与预算回归。
+ *
+ * 这个脚本报告两个口径，因为它们回答的是不同的问题：
+ *
+ * 1. 产物体积  —— 我们发布的那个文件有多大。
+ * 2. 接入成本  —— 业务应用把 SDK 打进自己的包后，实际多付出多少字节。
+ *
+ * 两者会显著背离：tsup 默认把 workspace 依赖 external 化，所以产物里只留下
+ * `import ... from "@trace-pilot/shared"`，而 shared 的 barrel 会连带引入 zod。
+ * 只测产物就会漏掉这条依赖链——历史上这里真实少算过约 4.2 倍。
+ * 因此接入成本由一次真实打包测得，并额外断言产物中不含 zod 运行时代码。
+ */
+
+const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
+
+// 预算留了约 15% 余量：既能挡住依赖链回归，又不会因为正常改动天天报警。
+const BUDGETS = {
+  artifactGzipBytes: 5_000,
+  consumerGzipBytes: 5_000,
+  consumerZodIdentifiers: 0,
+};
+
+function run(command, args) {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', (chunk) => (output += chunk.toString()));
+    child.stderr.on('data', (chunk) => (output += chunk.toString()));
+    child.once('error', rejectRun);
+    child.once('exit', (code) =>
+      code === 0
+        ? resolveRun(output)
+        : rejectRun(new Error(`${command} ${args.join(' ')}\n${output}`)),
+    );
+  });
+}
+
+/**
+ * 测量前强制重新构建。缺了这一步，脚本会称量 dist 里碰巧存在的任何东西——
+ * 例如 `pnpm dev` 留下的未压缩产物，那会让报告里的 minifiedBytes 高出约 60%
+ * 而不给出任何警告。
+ */
+await run('pnpm', ['--filter', '@trace-pilot/shared', 'run', 'build']);
+await run('pnpm', ['--filter', '@trace-pilot/monitor-sdk', 'run', 'build']);
+
+const artifact = await readFile(artifactPath);
+const artifactText = artifact.toString('utf8');
+
+// 即使刚刚构建过，也复核产物确实经过压缩：万一构建脚本被改掉丢了 --minify，
+// 这里要直接失败，而不是安静地报告一个更大的数字。
+const lineCount = artifactText.split('\n').length;
+if (lineCount > 5 || artifactText.includes('\n  ')) {
+  console.error(
+    `产物看起来未经压缩（${lineCount} 行，且包含缩进）。\n` +
+      '请检查 packages/monitor-sdk 的 build 脚本是否仍带 --minify。',
+  );
+  process.exit(1);
+}
+
+/**
+ * 以真实接入方的身份打包一次。解析目录选 apps/playground，
+ * 因为它是本仓库里唯一通过 workspace 依赖真实引用 SDK 的应用，
+ * 走的是和外部业务应用完全相同的 exports 与 node_modules 解析路径。
+ */
+const consumerSource = `
+import { createMonitor } from '@trace-pilot/monitor-sdk';
+const monitor = createMonitor({
+  dsn: 'https://ingest.example/api/v1/envelopes',
+  projectId: 'probe',
+  release: '1.0.0',
+  environment: 'production',
+});
+monitor.start();
+globalThis.__sizeProbe = monitor;
+`;
+
+const bundled = await esbuild.build({
+  stdin: {
+    contents: consumerSource,
+    resolveDir: resolve(repoRoot, 'apps/playground'),
+    sourcefile: 'consumer-probe.js',
+    loader: 'js',
+  },
+  bundle: true,
+  minify: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+  logLevel: 'warning',
+});
+
+const consumerBundle = bundled.outputFiles[0].text;
+// zod 的类名在压缩后仍然保留，因此可以作为“运行时依赖是否泄漏进浏览器包”的可靠信号。
+const zodIdentifiers = (consumerBundle.match(/\bZod[A-Z]\w*/g) ?? []).length;
+const consumerBytes = Buffer.from(consumerBundle);
+
+const report = {
+  artifact: {
+    path: 'packages/monitor-sdk/dist/index.js',
+    note: '发布产物本身；不含 Source Map、类型声明，也不含 external 化的 workspace 依赖。',
+    minifiedBytes: artifact.byteLength,
+    gzipBytes: gzipSync(artifact, { level: 9 }).byteLength,
+  },
+  consumer: {
+    note: '业务应用打包 createMonitor 后实际增加的体积，含全部被拉入的运行时依赖。',
+    bundler: `esbuild ${esbuild.version}`,
+    minifiedBytes: consumerBytes.byteLength,
+    gzipBytes: gzipSync(consumerBytes, { level: 9 }).byteLength,
+    zodIdentifiers,
+  },
+  budgets: BUDGETS,
+  measuredAt: new Date().toISOString(),
+};
+
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+
+const failures = [];
+if (report.artifact.gzipBytes > BUDGETS.artifactGzipBytes) {
+  failures.push(`产物 gzip ${report.artifact.gzipBytes} B 超出预算 ${BUDGETS.artifactGzipBytes} B`);
+}
+if (report.consumer.gzipBytes > BUDGETS.consumerGzipBytes) {
+  failures.push(
+    `接入成本 gzip ${report.consumer.gzipBytes} B 超出预算 ${BUDGETS.consumerGzipBytes} B`,
+  );
+}
+if (zodIdentifiers > BUDGETS.consumerZodIdentifiers) {
+  failures.push(
+    `接入方产物中出现 ${zodIdentifiers} 处 zod 运行时标识符。` +
+      'shared 或 monitor-sdk 可能丢失了 "sideEffects": false，导致 barrel 里的 zod 无法被摇除。',
+  );
+}
+
+if (failures.length > 0) {
+  console.error(`\n体积预算未通过：\n${failures.map((item) => `  - ${item}`).join('\n')}`);
+  process.exit(1);
+}
