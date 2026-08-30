@@ -10,5 +10,5 @@ apps/server/.tracepilot
 playwright-report
 test-results
 pnpm-debug.log*
-# 求职相关的规划与讲稿留在本地，不进入公开仓库
+# 本地规划草稿，不进入版本库
 docs/plans

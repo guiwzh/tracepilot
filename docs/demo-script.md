@@ -28,5 +28,5 @@
 
 ## 4:00–4:40 — 工程质量证明
 
-运行 `pnpm verify`、`pnpm test:e2e`、`pnpm benchmark` 和 `pnpm evaluate:diagnosis`。说明简历中的
+运行 `pnpm verify`、`pnpm test:e2e`、`pnpm benchmark` 和 `pnpm evaluate:diagnosis`。说明文档中的
 所有数据都能追溯到可复现的脚本与报告，并明确本地微基准测试结果不代表生产 SLA。

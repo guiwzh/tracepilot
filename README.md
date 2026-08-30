@@ -159,8 +159,8 @@ React StrictMode 双次挂载都会走到这条路径。
 （500 个错误挡下 490），后者验证队列上限（200 个独特错误，50 条驻留、150 条丢弃）。
 
 复现方式、口径差异和限制见[性能报告](docs/reports/performance.md)与
-[诊断评测报告](docs/reports/diagnosis-evaluation.md)。**简历或演示材料不应把这些本机数字
-包装成生产 SLA。**
+[诊断评测报告](docs/reports/diagnosis-evaluation.md)。**引用这些数字时请连同限制条件一起引用，
+不要把本机测量包装成生产 SLA。**
 
 ## 更多画面
 

@@ -15,7 +15,7 @@ import * as esbuild from 'esbuild';
  * - **确定性断言**（监听器归零、全局 API 还原、丢弃计数自洽）——硬失败。
  *   它们不依赖机器快慢，任何一条不成立都是真的回归。
  * - **时间数字**——只作数量级回归的绊线，阈值留了约 10 倍余量。
- *   它们随机器负载波动，不是性能目标，也不该写进简历当作 SLA。
+ *   它们随机器负载波动，不是性能目标，也不该被当作 SLA 对外引用。
  *
  * SDK 通过 esbuild 以真实接入方的方式打包后注入页面，因此这里测的和
  * `pnpm measure:sdk` 称量的是同一条依赖解析路径。接入端点由 Playwright 路由拦截，
@@ -248,7 +248,7 @@ const report = await page.evaluate(
       replaceState: history.replaceState === originalReplaceState,
     };
 
-    // 堆用量只作参考：JIT 与 GC 时机让它天然带噪声，不作断言也不写进简历。
+    // 堆用量只作参考：JIT 与 GC 时机让它天然带噪声，不作断言，也不作为对外引用的数字。
     const heapBytes =
       performance.memory && typeof performance.memory.usedJSHeapSize === 'number'
         ? performance.memory.usedJSHeapSize
