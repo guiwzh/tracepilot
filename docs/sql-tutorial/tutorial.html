@@ -1,0 +1,2348 @@
+<title>从数组到 SQL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+/>
+<style>
+  :root {
+    --paper: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #e9edf2;
+    --ink: #131b24;
+    --muted: #5a6875;
+    --rule: #d3dae2;
+    --sql: #1f4fd8;
+    --js: #8a6a18;
+    --trap: #b03a22;
+    --good: #1f6b4a;
+    --sql-wash: #e7edfc;
+    --js-wash: #f6efdd;
+    --trap-wash: #fbeae5;
+    --good-wash: #e4f1ea;
+    --shadow: 0 1px 2px rgba(19, 27, 36, 0.06), 0 8px 24px -16px rgba(19, 27, 36, 0.28);
+    --serif: 'Spectral', Georgia, 'Songti SC', 'Noto Serif CJK SC', serif;
+    --sans:
+      'Source Sans 3', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --paper: #0f151b;
+      --surface: #161e26;
+      --surface-2: #1d2731;
+      --ink: #e4eaf0;
+      --muted: #94a4b3;
+      --rule: #2a3641;
+      --sql: #7ba0ff;
+      --js: #d6a93c;
+      --trap: #e8735a;
+      --good: #55b98a;
+      --sql-wash: #17243d;
+      --js-wash: #2b2415;
+      --trap-wash: #33201b;
+      --good-wash: #15291f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+    }
+  }
+  :root[data-theme='dark'] {
+    --paper: #0f151b;
+    --surface: #161e26;
+    --surface-2: #1d2731;
+    --ink: #e4eaf0;
+    --muted: #94a4b3;
+    --rule: #2a3641;
+    --sql: #7ba0ff;
+    --js: #d6a93c;
+    --trap: #e8735a;
+    --good: #55b98a;
+    --sql-wash: #17243d;
+    --js-wash: #2b2415;
+    --trap-wash: #33201b;
+    --good-wash: #15291f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);
+    gap: 48px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+
+  /* ---------- 章节导航 ---------- */
+  .rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 32px 0;
+    font-size: 13.5px;
+  }
+  .rail h2 {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .rail ol {
+    list-style: none;
+    margin: 0 0 22px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .rail a {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: var(--muted);
+    text-decoration: none;
+    line-height: 1.35;
+  }
+  .rail a:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .rail a.on {
+    background: var(--sql-wash);
+    color: var(--sql);
+    font-weight: 600;
+  }
+  .rail .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    opacity: 0.75;
+    min-width: 1.4em;
+  }
+  .rail .tick {
+    margin-left: auto;
+    color: var(--good);
+    opacity: 0;
+    font-size: 12px;
+  }
+  .rail a.done .tick {
+    opacity: 1;
+  }
+  .reset {
+    font-size: 12px;
+    color: var(--muted);
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 4px 9px;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .reset:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
+
+  /* ---------- 排版 ---------- */
+  main {
+    min-width: 0;
+    padding-top: 52px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(34px, 5vw, 50px);
+    line-height: 1.1;
+    font-weight: 700;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 64ch;
+    margin: 0 0 18px;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-size: 27px;
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    margin: 26px 0 8px;
+    letter-spacing: 0.005em;
+  }
+  p {
+    max-width: 66ch;
+    margin: 0 0 14px;
+  }
+  main ul,
+  main ol {
+    max-width: 66ch;
+    margin: 0 0 14px;
+    padding-left: 1.3em;
+  }
+  main li {
+    margin-bottom: 5px;
+  }
+  a {
+    color: var(--sql);
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--surface-2);
+    padding: 0.12em 0.38em;
+    border-radius: 4px;
+  }
+  strong {
+    font-weight: 700;
+  }
+  .kbd {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    border: 1px solid var(--rule);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0.1em 0.4em;
+    background: var(--surface);
+  }
+
+  section {
+    scroll-margin-top: 24px;
+    padding: 38px 0 6px;
+    border-top: 1px solid var(--rule);
+  }
+  section:first-of-type {
+    border-top: none;
+  }
+  .sec-head {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--sql);
+    background: var(--sql-wash);
+    border-radius: 4px;
+    padding: 3px 8px;
+    white-space: nowrap;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ---------- 对照译文块 ---------- */
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    margin: 0 0 16px;
+  }
+  .pane {
+    background: var(--surface);
+    padding: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .pane-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-weight: 600;
+  }
+  .pane-js .pane-label {
+    color: var(--js);
+    background: var(--js-wash);
+  }
+  .pane-sql .pane-label {
+    color: var(--sql);
+    background: var(--sql-wash);
+  }
+  .pane pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .k {
+    color: var(--sql);
+    font-weight: 600;
+  }
+  .pane-js .k {
+    color: var(--js);
+  }
+  .s {
+    color: var(--good);
+  }
+  .c {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .sql-solo {
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    margin: 0 0 16px;
+    background: var(--surface);
+  }
+  .sql-solo .pane-label {
+    color: var(--sql);
+    background: var(--sql-wash);
+  }
+  .sql-solo pre {
+    padding: 14px;
+    overflow-x: auto;
+  }
+
+  /* ---------- 结果块 ---------- */
+  .out {
+    margin: 0 0 22px;
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .out-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    color: var(--good);
+    background: var(--good-wash);
+    font-weight: 600;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .out-label .n {
+    opacity: 0.8;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  .scroll {
+    overflow-x: auto;
+  }
+  table {
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--muted);
+    padding: 8px 14px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+    font-size: 11.5px;
+  }
+  td {
+    padding: 6px 14px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  td.null {
+    color: var(--muted);
+    font-style: italic;
+  }
+  td.hl {
+    color: var(--trap);
+    font-weight: 600;
+  }
+  td.ok {
+    color: var(--good);
+    font-weight: 600;
+  }
+  .term {
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--ink);
+  }
+
+  /* ---------- 陷阱 / 提示 ---------- */
+  .note {
+    border-left: 3px solid var(--muted);
+    padding: 12px 16px;
+    margin: 0 0 20px;
+    background: var(--surface);
+    border-radius: 0 7px 7px 0;
+    max-width: 70ch;
+  }
+  .note.trap {
+    border-left-color: var(--trap);
+    background: var(--trap-wash);
+  }
+  .note.tip {
+    border-left-color: var(--good);
+    background: var(--good-wash);
+  }
+  .note-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+  .note.trap .note-title {
+    color: var(--trap);
+  }
+  .note.tip .note-title {
+    color: var(--good);
+  }
+  .note p {
+    margin: 0;
+    font-size: 15px;
+    max-width: none;
+  }
+  .note p + p {
+    margin-top: 9px;
+  }
+
+  /* ---------- 想一想 ---------- */
+  details {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--surface);
+    margin: 0 0 18px;
+    overflow: hidden;
+  }
+  summary {
+    cursor: pointer;
+    padding: 11px 15px;
+    font-weight: 600;
+    font-size: 14.5px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::before {
+    content: '▸';
+    color: var(--sql);
+    font-size: 12px;
+    transition: transform 0.15s;
+  }
+  details[open] summary::before {
+    transform: rotate(90deg);
+  }
+  summary:hover {
+    background: var(--surface-2);
+  }
+  .reveal {
+    padding: 2px 15px 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .reveal p:last-child,
+  .reveal ul:last-child {
+    margin-bottom: 0;
+  }
+  .reveal pre {
+    margin: 10px 0;
+  }
+
+  /* ---------- 练习 ---------- */
+  .ex {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--sql);
+    border-radius: 0 8px 8px 0;
+    background: var(--surface);
+    padding: 14px 16px;
+    margin: 0 0 12px;
+  }
+  .ex-head {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .ex-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--sql);
+  }
+  .ex-cmd {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .ex p {
+    margin: 0;
+    max-width: none;
+    font-size: 15px;
+  }
+
+  /* ---------- 速查 ---------- */
+  .cheat {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+    margin: 0 0 20px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    padding: 14px 16px;
+  }
+  .card h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .card dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 5px 12px;
+    font-size: 13.5px;
+  }
+  .card dt {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--sql);
+    white-space: nowrap;
+  }
+  .card dd {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+  :focus-visible {
+    outline: 2px solid var(--sql);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+  @media (max-width: 900px) {
+    .wrap {
+      grid-template-columns: 1fr;
+      gap: 0;
+      padding: 0 20px 64px;
+    }
+    .rail {
+      position: static;
+      max-height: none;
+      padding: 24px 0 0;
+      border-bottom: 1px solid var(--rule);
+      margin-bottom: 8px;
+    }
+    .rail ol {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0;
+    }
+    main {
+      padding-top: 28px;
+    }
+    .pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <nav class="rail">
+    <h2>章节</h2>
+    <ol id="toc"></ol>
+    <button class="reset" id="reset" type="button">清除进度</button>
+  </nav>
+
+  <main>
+    <p class="eyebrow">TracePilot · 给前端的数据库入门</p>
+    <h1>从数组到 SQL</h1>
+    <p class="lede">
+      你已经会用 <code>filter</code>、<code>map</code>、<code>reduce</code> 处理数组了。SQL
+      做的是同一件事，只是换了一种语法，并且跑在数据旁边而不是内存里。这份教程按对照译文的方式写：左边是你熟悉的
+      JS，右边是等价的 SQL。
+    </p>
+    <p class="lede">
+      所有示例都在一个真实的 SQLite 库上跑过，输出是实际执行结果，不是手写的示意。这个库的表结构与
+      <code>apps/server/src/db/client.ts</code> 完全一致，所以练熟的查询可以直接搬进项目。
+    </p>
+
+    <section id="s0">
+      <div class="sec-head">
+        <span class="sec-num">00</span>
+        <h2>先把练习环境跑起来</h2>
+      </div>
+      <p>不要只读。SQL 是手上功夫，看懂和写得出之间隔着一段距离，唯一的过法是自己敲。</p>
+      <p>好消息是不用装任何东西——Node 22 内置了 SQLite，所以三条命令就够了。在仓库根目录执行：</p>
+      <div class="sql-solo">
+        <div class="pane-label">终端</div>
+        <pre><code><span class="c"># 1. 生成练习库（含 3 个项目、8 个 Issue、67 条事件）</span>
+node --experimental-sqlite docs/sql-tutorial/seed.mjs
+
+<span class="c"># 2. 随便查点什么</span>
+node --experimental-sqlite docs/sql-tutorial/q.mjs <span class="s">"SELECT * FROM projects"</span>
+
+<span class="c"># 3. 做完练习后自测</span>
+node --experimental-sqlite docs/sql-tutorial/check.mjs</code></pre>
+      </div>
+      <p>命令太长的话，先设个别名，后面就只用敲 <code>q "SELECT ..."</code>：</p>
+      <div class="sql-solo">
+        <div class="pane-label">终端</div>
+        <pre><code>alias q=<span class="s">'node --experimental-sqlite docs/sql-tutorial/q.mjs'</span></code></pre>
+      </div>
+      <div class="note tip">
+        <div class="note-title">这个库跟你的项目是什么关系</div>
+        <p>
+          表结构逐字复制自 <code>apps/server/src/db/client.ts</code>：一样的 <code>projects</code> /
+          <code>releases</code> / <code>issues</code> / <code>events</code> /
+          <code>diagnoses</code
+          >，一样的外键和索引。数据是虚构的，但形状是真的——你在这里写出来的查询，换个库名就能用在
+          TracePilot 上。
+        </p>
+        <p>
+          它写在 <code>docs/sql-tutorial/.data/</code>，与项目自己的
+          <code>.tracepilot/</code> 数据库完全隔离，怎么折腾都不会弄坏你的开发数据。删库重来：把
+          seed 命令再跑一遍。
+        </p>
+      </div>
+    </section>
+
+    <section id="s1">
+      <div class="sec-head">
+        <span class="sec-num">01</span>
+        <h2>心智模型：表就是一个数组</h2>
+      </div>
+      <p>把数据库想成一个 <code>{ [表名]: 对象数组 }</code> 的全局对象，一切就都对上了：</p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你已经会的 JS</div>
+          <pre><code>const projects = [
+  { id: <span class="s">'demo-project'</span>, name: <span class="s">'Checkout Web'</span> },
+  { id: <span class="s">'mobile-web'</span>,   name: <span class="s">'Mobile Storefront'</span> },
+];</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">数据库里的对应物</div>
+          <pre><code><span class="c">-- 表 = 数组</span>
+<span class="c">-- 行 = 数组里的一个对象</span>
+<span class="c">-- 列 = 对象的一个字段</span>
+<span class="k">SELECT</span> * <span class="k">FROM</span> projects;</code></pre>
+        </div>
+      </div>
+      <p>三条关键差异，记住这三条就不会拧巴：</p>
+      <ul>
+        <li>
+          <strong>列是固定的。</strong>JS
+          数组里每个对象可以字段各不相同，表不行——所有行必须有完全相同的列。这是
+          <code>CREATE TABLE</code> 的作用，相当于给数组加了一个强制执行的 TS 类型。
+        </li>
+        <li>
+          <strong>行是无序的。</strong>数组有下标，表没有。没写
+          <code>ORDER BY</code> 时返回顺序是数据库说了算的，今天这样明天可能那样。<strong
+            >任何时候依赖「默认顺序」都是 bug。</strong
+          >
+        </li>
+        <li>
+          <strong>SQL 是声明式的。</strong
+          >你描述要什么，不写怎么拿。中间有个查询优化器决定实际怎么执行——这也是为什么同一句
+          SQL，加个索引就能快几千倍。
+        </li>
+      </ul>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head">
+        <span class="sec-num">02</span>
+        <h2>SELECT：挑哪些列</h2>
+      </div>
+      <p><code>SELECT</code> 对应 <code>map</code>：决定每行留下哪些字段。</p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>projects.map(p =&gt; ({
+  id: p.id,
+  name: p.name,
+}))</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">SELECT</span> id, name
+<span class="k">FROM</span> projects;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">3 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>name</th>
+            </tr>
+            <tr>
+              <td>demo-project</td>
+              <td>Checkout Web</td>
+            </tr>
+            <tr>
+              <td>mobile-web</td>
+              <td>Mobile Storefront</td>
+            </tr>
+            <tr>
+              <td>legacy-admin</td>
+              <td>Legacy Admin</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <h3>取全部列、改列名、算新列</h3>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">SELECT</span> *              <span class="c">-- 所有列，等价于不写 map</span>
+<span class="k">SELECT</span> name <span class="k">AS</span> 项目名  <span class="c">-- AS 改列名，等价于 map 里换 key</span>
+<span class="k">SELECT</span> event_count / 2 <span class="c">-- 可以直接算，等价于 map 里做运算</span>
+<span class="k">SELECT DISTINCT</span> level  <span class="c">-- 去重，等价于 [...new Set(...)]</span></code></pre>
+      </div>
+      <div class="note">
+        <div class="note-title">写业务代码别用 SELECT *</div>
+        <p>
+          调试时随便用，写进代码里就是隐患：以后有人给表加一列，这句查询会悄悄多传一列数据；列的顺序变了，按位置取值的代码会错位。<strong>把要的列写全</strong>，跟你不会写
+          <code>...props</code> 然后祈祷是一个道理。
+        </p>
+      </div>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head">
+        <span class="sec-num">03</span>
+        <h2>WHERE：留哪些行</h2>
+      </div>
+      <p>
+        <code>WHERE</code> 对应 <code>filter</code>。注意它在
+        <code>SELECT</code> 后面写，但<strong>先执行</strong>——先筛行，再取列。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>issues
+  .filter(i =&gt; i.status === <span class="s">'unresolved'</span>)
+  .map(i =&gt; ({ title: i.title,
+               level: i.level }))</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">SELECT</span> title, level
+<span class="k">FROM</span> issues
+<span class="k">WHERE</span> status = <span class="s">'unresolved'</span>;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">5 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>title</th>
+              <th>level</th>
+            </tr>
+            <tr>
+              <td>CheckoutStateError: Checkout state failed to hydrate</td>
+              <td>error</td>
+            </tr>
+            <tr>
+              <td>PromotionError: Promotion response contained an invalid discount</td>
+              <td>error</td>
+            </tr>
+            <tr>
+              <td>CurrencyError: Currency formatter received a non-numeric total</td>
+              <td>warning</td>
+            </tr>
+            <tr>
+              <td>TaxError: Tax estimate request exceeded its deadline</td>
+              <td>error</td>
+            </tr>
+            <tr>
+              <td>ScrollError: Virtual list scroll anchor was lost</td>
+              <td>warning</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <h3>条件写法对照</h3>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>a === b          a !== b
+a &gt; b            a &gt;= b
+a &amp;&amp; b           a || b           !a
+[<span class="s">'x'</span>,<span class="s">'y'</span>].includes(a)
+a &gt;= 5 &amp;&amp; a &lt;= 20
+s.includes(<span class="s">'Error'</span>)
+s.startsWith(<span class="s">'Tax'</span>)</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code>a = b            a &lt;&gt; b   <span class="c">-- 或 !=</span>
+a &gt; b            a &gt;= b
+a <span class="k">AND</span> b          a <span class="k">OR</span> b          <span class="k">NOT</span> a
+a <span class="k">IN</span> (<span class="s">'x'</span>, <span class="s">'y'</span>)
+a <span class="k">BETWEEN</span> 5 <span class="k">AND</span> 20    <span class="c">-- 含两端</span>
+s <span class="k">LIKE</span> <span class="s">'%Error%'</span>       <span class="c">-- % 匹配任意长度</span>
+s <span class="k">LIKE</span> <span class="s">'Tax%'</span>         <span class="c">-- _ 匹配单个字符</span></code></pre>
+        </div>
+      </div>
+      <div class="note trap">
+        <div class="note-title">三个新手必踩的点</div>
+        <p>
+          <strong>相等是一个等号。</strong><code>=</code> 就是比较，SQL 里没有赋值语句跟它抢，也没有
+          <code>==</code> 或 <code>===</code>。
+        </p>
+        <p>
+          <strong>字符串只能用单引号。</strong><code>'demo'</code> 是字符串，<code>"demo"</code>
+          是<em>列名</em>。写错了 SQLite 会报
+          <code>no such column: "iss-tax"</code>——看到这个报错，先检查引号。
+        </p>
+        <p>
+          <strong>字符串里的单引号要写两遍。</strong
+          ><code>'it''s'</code>，不是反斜杠转义。不过实际写代码时你应该用
+          <code>?</code> 占位符，根本不需要自己拼字符串。
+        </p>
+      </div>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head">
+        <span class="sec-num">04</span>
+        <h2>NULL：SQL 里最容易出错的地方</h2>
+      </div>
+      <p>
+        这一章单独拎出来，因为它是前端转后端翻车率最高的一个点，而且错了不报错，只是<strong>静悄悄少几行</strong>。
+      </p>
+      <p>
+        JS 里判断空值你会写 <code>x === null</code>。SQL
+        里这么写<strong>永远匹配不到任何行</strong>。
+      </p>
+      <div class="pair">
+        <div class="pane pane-sql">
+          <div class="pane-label">❌ 错的</div>
+          <pre><code><span class="k">SELECT COUNT</span>(*) <span class="k">FROM</span> releases
+<span class="k">WHERE</span> commit_sha = <span class="k">NULL</span>;
+<span class="c">-- 结果：0</span></code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">✅ 对的</div>
+          <pre><code><span class="k">SELECT COUNT</span>(*) <span class="k">FROM</span> releases
+<span class="k">WHERE</span> commit_sha <span class="k">IS NULL</span>;
+<span class="c">-- 结果：1</span></code></pre>
+        </div>
+      </div>
+      <p>
+        原因是 SQL 用的是<strong>三值逻辑</strong>：除了真和假，还有第三个值「未知」。<code
+          >NULL</code
+        >
+        的语义不是「空」，而是<strong>「不知道」</strong>。两个都不知道的东西，能相等吗？不知道。所以
+        <code>NULL = NULL</code> 的结果既不是真也不是假，而是「未知」——而
+        <code>WHERE</code> 只放行结果为<strong>真</strong>的行。
+      </p>
+      <div class="note trap">
+        <div class="note-title">连锁反应：NOT IN 遇到 NULL 会全军覆没</div>
+        <p>
+          同样的道理会传染到别的地方。<code>WHERE id NOT IN (SELECT issue_id FROM events)</code>
+          看着没问题，但只要子查询里有<strong>一个</strong>
+          <code>NULL</code>，整个条件对每一行都变成「未知」，最终<strong>一行都返回不了</strong>。
+        </p>
+        <p>
+          练习库里正好有两条 <code>issue_id</code> 为
+          <code>NULL</code> 的孤儿事件，你可以自己试。解法：改用
+          <code>NOT EXISTS</code>，或在子查询里加 <code>WHERE issue_id IS NOT NULL</code>。
+        </p>
+      </div>
+      <details>
+        <summary>
+          想一想：<code>COUNT(*)</code> 和 <code>COUNT(user_id)</code> 会不会一样大？
+        </summary>
+        <div class="reveal">
+          <p>
+            不一样。<code>COUNT(*)</code> 数<strong>行数</strong>，<code>COUNT(列)</code>
+            只数<strong>该列非 NULL 的行数</strong>。这是判断一列有多少空值最快的办法。
+          </p>
+          <p>练习库实测：</p>
+          <div class="out" style="margin: 10px 0 0">
+            <div class="out-label"><span>实际输出</span><span class="n">1 行</span></div>
+            <div class="scroll">
+              <table>
+                <tr>
+                  <th>全部行</th>
+                  <th>非空 issue_id</th>
+                  <th>非空 user_id</th>
+                  <th>去重用户</th>
+                </tr>
+                <tr>
+                  <td>67</td>
+                  <td class="hl">65</td>
+                  <td class="hl">65</td>
+                  <td>9</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+          <p style="margin-top: 10px">
+            67 条事件里有 2 条是孤儿（不属于任何 Issue，也没有用户）。而
+            <code>COUNT(DISTINCT user_id)</code> 是 9——这就是 TracePilot 里
+            <code>user_count</code> 想统计的东西。
+          </p>
+        </div>
+      </details>
+    </section>
+
+    <section id="s5">
+      <div class="sec-head">
+        <span class="sec-num">05</span>
+        <h2>ORDER BY 与 LIMIT：排序和分页</h2>
+      </div>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>[...issues]
+  .sort((a, b) =&gt; b.event_count
+                - a.event_count)
+  .slice(0, 3)</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">SELECT</span> id, event_count
+<span class="k">FROM</span> issues
+<span class="k">ORDER BY</span> event_count <span class="k">DESC</span>
+<span class="k">LIMIT</span> 3;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">3 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>event_count</th>
+            </tr>
+            <tr>
+              <td>iss-hydrate</td>
+              <td>24</td>
+            </tr>
+            <tr>
+              <td>iss-promotion</td>
+              <td>15</td>
+            </tr>
+            <tr>
+              <td>iss-address</td>
+              <td>8</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        <code>ASC</code> 升序（默认，可省略），<code>DESC</code>
+        降序。多个排序键用逗号隔开，从左往右依次比较：<code>ORDER BY level, event_count DESC</code
+        >。
+      </p>
+      <h3>分页</h3>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">LIMIT</span> 20 <span class="k">OFFSET</span> 0    <span class="c">-- 第 1 页，等价于 slice(0, 20)</span>
+<span class="k">LIMIT</span> 20 <span class="k">OFFSET</span> 20   <span class="c">-- 第 2 页，等价于 slice(20, 40)</span></code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">分页必须有稳定的排序键</div>
+        <p>
+          只写
+          <code>ORDER BY last_seen_at</code>
+          分页，如果有多行时间戳相同，它们之间的顺序是不确定的——同一行可能在第 1 页和第 2
+          页各出现一次，也可能<strong>一次都不出现</strong>。
+        </p>
+        <p>
+          解法：排序键末尾永远追加一个唯一列，<code>ORDER BY last_seen_at DESC, id</code
+          >。TracePilot 的 Issue 列表就必须这么写。
+        </p>
+      </div>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head">
+        <span class="sec-num">06</span>
+        <h2>聚合函数：把多行压成一行</h2>
+      </div>
+      <p>对应 <code>reduce</code>：一堆行进去，一个值出来。</p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>issues.length
+issues.reduce((s,i) =&gt; s+i.event_count, 0)
+Math.max(...issues.map(i =&gt; i.event_count))</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">COUNT</span>(*)
+<span class="k">SUM</span>(event_count)
+<span class="k">MAX</span>(event_count)   <span class="c">-- 还有 MIN / AVG</span></code></pre>
+        </div>
+      </div>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">SELECT COUNT</span>(*) <span class="k">AS</span> 总数,
+       <span class="k">SUM</span>(event_count) <span class="k">AS</span> 事件合计,
+       <span class="k">ROUND</span>(<span class="k">AVG</span>(event_count), 2) <span class="k">AS</span> 平均,
+       <span class="k">MAX</span>(event_count) <span class="k">AS</span> 最多
+<span class="k">FROM</span> issues;</code></pre>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">1 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>总数</th>
+              <th>事件合计</th>
+              <th>平均</th>
+              <th>最多</th>
+            </tr>
+            <tr>
+              <td>8</td>
+              <td>65</td>
+              <td>8.13</td>
+              <td>24</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <div class="note">
+        <div class="note-title">聚合函数一律跳过 NULL</div>
+        <p>
+          <code>AVG</code> 算平均时，分母是<strong>非 NULL 的行数</strong>，不是总行数。想把 NULL 当
+          0 算，得先转换：<code>AVG(COALESCE(x, 0))</code>。<code>COALESCE</code> 就是 SQL 版的
+          <code>??</code>，返回第一个非 NULL 的参数。
+        </p>
+      </div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head">
+        <span class="sec-num">07</span>
+        <h2>GROUP BY：分组统计</h2>
+      </div>
+      <p>
+        这是 SQL 真正开始比 JS 好用的地方。JS 里分组统计要先 <code>reduce</code> 出一个对象再
+        <code>Object.entries</code>，SQL 里就是一行。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>Object.entries(
+  issues.reduce((acc, i) =&gt; {
+    acc[i.status] = (acc[i.status] ?? 0) + 1;
+    <span class="k">return</span> acc;
+  }, {})
+).map(([status, n]) =&gt; ({ status, n }))
+ .sort((a,b) =&gt; a.status &lt; b.status ? -1 : 1)</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">SELECT</span> status, <span class="k">COUNT</span>(*) <span class="k">AS</span> n
+<span class="k">FROM</span> issues
+<span class="k">GROUP BY</span> status
+<span class="k">ORDER BY</span> status;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">3 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>status</th>
+              <th>n</th>
+            </tr>
+            <tr>
+              <td>ignored</td>
+              <td>1</td>
+            </tr>
+            <tr>
+              <td>resolved</td>
+              <td>2</td>
+            </tr>
+            <tr>
+              <td>unresolved</td>
+              <td>5</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        规则很简单：<strong
+          ><code>GROUP BY</code> 后面写什么，<code>SELECT</code>
+          里就只能出现什么，加上聚合函数。</strong
+        >因为一个分组塌缩成了一行，没被分组的列在这一行里没有唯一值可填。
+      </p>
+      <div class="note trap">
+        <div class="note-title">SQLite 在这里很宽松，而这是个坑</div>
+        <p>
+          标准 SQL 会拒绝下面这句（<code>title</code> 既没分组也没聚合），MySQL 开着默认的
+          <code>ONLY_FULL_GROUP_BY</code> 也会报错。但
+          <strong>SQLite 照单全收</strong>，随便挑一行的 <code>title</code> 塞给你：
+        </p>
+        <div class="out" style="margin: 10px 0 0">
+          <div class="out-label">
+            <span>SELECT project_id, title, COUNT(*) FROM issues GROUP BY project_id</span
+            ><span class="n">2 行</span>
+          </div>
+          <div class="scroll">
+            <table>
+              <tr>
+                <th>project_id</th>
+                <th>title</th>
+                <th>n</th>
+              </tr>
+              <tr>
+                <td>demo-project</td>
+                <td class="hl">TaxError: Tax estimate request exceeded its deadline</td>
+                <td>6</td>
+              </tr>
+              <tr>
+                <td>mobile-web</td>
+                <td class="hl">ScrollError: Virtual list scroll anchor was lost</td>
+                <td>2</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+        <p style="margin-top: 10px">
+          这两个 title 是<strong>任意挑的</strong>，跟
+          <code>COUNT(*)</code> 没有任何逻辑关系——看起来像「该项目的代表错误」，其实毫无意义。这种
+          bug 极难发现。养成习惯：<strong
+            >SELECT 里的每个非聚合列，都必须出现在 GROUP BY 里。</strong
+          >
+        </p>
+      </div>
+    </section>
+
+    <section id="s8">
+      <div class="sec-head">
+        <span class="sec-num">08</span>
+        <h2>HAVING：过滤分组</h2>
+      </div>
+      <p>
+        <code>WHERE</code> 筛<strong>行</strong>，<code>HAVING</code>
+        筛<strong>分组</strong>。区别就一条：<code>WHERE</code> 在分组<em>之前</em>跑，<code
+          >HAVING</code
+        >
+        在分组<em>之后</em>跑，所以只有 <code>HAVING</code> 能用聚合函数。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS</div>
+          <pre><code>grouped
+  .filter(g =&gt; g.total &gt; 10)   <span class="c">// ← HAVING</span></code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL</div>
+          <pre><code><span class="k">SELECT</span> project_id, <span class="k">SUM</span>(event_count) <span class="k">AS</span> total
+<span class="k">FROM</span> issues
+<span class="k">GROUP BY</span> project_id
+<span class="k">HAVING SUM</span>(event_count) &gt; 10;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">1 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>project_id</th>
+              <th>total</th>
+            </tr>
+            <tr>
+              <td>demo-project</td>
+              <td>56</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>在 <code>WHERE</code> 里写聚合函数会直接报错，这是一条硬规则：</p>
+      <div class="sql-solo">
+        <div class="pane-label">终端</div>
+        <div class="term">
+          $ q "SELECT project_id FROM issues WHERE COUNT(*) &gt; 2 GROUP BY project_id" SQL
+          出错：misuse of aggregate: COUNT()
+        </div>
+      </div>
+      <div class="note tip">
+        <div class="note-title">两个都能写的时候，优先写 WHERE</div>
+        <p>
+          <code>WHERE</code> 在分组前就把行扔掉了，需要分组的数据更少；<code>HAVING</code>
+          是分完组才筛。能用 <code>WHERE</code> 表达的条件（比如
+          <code>level = 'error'</code>）就别塞进 <code>HAVING</code>——结果一样，但白算了一遍。
+        </p>
+      </div>
+    </section>
+
+    <section id="s9">
+      <div class="sec-head">
+        <span class="sec-num">09</span>
+        <h2>执行顺序：为什么有些写法不行</h2>
+      </div>
+      <p>
+        SQL
+        的<strong>书写顺序</strong>和<strong>执行顺序</strong>不一样。记住执行顺序，前面几章所有「为什么这里不能那样写」的疑问会一次性解开。
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">执行顺序</div>
+        <pre><code><span class="k">FROM</span> / <span class="k">JOIN</span>   ①  先确定数据从哪来，把表接起来
+<span class="k">WHERE</span>         ②  逐行过滤（此时还没分组，不能用聚合函数）
+<span class="k">GROUP BY</span>      ③  分组
+<span class="k">HAVING</span>        ④  过滤分组（此时聚合值已算出，可以用）
+<span class="k">SELECT</span>        ⑤  才轮到挑列、算表达式、起别名
+<span class="k">ORDER BY</span>      ⑥  排序（别名在这里可用，因为 SELECT 已经跑完了）
+<span class="k">LIMIT</span>         ⑦  最后截断</code></pre>
+      </div>
+      <p>于是那些报错都有了解释：</p>
+      <ul>
+        <li>
+          <code>WHERE</code> 里不能用 <code>COUNT(*)</code>——第 ② 步时还没分组，聚合值根本不存在。
+        </li>
+        <li>
+          <code>ORDER BY</code> 里可以用 <code>SELECT</code> 起的别名——第 ⑥ 步时第 ⑤ 步已经跑完了。
+        </li>
+        <li><code>LIMIT 3</code> 配 <code>ORDER BY</code> 是先排序再截断，不是先取 3 行再排序。</li>
+      </ul>
+      <details>
+        <summary>
+          想一想：<code>SELECT event_count AS n FROM issues WHERE n &gt; 8</code> 能跑吗？
+        </summary>
+        <div class="reveal">
+          <p>
+            按执行顺序，<code>WHERE</code>（②）跑的时候别名 <code>n</code>（⑤）还不存在，所以<strong
+              >标准 SQL 里这是错的</strong
+            >，MySQL 和 PostgreSQL 都会报 <code>Unknown column 'n'</code>。
+          </p>
+          <p>但在 SQLite 里实测<strong>能跑</strong>，而且结果正确：</p>
+          <div class="out" style="margin: 10px 0 0">
+            <div class="out-label"><span>SQLite 实际输出</span><span class="n">2 行</span></div>
+            <div class="scroll">
+              <table>
+                <tr>
+                  <th>id</th>
+                  <th>n</th>
+                </tr>
+                <tr>
+                  <td>iss-hydrate</td>
+                  <td>24</td>
+                </tr>
+                <tr>
+                  <td>iss-promotion</td>
+                  <td>15</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+          <p style="margin-top: 10px">
+            这就是方言差异的典型样子：<strong>SQLite 让你养成的习惯，换到 MySQL 会当场报错。</strong
+            >写的时候按标准来（把表达式重写一遍，或套一层子查询），别依赖 SQLite 的宽容。
+          </p>
+        </div>
+      </details>
+    </section>
+
+    <section id="s10">
+      <div class="sec-head">
+        <span class="sec-num">10</span>
+        <h2>JOIN：把表接起来</h2>
+      </div>
+      <p>
+        关系型数据库的看家本领。前端做这件事要发两次请求再手动拼，SQL 一句话，而且是在数据旁边算的。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS：两次请求 + 手动拼</div>
+          <pre><code>const byId = new Map(
+  projects.map(p =&gt; [p.id, p])
+);
+issues
+  .filter(i =&gt; i.level === <span class="s">'error'</span>)
+  .map(i =&gt; ({
+    id: i.id,
+    level: i.level,
+    project_name: byId.get(i.project_id).name,
+  }));</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL：一句</div>
+          <pre><code><span class="k">SELECT</span> i.id, i.level, p.name <span class="k">AS</span> project_name
+<span class="k">FROM</span> issues i
+<span class="k">JOIN</span> projects p <span class="k">ON</span> i.project_id = p.id
+<span class="k">WHERE</span> i.level = <span class="s">'error'</span>
+<span class="k">ORDER BY</span> i.id;</code></pre>
+        </div>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">5 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>level</th>
+              <th>project_name</th>
+            </tr>
+            <tr>
+              <td>iss-auth</td>
+              <td>error</td>
+              <td>Mobile Storefront</td>
+            </tr>
+            <tr>
+              <td>iss-hydrate</td>
+              <td>error</td>
+              <td>Checkout Web</td>
+            </tr>
+            <tr>
+              <td>iss-payment</td>
+              <td>error</td>
+              <td>Checkout Web</td>
+            </tr>
+            <tr>
+              <td>iss-promotion</td>
+              <td>error</td>
+              <td>Checkout Web</td>
+            </tr>
+            <tr>
+              <td>iss-tax</td>
+              <td>error</td>
+              <td>Checkout Web</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        <code>issues i</code> 里的 <code>i</code> 是<strong>表别名</strong>，之后用
+        <code>i.列名</code> 引用。两张表有同名列时（比如都有
+        <code>id</code>）必须加前缀，否则数据库不知道你指哪个。
+      </p>
+      <h3>INNER JOIN 与 LEFT JOIN</h3>
+      <p>只有两种是日常真正要用的：</p>
+      <ul>
+        <li>
+          <strong><code>JOIN</code>（即 <code>INNER JOIN</code>）</strong
+          >：只保留两边都匹配上的行。<em>要「有关联的数据」时用。</em>
+        </li>
+        <li>
+          <strong><code>LEFT JOIN</code></strong
+          >：保留左表<strong>全部</strong>行，右表没匹配上就填 <code>NULL</code>。<em
+            >要「包括没有关联数据的那些」时用。</em
+          >
+        </li>
+      </ul>
+      <p>练习库里 <code>iss-tax</code> 是个一条事件都没有的 Issue，正好能量出两者的差：</p>
+      <div class="pair">
+        <div class="pane pane-sql">
+          <div class="pane-label">INNER → 65 行</div>
+          <pre><code><span class="k">SELECT COUNT</span>(*) <span class="k">FROM</span> issues i
+<span class="k">JOIN</span> events e <span class="k">ON</span> e.issue_id = i.id;
+<span class="c">-- iss-tax 被丢掉了</span></code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">LEFT → 66 行</div>
+          <pre><code><span class="k">SELECT COUNT</span>(*) <span class="k">FROM</span> issues i
+<span class="k">LEFT JOIN</span> events e <span class="k">ON</span> e.issue_id = i.id;
+<span class="c">-- iss-tax 保留，事件列全是 NULL</span></code></pre>
+        </div>
+      </div>
+      <p>
+        多出来的那 1 行就是 <code>iss-tax</code>。由此得到一个常用套路——<strong
+          >找「没有关联数据的行」，用 <code>LEFT JOIN</code> + <code>IS NULL</code></strong
+        >：
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL：找出一条事件都没有的 Issue</div>
+        <pre><code><span class="k">SELECT</span> i.id <span class="k">FROM</span> issues i
+<span class="k">LEFT JOIN</span> events e <span class="k">ON</span> e.issue_id = i.id
+<span class="k">WHERE</span> e.id <span class="k">IS NULL</span>;   <span class="c">-- 右表没匹配上 → 右表的列是 NULL</span></code></pre>
+      </div>
+      <div class="note">
+        <div class="note-title">还有 RIGHT JOIN 和 FULL JOIN，但你几乎用不上</div>
+        <p>
+          <code>RIGHT JOIN</code> 就是把两张表调个位置的
+          <code>LEFT JOIN</code>，可读性更差，实务中基本不写。<code>FULL OUTER JOIN</code
+          >（两边都保留）用得更少，而且老版本 SQLite 和 MySQL 压根不支持。<strong
+            >先把 <code>JOIN</code> 和 <code>LEFT JOIN</code> 练熟，这两个覆盖 95% 的场景。</strong
+          >
+        </p>
+      </div>
+    </section>
+
+    <section id="s11">
+      <div class="sec-head">
+        <span class="sec-num">11</span>
+        <h2>LEFT JOIN 的计数陷阱</h2>
+      </div>
+      <p>单独开一章，因为这是 SQL 里最经典的静默 bug，而且几乎每个人都会栽一次。</p>
+      <p>你想统计每个 Issue 有多少事件，很自然会写 <code>COUNT(*)</code>：</p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">SELECT</span> i.id,
+       <span class="k">COUNT</span>(*)     <span class="k">AS</span> 错的,
+       <span class="k">COUNT</span>(e.id) <span class="k">AS</span> 对的
+<span class="k">FROM</span> issues i
+<span class="k">LEFT JOIN</span> events e <span class="k">ON</span> e.issue_id = i.id
+<span class="k">GROUP BY</span> i.id;</code></pre>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出（节选）</span><span class="n">2 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>错的 COUNT(*)</th>
+              <th>对的 COUNT(e.id)</th>
+            </tr>
+            <tr>
+              <td>iss-payment</td>
+              <td>3</td>
+              <td>3</td>
+            </tr>
+            <tr>
+              <td>iss-tax</td>
+              <td class="hl">1</td>
+              <td class="ok">0</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        <code>iss-tax</code> 明明<strong>一条事件都没有</strong>，<code>COUNT(*)</code> 却报 1。
+      </p>
+      <p>
+        原因回到上一章：<code>LEFT JOIN</code> 给没匹配上的左表行保留了一行，只是右表的列全填
+        <code>NULL</code>。<code>COUNT(*)</code>
+        数的是<strong>行</strong>——这一行是实实在在存在的，所以数成 1。而
+        <code>COUNT(e.id)</code> 只数右表 <code>id</code> 非 NULL 的行，正确地得到 0。
+      </p>
+      <div class="note trap">
+        <div class="note-title">记住这条规则</div>
+        <p>
+          <strong
+            ><code>LEFT JOIN</code> 之后做计数，永远写 <code>COUNT(右表的某个非空列)</code>，不要写
+            <code>COUNT(*)</code>。</strong
+          >
+        </p>
+        <p>
+          这个 bug 的杀伤力在于它不报错，只是把所有「零关联」的行统计成 1。等你发现仪表盘上「0
+          个事件的 Issue 显示有 1 个事件」时，往往已经上线很久了。
+        </p>
+      </div>
+      <details>
+        <summary>
+          想一想：为什么 <code>GROUP BY i.id</code> 就够了，不用把 <code>i.title</code> 也写进去？
+        </summary>
+        <div class="reveal">
+          <p>
+            因为 <code>i.id</code> 是<strong>主键</strong>——按主键分组，一个分组里必然只有一行
+            issues 记录，所以 <code>i.title</code> 在组内有唯一值，没有歧义。
+          </p>
+          <p>
+            标准 SQL 和 PostgreSQL 认这个推导（叫函数依赖），可以只写主键。但
+            <strong>MySQL 的 <code>ONLY_FULL_GROUP_BY</code> 在某些版本里认得不完整</strong
+            >，稳妥起见把用到的列都列上：<code>GROUP BY i.id, i.title</code
+            >。多写几个字，换跨库不出事。
+          </p>
+        </div>
+      </details>
+    </section>
+
+    <section id="s12">
+      <div class="sec-head">
+        <span class="sec-num">12</span>
+        <h2>子查询与 CTE</h2>
+      </div>
+      <p>SQL 可以嵌套。括号里先算出一个结果，外层再用。</p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL：找出事件数高于平均值的 Issue</div>
+        <pre><code><span class="k">SELECT</span> id, event_count <span class="k">FROM</span> issues
+<span class="k">WHERE</span> event_count &gt; (<span class="k">SELECT AVG</span>(event_count) <span class="k">FROM</span> issues)
+<span class="k">ORDER BY</span> event_count <span class="k">DESC</span>;</code></pre>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">2 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>event_count</th>
+            </tr>
+            <tr>
+              <td>iss-hydrate</td>
+              <td>24</td>
+            </tr>
+            <tr>
+              <td>iss-promotion</td>
+              <td>15</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        嵌套一层还好，嵌套三层就没法读了。<strong
+          ><code>WITH</code>（叫 CTE，公用表表达式）把子查询提到前面命名</strong
+        >，效果就像把一长串链式调用拆成几个有名字的中间变量：
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">JS：拆中间变量</div>
+          <pre><code>const active = issues
+  .filter(i =&gt; i.event_count &gt; 0);
+
+const result = active.map(i =&gt; ({
+  ...i,
+  pct: i.event_count / total * 100,
+}));</code></pre>
+        </div>
+        <div class="pane pane-sql">
+          <div class="pane-label">SQL：CTE</div>
+          <pre><code><span class="k">WITH</span> stats <span class="k">AS</span> (
+  <span class="k">SELECT</span> project_id, id, event_count
+  <span class="k">FROM</span> issues <span class="k">WHERE</span> event_count &gt; 0
+)
+<span class="k">SELECT</span> * <span class="k">FROM</span> stats;</code></pre>
+        </div>
+      </div>
+      <div class="note tip">
+        <div class="note-title">CTE 是可读性最好的一次投资</div>
+        <p>
+          多个 CTE 用逗号串起来，后面的能引用前面的：<code
+            >WITH a AS (...), b AS (SELECT * FROM a) SELECT ...</code
+          >。复杂报表查询几乎都长这样——一层层往上搭，每层有个名字。写完自己半年后还看得懂。
+        </p>
+      </div>
+    </section>
+
+    <section id="s13">
+      <div class="sec-head">
+        <span class="sec-num">13</span>
+        <h2>窗口函数：既要明细又要统计</h2>
+      </div>
+      <p>
+        <code>GROUP BY</code>
+        会把多行压成一行。但有时候你想<strong>保留每一行的明细，同时在旁边带上分组的统计值</strong>——比如「每个
+        Issue 的事件数，以及它占本项目的百分比」。这就是窗口函数。
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">SELECT</span> id, event_count,
+       <span class="k">RANK</span>() <span class="k">OVER</span> (<span class="k">ORDER BY</span> event_count <span class="k">DESC</span>) <span class="k">AS</span> 排名,
+       <span class="k">SUM</span>(event_count) <span class="k">OVER</span> () <span class="k">AS</span> 总计
+<span class="k">FROM</span> issues
+<span class="k">WHERE</span> project_id = <span class="s">'demo-project'</span>
+<span class="k">ORDER BY</span> event_count <span class="k">DESC</span>;</code></pre>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">6 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>id</th>
+              <th>event_count</th>
+              <th>排名</th>
+              <th>总计</th>
+            </tr>
+            <tr>
+              <td>iss-hydrate</td>
+              <td>24</td>
+              <td>1</td>
+              <td>56</td>
+            </tr>
+            <tr>
+              <td>iss-promotion</td>
+              <td>15</td>
+              <td>2</td>
+              <td>56</td>
+            </tr>
+            <tr>
+              <td>iss-address</td>
+              <td>8</td>
+              <td>3</td>
+              <td>56</td>
+            </tr>
+            <tr>
+              <td>iss-currency</td>
+              <td>6</td>
+              <td>4</td>
+              <td>56</td>
+            </tr>
+            <tr>
+              <td>iss-payment</td>
+              <td>3</td>
+              <td>5</td>
+              <td>56</td>
+            </tr>
+            <tr>
+              <td>iss-tax</td>
+              <td>0</td>
+              <td>6</td>
+              <td>56</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        注意：<strong>6 行进去，6 行出来</strong>，明细一条没少，但每行都带上了「总计
+        56」和自己的排名。这是 <code>GROUP BY</code> 做不到的。
+      </p>
+      <p>关键字是 <code>OVER (...)</code>，括号里定义「窗口」——也就是这一行要跟哪些行比：</p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">OVER</span> ()                              <span class="c">-- 窗口 = 全部行</span>
+<span class="k">OVER</span> (<span class="k">PARTITION BY</span> project_id)      <span class="c">-- 窗口 = 同项目的行（类似 GROUP BY，但不压缩）</span>
+<span class="k">OVER</span> (<span class="k">ORDER BY</span> event_count <span class="k">DESC</span>)     <span class="c">-- 窗口内排序，用于排名</span></code></pre>
+      </div>
+      <p>
+        常用的几个：<code>ROW_NUMBER()</code> 行号（无并列）、<code>RANK()</code>
+        排名（并列后跳号）、<code>SUM()/AVG()/COUNT()</code> 窗口内聚合、<code>LAG()/LEAD()</code>
+        取上一行/下一行的值（算环比特别好用）。
+      </p>
+      <div class="note tip">
+        <div class="note-title">最实用的套路：每组取 Top N</div>
+        <p>
+          「每个项目里事件最多的那个 Issue」用
+          <code>GROUP BY</code> 很别扭，用窗口函数是标准解法：先用
+          <code>ROW_NUMBER() OVER (PARTITION BY 组 ORDER BY 排序键)</code> 编号，外面再套一层
+          <code>WHERE rn = 1</code>。练习 12 就是这道题。
+        </p>
+      </div>
+    </section>
+
+    <section id="s14">
+      <div class="sec-head">
+        <span class="sec-num">14</span>
+        <h2>写入：INSERT / UPDATE / DELETE</h2>
+      </div>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="c">-- 新增（一定要写列名，别依赖列顺序）</span>
+<span class="k">INSERT INTO</span> projects (id, name, dsn_key, created_at)
+<span class="k">VALUES</span> (<span class="s">'new-app'</span>, <span class="s">'New App'</span>, <span class="s">'key-123'</span>, 1772269200000);
+
+<span class="c">-- 修改</span>
+<span class="k">UPDATE</span> issues <span class="k">SET</span> status = <span class="s">'resolved'</span> <span class="k">WHERE</span> id = <span class="s">'iss-hydrate'</span>;
+
+<span class="c">-- 删除</span>
+<span class="k">DELETE FROM</span> issues <span class="k">WHERE</span> id = <span class="s">'iss-hydrate'</span>;</code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">忘写 WHERE 会改掉整张表</div>
+        <p>
+          <code>UPDATE issues SET status = 'resolved'</code> 没有 <code>WHERE</code>，就是把<strong
+            >所有</strong
+          >
+          Issue 都标成已解决。<code>DELETE FROM issues</code>
+          则会清空整张表。两者都没有确认提示，也没有撤销。
+        </p>
+        <p>
+          养成习惯：<strong>先把同样的条件用 <code>SELECT</code> 跑一遍</strong
+          >，确认命中的行数是你预期的，再把 <code>SELECT ...</code> 换成
+          <code>UPDATE ... SET ...</code>。
+        </p>
+      </div>
+      <h3>UPSERT：存在就跳过 / 更新</h3>
+      <p>这就是 <code>client.ts</code> 里 <code>ensureDemoProject</code> 用的写法：</p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">INSERT INTO</span> projects (id, name, dsn_key, created_at) <span class="k">VALUES</span> (?, ?, ?, ?)
+<span class="k">ON CONFLICT</span>(id) <span class="k">DO NOTHING</span>;                        <span class="c">-- 已存在就跳过</span>
+
+<span class="k">ON CONFLICT</span>(id) <span class="k">DO UPDATE SET</span> name = excluded.name;  <span class="c">-- 已存在就更新</span></code></pre>
+      </div>
+      <p>
+        <code>ON CONFLICT</code> 后面的列<strong>必须有唯一约束</strong>（主键或
+        <code>UNIQUE</code>），否则报错——数据库需要知道靠什么判断「重复」。TracePilot 的
+        <code>issues</code> 表上有 <code>UNIQUE(project_id, fingerprint)</code>，事件聚合就是靠它做
+        UPSERT 的。
+      </p>
+      <h3>永远用占位符，不要拼字符串</h3>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">❌ SQL 注入</div>
+          <pre><code>db.prepare(
+  <span class="s">`SELECT * FROM issues
+   WHERE id = '${userInput}'`</span>
+).all();</code></pre>
+        </div>
+        <div class="pane pane-js">
+          <div class="pane-label">✅ 参数化</div>
+          <pre><code>db.prepare(
+  <span class="s">'SELECT * FROM issues WHERE id = ?'</span>
+).all(userInput);</code></pre>
+        </div>
+      </div>
+      <p>
+        用了 <code>?</code>，值和 SQL
+        是<strong>分开传给数据库</strong>的，值永远被当数据、不会被当代码解析。用户输入
+        <code>' OR '1'='1</code> 也只是去找一个叫这个名字的 id，找不到而已。
+      </p>
+    </section>
+
+    <section id="s15">
+      <div class="sec-head">
+        <span class="sec-num">15</span>
+        <h2>事务：要么全成，要么全不成</h2>
+      </div>
+      <p>
+        有些操作必须捆在一起。TracePilot 收到一个事件要做三件事：插入 event、更新 issue 的
+        <code>event_count</code>、更新
+        <code>last_seen_at</code>。要是第一步成了第二步崩了，数据就对不上了。
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">BEGIN</span>;
+  <span class="k">INSERT INTO</span> events ...;
+  <span class="k">UPDATE</span> issues <span class="k">SET</span> event_count = event_count + 1 <span class="k">WHERE</span> id = ?;
+<span class="k">COMMIT</span>;    <span class="c">-- 一起生效</span>
+<span class="c">-- 出错时 ROLLBACK，就当什么都没发生过</span></code></pre>
+      </div>
+      <p>
+        实测：在事务里把 demo-project 的 6 个 Issue 全改成 ignored，事务内查是 6，<code
+          >ROLLBACK</code
+        >
+        之后查回到 1。
+      </p>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">事务内 → 回滚后</span></div>
+        <div class="term">事务中: [{"c":6}] 回滚后: [{"c":1}]</div>
+      </div>
+      <div class="note tip">
+        <div class="note-title">事务还能让批量写入快几十倍</div>
+        <p>
+          SQLite 默认每条语句都是一个独立事务，每次都要落盘。插 1000 条就是 1000 次落盘。用一个
+          <code>BEGIN</code> / <code>COMMIT</code> 把它们包起来，只落盘一次，通常快 1~2
+          个数量级。批量导数据时这是最有效的一招。
+        </p>
+      </div>
+      <h3>顺带看看外键的两种删除行为</h3>
+      <p>
+        第 1 章提过 <code>ON DELETE CASCADE</code> 和 <code>ON DELETE SET NULL</code>。实测删掉
+        <code>mobile-web</code> 项目（在事务里做的，已回滚）：
+      </p>
+      <div class="out">
+        <div class="out-label">
+          <span>DELETE FROM projects WHERE id = 'mobile-web'</span><span class="n">连锁反应</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>受影响的表</th>
+              <th>约束</th>
+              <th>结果</th>
+            </tr>
+            <tr>
+              <td>issues</td>
+              <td>ON DELETE CASCADE</td>
+              <td>该项目的 2 个 Issue 被<strong>一并删除</strong>（8 → 6）</td>
+            </tr>
+            <tr>
+              <td>events</td>
+              <td>ON DELETE SET NULL</td>
+              <td>9 条事件<strong>保留</strong>，issue_id 被置空（孤儿事件 2 → 11）</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        这正是 TracePilot 想要的取舍：聚合出来的 Issue
+        可以跟着项目一起消失，但用户真实上报的原始事件不能丢。
+      </p>
+    </section>
+
+    <section id="s16">
+      <div class="sec-head">
+        <span class="sec-num">16</span>
+        <h2>索引：为什么加一行 DDL 能快几千倍</h2>
+      </div>
+      <p>
+        没有索引，数据库找数据只能<strong>从头到尾扫一遍</strong>——就像在没排序的数组里
+        <code>find</code>。索引相当于提前建好的一个 <code>Map</code>，代价是写入稍慢、占额外磁盘。
+      </p>
+      <p>
+        <code>EXPLAIN QUERY PLAN</code>
+        能让数据库告诉你它<strong>打算</strong>怎么执行。这是排查慢查询的第一步：
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">终端：走了索引</div>
+        <div class="term">
+          $ q "EXPLAIN QUERY PLAN SELECT * FROM issues WHERE project_id='demo-project' ORDER BY
+          last_seen_at DESC" SEARCH issues USING INDEX issues_project_last_seen (project_id=?)
+        </div>
+      </div>
+      <div class="sql-solo">
+        <div class="pane-label">终端：全表扫描</div>
+        <div class="term">
+          $ q "EXPLAIN QUERY PLAN SELECT * FROM issues WHERE title LIKE '%Tax%'" SCAN issues
+        </div>
+      </div>
+      <p>
+        看两个词就够了：<strong
+          ><code>SEARCH</code> = 走了索引，好。<code>SCAN</code> =
+          全表扫描，数据量大时会慢。</strong
+        >
+      </p>
+      <p>
+        第一句走的 <code>issues_project_last_seen</code>，就是 <code>client.ts</code> 里那行 DDL
+        建的：
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">apps/server/src/db/client.ts</div>
+        <pre><code><span class="k">CREATE INDEX IF NOT EXISTS</span> issues_project_last_seen
+  <span class="k">ON</span> issues(project_id, last_seen_at);</code></pre>
+      </div>
+      <p>
+        它的列顺序不是随便排的，正好匹配 Issue 列表页那句「<code
+          >WHERE project_id = ? ORDER BY last_seen_at DESC</code
+        >」——<strong>先按过滤列，再按排序列</strong>。这样过滤和排序能一次走完。
+      </p>
+      <div class="note">
+        <div class="note-title">索引的几条经验</div>
+        <p>
+          <strong>复合索引讲究顺序，遵循最左前缀。</strong
+          ><code>(project_id, last_seen_at)</code> 能加速「只按 project_id
+          查」和「按两者查」，但<strong>加速不了「只按 last_seen_at 查」</strong>——就像电话簿按「姓,
+          名」排序，只知道名字是查不了的。
+        </p>
+        <p>
+          <strong><code>LIKE '%xxx%'</code> 用不上索引。</strong
+          >前面带通配符等于说「不知道开头是什么」，只能全扫。要做全文搜索得用 SQLite 的 FTS5
+          或专门的搜索引擎。
+        </p>
+        <p>
+          <strong>别无脑加索引。</strong>每个索引都会拖慢写入、占磁盘。先用
+          <code>EXPLAIN QUERY PLAN</code> 找出真正慢的查询，再针对性地加。
+        </p>
+      </div>
+    </section>
+
+    <section id="s17">
+      <div class="sec-head">
+        <span class="sec-num">17</span>
+        <h2>方言差异：SQLite 惯着你的地方</h2>
+      </div>
+      <p>
+        SQL 有标准，但每家实现都有出入——就像 CSS 有标准但各浏览器有差异。SQLite 尤其宽松，<strong
+          >它容忍的写法换到 MySQL 会当场报错</strong
+        >。这些是本教程里实测过的差异：
+      </p>
+      <div class="out">
+        <div class="out-label"><span>实测差异对照</span><span class="n">7 项</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>场景</th>
+              <th>SQLite（你的项目）</th>
+              <th>MySQL / PostgreSQL</th>
+            </tr>
+            <tr>
+              <td><code>WHERE</code> 里用 SELECT 别名</td>
+              <td class="hl">允许</td>
+              <td class="ok">报错</td>
+            </tr>
+            <tr>
+              <td><code>GROUP BY</code> 漏列</td>
+              <td class="hl">允许，任意取一行</td>
+              <td class="ok">报错（ONLY_FULL_GROUP_BY）</td>
+            </tr>
+            <tr>
+              <td>外键约束</td>
+              <td class="hl">默认<strong>关闭</strong>，须 PRAGMA 打开</td>
+              <td class="ok">默认开启</td>
+            </tr>
+            <tr>
+              <td>列类型</td>
+              <td class="hl">动态类型，声明 INTEGER 也塞得进字符串</td>
+              <td class="ok">严格</td>
+            </tr>
+            <tr>
+              <td>日期时间</td>
+              <td>没有日期类型，本项目存毫秒整数</td>
+              <td>有 DATETIME / TIMESTAMP</td>
+            </tr>
+            <tr>
+              <td>JSON</td>
+              <td>没有 JSON 类型，存 TEXT（<code>context_json</code>）</td>
+              <td>有原生 JSON 类型，可查内部字段</td>
+            </tr>
+            <tr>
+              <td>字符串拼接</td>
+              <td><code>a || b</code></td>
+              <td>PG 同；MySQL 要 <code>CONCAT(a, b)</code></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        时间戳存整数带来一个实际后果：想看人类可读的时间，得自己转。SQLite 的
+        <code>datetime()</code>
+        收的是<strong>秒</strong>，而项目存的是<strong>毫秒</strong>，所以要先除 1000：
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">SQL</div>
+        <pre><code><span class="k">SELECT</span> version, created_at,
+       <span class="k">datetime</span>(created_at / 1000, <span class="s">'unixepoch'</span>) <span class="k">AS</span> 可读
+<span class="k">FROM</span> releases <span class="k">ORDER BY</span> created_at;</code></pre>
+      </div>
+      <div class="out">
+        <div class="out-label"><span>实际输出</span><span class="n">4 行</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>version</th>
+              <th>created_at</th>
+              <th>可读</th>
+            </tr>
+            <tr>
+              <td>2.3.9</td>
+              <td>1770627600000</td>
+              <td>2026-02-09 09:00:00</td>
+            </tr>
+            <tr>
+              <td>1.0.0</td>
+              <td>1771232400000</td>
+              <td>2026-02-16 09:00:00</td>
+            </tr>
+            <tr>
+              <td>2.4.0</td>
+              <td>1771664400000</td>
+              <td>2026-02-21 09:00:00</td>
+            </tr>
+            <tr>
+              <td>2.4.1</td>
+              <td>1772269200000</td>
+              <td>2026-02-28 09:00:00</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <div class="note tip">
+        <div class="note-title">按标准写，别按 SQLite 的宽容写</div>
+        <p>
+          前四条差异全是「SQLite 让过、别家报错」。如果你按 SQLite 的宽松习惯写熟了，将来项目迁到
+          MySQL 或 PostgreSQL，会遇到一批莫名其妙的报错。<strong
+            >把 <code>GROUP BY</code> 的列写全、别在 <code>WHERE</code> 里用别名</strong
+          >——多打几个字，省下将来一整天的排查。
+        </p>
+      </div>
+    </section>
+
+    <section id="s18">
+      <div class="sec-head">
+        <span class="sec-num">18</span>
+        <h2>练习：12 道，带自动判分</h2>
+      </div>
+      <p>
+        这是这份教程里最重要的一节。<strong
+          >把答案写进
+          <code>docs/sql-tutorial/answers/&lt;编号&gt;.sql</code>，然后运行判分。</strong
+        >判分比对的是查询结果而不是 SQL 文本，所以写法跟参考答案不同也没关系，结果对就算过。
+      </p>
+      <div class="sql-solo">
+        <div class="pane-label">终端</div>
+        <pre><code>echo <span class="s">"SELECT id, name FROM projects ORDER BY id"</span> &gt; docs/sql-tutorial/answers/01.sql
+
+node --experimental-sqlite docs/sql-tutorial/check.mjs 01   <span class="c"># 单题</span>
+node --experimental-sqlite docs/sql-tutorial/check.mjs      <span class="c"># 全部</span></code></pre>
+      </div>
+
+      <h3>基础：SELECT / WHERE / ORDER BY（第 2–5 章）</h3>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">01</span></div>
+        <p>列出所有项目的 <code>id</code> 和 <code>name</code>，按 <code>id</code> 升序。</p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">02</span></div>
+        <p>
+          列出所有 <code>status</code> 为 <code>unresolved</code> 的 Issue 的 <code>title</code> 和
+          <code>event_count</code>，事件多的排前面。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">03</span></div>
+        <p>
+          找出 <code>event_count</code> 在 5 到 20 之间（含两端）的 Issue 的 <code>id</code> 和
+          <code>event_count</code>，按 <code>id</code> 升序。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">04</span></div>
+        <p>
+          找出 <code>level</code> 是 <code>warning</code>、且 <code>title</code> 里含有
+          <code>Error</code> 的 Issue 的 <code>id</code>，按 <code>id</code> 升序。
+        </p>
+      </div>
+
+      <h3>聚合：GROUP BY / HAVING（第 6–8 章）</h3>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">05</span></div>
+        <p>
+          统计每个 <code>status</code> 各有多少个 Issue，列名用 <code>status</code> 和
+          <code>n</code>，按 <code>status</code> 升序。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">06</span></div>
+        <p>
+          每个项目有多少个 Issue、这些 Issue 的 <code>event_count</code> 合计是多少。输出
+          <code>project_id</code>、<code>issue_count</code>、<code>total_events</code>，按
+          <code>project_id</code> 升序。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">07</span></div>
+        <p>
+          在上一题基础上，只保留事件合计超过 10 的项目。输出 <code>project_id</code> 和
+          <code>total_events</code>，按 <code>total_events</code> 降序。
+        </p>
+      </div>
+
+      <h3>连接：JOIN（第 10–11 章）</h3>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">08</span></div>
+        <p>
+          把 Issue 和它所属的项目连起来，输出 Issue 的 <code>title</code> 和项目的
+          <code>name</code>（列名 <code>project_name</code>），只要
+          <code>level = 'error'</code> 的，按 <code>title</code> 升序。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">09</span></div>
+        <p>
+          找出一条事件都没有的 Issue 的 <code>id</code>。<strong
+            >要用 JOIN 做，不许直接读 <code>event_count</code> 列。</strong
+          >
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">10</span></div>
+        <p>
+          统计每个 Issue 的真实事件数与去重用户数，输出
+          <code>issue_id</code>、<code>real_events</code>、<code>real_users</code>，按
+          <code>real_events</code> 降序、<code>issue_id</code> 升序。孤儿事件（<code>issue_id</code>
+          为 NULL）不算。
+        </p>
+      </div>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">11</span></div>
+        <p>
+          列出所有项目的 <code>name</code> 和各自的 Issue 数量（列名
+          <code>issue_count</code>），<strong>没有 Issue 的项目也要出现</strong>（数量为 0），按
+          <code>name</code> 升序。
+        </p>
+      </div>
+
+      <h3>进阶：窗口函数（第 13 章）</h3>
+      <div class="ex">
+        <div class="ex-head"><span class="ex-num">12</span></div>
+        <p>
+          用窗口函数找出每个项目里 <code>event_count</code> 最高的那个 Issue，输出
+          <code>project_id</code>、<code>id</code>、<code>event_count</code>，按
+          <code>project_id</code> 升序。<code>event_count</code> 为 0 的也算。
+        </p>
+      </div>
+
+      <details>
+        <summary>卡住了？这里是提示，不是答案</summary>
+        <div class="reveal">
+          <ul>
+            <li><strong>03</strong> — 用 <code>BETWEEN</code>，它含两端。</li>
+            <li><strong>04</strong> — <code>LIKE</code> 的通配符是 <code>%</code>，两边都要加。</li>
+            <li>
+              <strong>07</strong> — 聚合结果做条件，只能用 <code>HAVING</code>（回看第 9
+              章的执行顺序）。
+            </li>
+            <li>
+              <strong>09</strong> — 第 10 章末尾那个套路：<code>LEFT JOIN</code> +
+              <code>WHERE 右表的列 IS NULL</code>。
+            </li>
+            <li>
+              <strong>10</strong> — 去重计数是 <code>COUNT(DISTINCT 列)</code>；排除孤儿用
+              <code>WHERE issue_id IS NOT NULL</code>，不是 <code>!= NULL</code>。
+            </li>
+            <li>
+              <strong>11</strong> — 要保留没有 Issue 的项目，说明
+              <code>projects</code> 是左表。计数别写 <code>COUNT(*)</code>（第 11 章的陷阱）。
+            </li>
+            <li>
+              <strong>12</strong> —
+              <code>ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)</code> 编号，外层再套一句
+              <code>WHERE rn = 1</code>。
+            </li>
+          </ul>
+          <p>
+            参考答案都在 <code>docs/sql-tutorial/check.mjs</code> 里，但先自己写——看答案学不会 SQL。
+          </p>
+        </div>
+      </details>
+    </section>
+
+    <section id="s19">
+      <div class="sec-head">
+        <span class="sec-num">19</span>
+        <h2>速查表</h2>
+      </div>
+      <div class="cheat">
+        <div class="card">
+          <h4>JS → SQL</h4>
+          <dl>
+            <dt>map</dt>
+            <dd>SELECT</dd>
+            <dt>filter</dt>
+            <dd>WHERE</dd>
+            <dt>sort</dt>
+            <dd>ORDER BY</dd>
+            <dt>slice</dt>
+            <dd>LIMIT / OFFSET</dd>
+            <dt>reduce</dt>
+            <dd>COUNT / SUM / AVG</dd>
+            <dt>分组 reduce</dt>
+            <dd>GROUP BY</dd>
+            <dt>new Set</dt>
+            <dd>DISTINCT</dd>
+            <dt>Map + 拼接</dt>
+            <dd>JOIN</dd>
+            <dt>中间变量</dt>
+            <dd>WITH（CTE）</dd>
+            <dt>??</dt>
+            <dd>COALESCE</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h4>执行顺序</h4>
+          <dl>
+            <dt>①</dt>
+            <dd>FROM / JOIN</dd>
+            <dt>②</dt>
+            <dd>WHERE — 不能用聚合</dd>
+            <dt>③</dt>
+            <dd>GROUP BY</dd>
+            <dt>④</dt>
+            <dd>HAVING — 可用聚合</dd>
+            <dt>⑤</dt>
+            <dd>SELECT — 别名在此产生</dd>
+            <dt>⑥</dt>
+            <dd>ORDER BY — 可用别名</dd>
+            <dt>⑦</dt>
+            <dd>LIMIT</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h4>必记的坑</h4>
+          <dl>
+            <dt>IS NULL</dt>
+            <dd>不是 = NULL</dd>
+            <dt>COUNT(列)</dt>
+            <dd>LEFT JOIN 后别用 COUNT(*)</dd>
+            <dt>'单引号'</dt>
+            <dd>双引号是列名</dd>
+            <dt>ORDER BY … , id</dt>
+            <dd>分页要有唯一排序键</dd>
+            <dt>NOT IN</dt>
+            <dd>子查询有 NULL 会返回空</dd>
+            <dt>WHERE</dt>
+            <dd>UPDATE/DELETE 前先 SELECT 验一遍</dd>
+            <dt>?</dt>
+            <dd>永远用占位符，不拼字符串</dd>
+          </dl>
+        </div>
+        <div class="card">
+          <h4>排查慢查询</h4>
+          <dl>
+            <dt>EXPLAIN QUERY PLAN</dt>
+            <dd>看执行计划</dd>
+            <dt>SEARCH</dt>
+            <dd>走了索引，好</dd>
+            <dt>SCAN</dt>
+            <dd>全表扫描，慢</dd>
+            <dt>复合索引</dt>
+            <dd>最左前缀，顺序要紧</dd>
+            <dt>LIKE '%x%'</dt>
+            <dd>用不上索引</dd>
+          </dl>
+        </div>
+      </div>
+      <h3>接下来学什么</h3>
+      <p>把这 12 道题做完，日常业务查询就够用了。之后按需要再补：</p>
+      <ul>
+        <li>
+          <strong>回到你的项目</strong>——读
+          <code>apps/server/src/services/queries.ts</code
+          >。那里有真实的聚合查询，现在你应该能看懂大半。看不懂的部分，就是下一个要学的点。
+        </li>
+        <li><strong>Drizzle 的链式写法</strong>——会 SQL 之后基本是 1:1 映射，半小时能上手。</li>
+        <li>
+          <strong>事务隔离级别、锁、N+1 查询</strong>——等真的遇到并发或性能问题再看，提前学记不住。
+        </li>
+      </ul>
+    </section>
+
+    <footer>
+      <p>
+        所有 SQL 示例与输出均在 <code>docs/sql-tutorial/</code> 的练习库上实际执行验证。表结构对应
+        <code>apps/server/src/db/client.ts</code>。
+      </p>
+    </footer>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var STORE = 'sql-tutorial-progress';
+    var toc = document.getElementById('toc');
+    var sections = Array.prototype.slice.call(document.querySelectorAll('section[id]'));
+
+    var done = {};
+    try {
+      done = JSON.parse(localStorage.getItem(STORE) || '{}') || {};
+    } catch (e) {
+      done = {};
+    }
+
+    var links = sections.map(function (sec) {
+      var num = sec.querySelector('.sec-num').textContent;
+      var title = sec.querySelector('h2').textContent;
+      var li = document.createElement('li');
+      var a = document.createElement('a');
+      a.href = '#' + sec.id;
+      a.innerHTML = '<span class="num"></span><span class="txt"></span><span class="tick">✓</span>';
+      a.querySelector('.num').textContent = num;
+      a.querySelector('.txt').textContent = title;
+      if (done[sec.id]) a.classList.add('done');
+      li.appendChild(a);
+      toc.appendChild(li);
+      return a;
+    });
+
+    // 读过的章节打勾：滚动到该章节顶部附近即视为读过，进度只存在本机浏览器里。
+    function mark(id) {
+      if (done[id]) return;
+      done[id] = 1;
+      try {
+        localStorage.setItem(STORE, JSON.stringify(done));
+      } catch (e) {
+        /* 无痕模式等场景忽略 */
+      }
+      var i = sections.findIndex(function (s) {
+        return s.id === id;
+      });
+      if (i >= 0) links[i].classList.add('done');
+    }
+
+    var current = null;
+    function onScroll() {
+      var best = null;
+      var bestTop = -Infinity;
+      for (var i = 0; i < sections.length; i++) {
+        var top = sections[i].getBoundingClientRect().top;
+        if (top < 120 && top > bestTop) {
+          bestTop = top;
+          best = i;
+        }
+      }
+      if (best === null) best = 0;
+      if (best !== current) {
+        if (current !== null) links[current].classList.remove('on');
+        links[best].classList.add('on');
+        current = best;
+        mark(sections[best].id);
+      }
+    }
+
+    addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    document.getElementById('reset').addEventListener('click', function () {
+      done = {};
+      try {
+        localStorage.removeItem(STORE);
+      } catch (e) {
+        /* 同上 */
+      }
+      links.forEach(function (a) {
+        a.classList.remove('done');
+      });
+    });
+  })();
+</script>

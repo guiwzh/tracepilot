@@ -13,3 +13,6 @@ pnpm-debug.log*
 # 生成的文档产物与本地规划草稿，不进入版本库
 output
 docs/plans
+# SQL 教程的本地练习库与个人答案，不进入版本库
+docs/sql-tutorial/.data
+docs/sql-tutorial/answers/*.sql
