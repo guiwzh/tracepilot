@@ -1,0 +1,2007 @@
+<title>从 fetch 到 server</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+/>
+<style>
+  :root {
+    --paper: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #e9edf2;
+    --ink: #131b24;
+    --muted: #5a6875;
+    --rule: #d3dae2;
+    --server: #1f4fd8;
+    --js: #8a6a18;
+    --trap: #b03a22;
+    --good: #1f6b4a;
+    --server-wash: #e7edfc;
+    --js-wash: #f6efdd;
+    --trap-wash: #fbeae5;
+    --good-wash: #e4f1ea;
+    --shadow: 0 1px 2px rgba(19, 27, 36, 0.06), 0 8px 24px -16px rgba(19, 27, 36, 0.28);
+    --serif: 'Spectral', Georgia, 'Songti SC', 'Noto Serif CJK SC', serif;
+    --sans:
+      'Source Sans 3', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --paper: #0f151b;
+      --surface: #161e26;
+      --surface-2: #1d2731;
+      --ink: #e4eaf0;
+      --muted: #94a4b3;
+      --rule: #2a3641;
+      --server: #7ba0ff;
+      --js: #d6a93c;
+      --trap: #e8735a;
+      --good: #55b98a;
+      --server-wash: #17243d;
+      --js-wash: #2b2415;
+      --trap-wash: #33201b;
+      --good-wash: #15291f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+    }
+  }
+  :root[data-theme='dark'] {
+    --paper: #0f151b;
+    --surface: #161e26;
+    --surface-2: #1d2731;
+    --ink: #e4eaf0;
+    --muted: #94a4b3;
+    --rule: #2a3641;
+    --server: #7ba0ff;
+    --js: #d6a93c;
+    --trap: #e8735a;
+    --good: #55b98a;
+    --server-wash: #17243d;
+    --js-wash: #2b2415;
+    --trap-wash: #33201b;
+    --good-wash: #15291f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);
+    gap: 48px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+
+  /* ---------- 章节导航 ---------- */
+  .rail {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+    padding: 32px 0;
+    font-size: 13.5px;
+  }
+  .rail h2 {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .rail ol {
+    list-style: none;
+    margin: 0 0 22px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .rail a {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: var(--muted);
+    text-decoration: none;
+    line-height: 1.35;
+  }
+  .rail a:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .rail a.on {
+    background: var(--server-wash);
+    color: var(--server);
+    font-weight: 600;
+  }
+  .rail .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    opacity: 0.75;
+    min-width: 1.4em;
+  }
+  .rail .tick {
+    margin-left: auto;
+    color: var(--good);
+    opacity: 0;
+    font-size: 12px;
+  }
+  .rail a.done .tick {
+    opacity: 1;
+  }
+  .reset {
+    font-size: 12px;
+    color: var(--muted);
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 4px 9px;
+    cursor: pointer;
+    font-family: var(--sans);
+  }
+  .reset:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
+
+  /* ---------- 排版 ---------- */
+  main {
+    min-width: 0;
+    padding-top: 52px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(34px, 5vw, 50px);
+    line-height: 1.1;
+    font-weight: 700;
+    margin: 0 0 16px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 64ch;
+    margin: 0 0 18px;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-size: 27px;
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 0 0 6px;
+    text-wrap: balance;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    margin: 26px 0 8px;
+    letter-spacing: 0.005em;
+  }
+  p {
+    max-width: 66ch;
+    margin: 0 0 14px;
+  }
+  main ul,
+  main ol {
+    max-width: 66ch;
+    margin: 0 0 14px;
+    padding-left: 1.3em;
+  }
+  main li {
+    margin-bottom: 5px;
+  }
+  a {
+    color: var(--server);
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.9em;
+    background: var(--surface-2);
+    padding: 0.12em 0.38em;
+    border-radius: 4px;
+  }
+  strong {
+    font-weight: 700;
+  }
+  .kbd {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    border: 1px solid var(--rule);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0.1em 0.4em;
+    background: var(--surface);
+  }
+
+  section {
+    scroll-margin-top: 24px;
+    padding: 38px 0 6px;
+    border-top: 1px solid var(--rule);
+  }
+  section:first-of-type {
+    border-top: none;
+  }
+  .sec-head {
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--server);
+    background: var(--server-wash);
+    border-radius: 4px;
+    padding: 3px 8px;
+    white-space: nowrap;
+    position: relative;
+    top: -2px;
+  }
+
+  /* ---------- 对照译文块 ---------- */
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    margin: 0 0 16px;
+  }
+  .pane {
+    background: var(--surface);
+    padding: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .pane-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-weight: 600;
+  }
+  .pane-js .pane-label {
+    color: var(--js);
+    background: var(--js-wash);
+  }
+  .pane-server .pane-label {
+    color: var(--server);
+    background: var(--server-wash);
+  }
+  .pane pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .k {
+    color: var(--server);
+    font-weight: 600;
+  }
+  .pane-js .k {
+    color: var(--js);
+  }
+  .s {
+    color: var(--good);
+  }
+  .c {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .code-solo {
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    margin: 0 0 16px;
+    background: var(--surface);
+  }
+  .code-solo .pane-label {
+    color: var(--server);
+    background: var(--server-wash);
+  }
+  .code-solo pre {
+    padding: 14px;
+    overflow-x: auto;
+  }
+
+  /* ---------- 结果块 ---------- */
+  .out {
+    margin: 0 0 22px;
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .out-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    color: var(--good);
+    background: var(--good-wash);
+    font-weight: 600;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .out-label .n {
+    opacity: 0.8;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  .scroll {
+    overflow-x: auto;
+  }
+  table {
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    width: 100%;
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--muted);
+    padding: 8px 14px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+    font-size: 11.5px;
+  }
+  td {
+    padding: 6px 14px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule);
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  td.null {
+    color: var(--muted);
+    font-style: italic;
+  }
+  td.hl {
+    color: var(--trap);
+    font-weight: 600;
+  }
+  td.ok {
+    color: var(--good);
+    font-weight: 600;
+  }
+  .term {
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--ink);
+  }
+
+  /* ---------- 陷阱 / 提示 ---------- */
+  .note {
+    border-left: 3px solid var(--muted);
+    padding: 12px 16px;
+    margin: 0 0 20px;
+    background: var(--surface);
+    border-radius: 0 7px 7px 0;
+    max-width: 70ch;
+  }
+  .note.trap {
+    border-left-color: var(--trap);
+    background: var(--trap-wash);
+  }
+  .note.tip {
+    border-left-color: var(--good);
+    background: var(--good-wash);
+  }
+  .note-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+  }
+  .note.trap .note-title {
+    color: var(--trap);
+  }
+  .note.tip .note-title {
+    color: var(--good);
+  }
+  .note p {
+    margin: 0;
+    font-size: 15px;
+    max-width: none;
+  }
+  /* 注释卡里的代码块：必须能独立横向滚动，否则会把整页撑宽。 */
+  .note pre {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 12px;
+    margin: 10px 0 0;
+    font-size: 12.5px;
+  }
+  .note p + p {
+    margin-top: 9px;
+  }
+
+  /* ---------- 想一想 ---------- */
+  details {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    background: var(--surface);
+    margin: 0 0 18px;
+    overflow: hidden;
+  }
+  summary {
+    cursor: pointer;
+    padding: 11px 15px;
+    font-weight: 600;
+    font-size: 14.5px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::before {
+    content: '▸';
+    color: var(--server);
+    font-size: 12px;
+    transition: transform 0.15s;
+  }
+  details[open] summary::before {
+    transform: rotate(90deg);
+  }
+  summary:hover {
+    background: var(--surface-2);
+  }
+  .reveal {
+    padding: 2px 15px 14px;
+    border-top: 1px solid var(--rule);
+  }
+  .reveal p:last-child,
+  .reveal ul:last-child {
+    margin-bottom: 0;
+  }
+  .reveal pre {
+    margin: 10px 0;
+  }
+
+  /* ---------- 练习 ---------- */
+  .ex {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--server);
+    border-radius: 0 8px 8px 0;
+    background: var(--surface);
+    padding: 14px 16px;
+    margin: 0 0 12px;
+  }
+  .ex-head {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .ex-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--server);
+  }
+  .ex-cmd {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .ex p {
+    margin: 0;
+    max-width: none;
+    font-size: 15px;
+  }
+
+  /* ---------- 速查 ---------- */
+  .cheat {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+    margin: 0 0 20px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 9px;
+    padding: 14px 16px;
+  }
+  .card h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  .card dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 5px 12px;
+    font-size: 13.5px;
+  }
+  .card dt {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--server);
+    white-space: nowrap;
+  }
+  .card dd {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  footer {
+    margin-top: 44px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+  :focus-visible {
+    outline: 2px solid var(--server);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+  @media (max-width: 900px) {
+    .wrap {
+      grid-template-columns: 1fr;
+      gap: 0;
+      padding: 0 20px 64px;
+    }
+    .rail {
+      position: static;
+      max-height: none;
+      padding: 24px 0 0;
+      border-bottom: 1px solid var(--rule);
+      margin-bottom: 8px;
+    }
+    .rail ol {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 0;
+    }
+    main {
+      padding-top: 28px;
+    }
+    .pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<div class="wrap">
+  <nav class="rail">
+    <h2>章节</h2>
+    <ol id="toc"></ol>
+    <button class="reset" id="reset" type="button">清除进度</button>
+  </nav>
+
+  <main>
+    <p class="eyebrow">TracePilot · 给前端的服务端入门</p>
+    <h1>从 fetch 到 server</h1>
+    <p class="lede">
+      你已经写过成千上万次
+      <code>fetch</code> 了。服务端做的是同一件事的<strong>另一端</strong>：你发出去的那个请求，
+      在对面被拆成方法、路径、查询参数和一个字节流，再被组装成一个响应发回来。这份教程按对照译文的方式写：
+      左边是你熟悉的浏览器端，右边是服务端收到它时的样子。
+    </p>
+    <p class="lede">
+      所有代码都只用 Node 内置的 <code>node:http</code>——<strong>零依赖、零启动 flag</strong>。
+      先用最朴素的方式把一个 server 写出来，最后再看 Fastify 到底替你做了什么。
+      那时候框架就不再是需要「学」的东西，而是你已经手写过一遍的东西的简写。
+    </p>
+
+    <section id="s0">
+      <div class="sec-head">
+        <span class="sec-num">00</span>
+        <h2>先把练习环境跑起来</h2>
+      </div>
+      <p>
+        不要只读。服务端和 SQL 一样是手上功夫，而且它比 SQL 更需要动手——
+        很多概念（流、状态码、预检）读起来都平平无奇，真正卡住你的是第一次自己写的时候。
+      </p>
+      <p>这套练习不用装任何东西，<code>node:http</code> 是 Node 内置的。在仓库根目录执行：</p>
+      <div class="code-solo">
+        <div class="pane-label">终端</div>
+        <pre><code><span class="c"># 1. 看有哪些题</span>
+node docs/server-tutorial/serve.mjs --list
+
+<span class="c"># 2. 看某一题的题面</span>
+node docs/server-tutorial/serve.mjs 01 --prompt
+
+<span class="c"># 3. 答案写进 answers/01.mjs，然后判分</span>
+node docs/server-tutorial/check.mjs 01
+
+<span class="c"># 4. 卡住时把答案跑成真 server，手动 curl</span>
+node docs/server-tutorial/serve.mjs 01</code></pre>
+      </div>
+      <p>
+        第 4 条会把判分用的 <code>curl</code> 命令直接打印出来，复制粘贴就能跑。
+        写不出来的时候，先把响应打出来看看，比盯着代码猜快得多。
+      </p>
+      <div class="note tip">
+        <div class="note-title">判分看行为，不看写法</div>
+        <p>
+          <code>check.mjs</code> 会真的启动一个 HTTP server 跑你的 handler，发真实请求，比对响应。
+          所以用正则还是 <code>split</code>、用 <code>writeHead</code> 还是 <code>setHeader</code>、
+          用 <code>req.on('data')</code> 还是 <code>for await</code>，只要行为一致就算通过。
+        </p>
+        <p>
+          答案写在 <code>docs/server-tutorial/answers/</code>，已被
+          <code>.gitignore</code> 忽略，随便写。
+        </p>
+      </div>
+      <div class="note">
+        <div class="note-title">这跟上一份 SQL 教程什么关系</div>
+        <p>
+          数据身份完全一致——一样的
+          <code>demo-project</code>、<code>iss-hydrate</code>、<code>evt-0001</code>，
+          一样留了「没有 Issue 的项目」和「没有事件的 Issue」那几个坑。两套练习讲的是同一个系统：
+          那边练<strong>数据怎么查出来</strong>，这里练<strong
+            >数据怎么经过 HTTP 安全地收进来、发出去</strong
+          >。
+        </p>
+        <p>
+          区别是这里的数据层是内存对象而不是数据库，因为这份教程的目标是 HTTP，不是再练一遍 SQL。 但
+          <code>lib/store.mjs</code> 里每个方法都标注了它对应的真实 SQL——换成数据库之后， HTTP
+          这一层一行都不用改。<strong>这就是分层的意义。</strong>
+        </p>
+      </div>
+    </section>
+
+    <section id="s1">
+      <div class="sec-head">
+        <span class="sec-num">01</span>
+        <h2>心智模型：进程一直活着</h2>
+      </div>
+      <p>
+        这是前端转服务端最需要翻转的一个认知。浏览器里，一次刷新什么都没了；
+        服务端是一个<strong>长期活着的进程</strong>，模块顶层的代码只在启动时跑一次，之后处理成千上万个请求。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">浏览器：每次刷新都重来</div>
+          <pre><code><span class="c">// 刷新页面 → 这行重新执行</span>
+<span class="k">const</span> cache = <span class="k">new</span> Map();
+
+<span class="c">// 用户关掉标签页 → 全没了</span></code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">服务端：启动时跑一次，然后一直在</div>
+          <pre><code><span class="c">// 进程启动时执行一次</span>
+<span class="k">const</span> db = createDatabase(path);
+
+<span class="c">// 之后所有请求共用这一个 db</span>
+<span class="c">// 进程不死，它就不死</span></code></pre>
+        </div>
+      </div>
+      <p>
+        TracePilot 里就是这样：<code>apps/server/src/app.ts</code> 的
+        <code>createDatabase()</code> 整个进程只调用一次，那个数据库连接被之后所有请求共享。
+        <strong>模块顶层代码 = 启动代码</strong>，这个等式记住了，很多写法就都说得通了。
+      </p>
+      <div class="note trap">
+        <div class="note-title">由此带来的三个后果</div>
+        <p>
+          <strong>1. 内存泄漏是真问题。</strong>浏览器里你不小心留个全局变量，用户刷新就清了。
+          服务端的进程要活几天几周，每个请求漏一点，最后就是 OOM。
+        </p>
+        <p>
+          <strong>2. 全局可变状态会跨请求串味。</strong>模块顶层写
+          <code>let currentUser</code>，两个请求并发过来就会互相覆盖。 请求相关的状态必须留在
+          handler 内部。
+        </p>
+        <p>
+          <strong>3. 一个没抓的异常可能弄死整个进程。</strong>浏览器里报个错顶多这个页面坏了；
+          服务端的未捕获异常会让 Node 退出，<strong>所有</strong>用户一起断。 这就是
+          <code>app.ts</code> 末尾 <code>setErrorHandler</code> 存在的理由。
+        </p>
+      </div>
+      <p>
+        顺带一提，<code>apps/server/src/index.ts</code> 用的是
+        <code>process.exitCode = 1</code> 而不是
+        <code>process.exit(1)</code>。区别是前者「标记退出码，等事情做完再退」，
+        后者「立刻退，日志可能还没冲刷到磁盘就没了」。注释里写了这一点。
+      </p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head">
+        <span class="sec-num">02</span>
+        <h2>一个请求的两端</h2>
+      </div>
+      <p>
+        你写的每个 <code>fetch</code>，在服务端都会变成一个 <code>req</code> 对象。
+        把这两边并排看一次，服务端就不神秘了：
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你写的（浏览器端）</div>
+          <pre><code>fetch(
+  <span class="s">'/api/v1/issues/iss-hydrate?limit=50'</span>,
+  {
+    method: <span class="s">'PATCH'</span>,
+    headers: {
+      <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span>,
+    },
+    body: JSON.stringify({
+      status: <span class="s">'resolved'</span>,
+    }),
+  },
+);</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">服务端收到的（req 对象）</div>
+          <pre><code>req.method
+<span class="c">// → 'PATCH'</span>
+
+req.url
+<span class="c">// → '/api/v1/issues/iss-hydrate?limit=50'</span>
+<span class="c">//   注意：没有协议，没有域名</span>
+
+req.headers[<span class="s">'content-type'</span>]
+<span class="c">// → 'application/json'  （键一律小写）</span>
+
+<span class="c">// body 呢？不在属性里。</span>
+<span class="c">// req 本身就是个流，要自己读。见第 05 章。</span></code></pre>
+        </div>
+      </div>
+      <p>三个立刻要记住的点：</p>
+      <ul>
+        <li>
+          <strong><code>req.url</code> 不是完整 URL。</strong>它只有路径和查询串。 想用
+          <code>URL</code> 类解析，必须补一个 base：
+          <code>new URL(req.url, 'http://localhost')</code>。
+        </li>
+        <li>
+          <strong>请求头的键一律是小写。</strong>你在浏览器里写
+          <code>'Content-Type'</code>，服务端读到的是 <code>req.headers['content-type']</code>。
+          HTTP 头名本来就不区分大小写，Node 统一转小写了。
+        </li>
+        <li><strong>body 不是属性。</strong>这是最大的差异，单独用一章讲。</li>
+      </ul>
+      <div class="note">
+        <div class="note-title">路径参数和查询参数的分工</div>
+        <p>
+          <code>/api/v1/issues/iss-hydrate?limit=50</code> 里，
+          <code>iss-hydrate</code> 是<strong>路径参数</strong>（定位「哪个资源」），
+          <code>limit=50</code> 是<strong>查询参数</strong>（修饰「怎么返回」）。
+        </p>
+        <p>
+          这个分工不是硬规定，但是行业惯例，也是 TracePilot 遵守的：
+          <code>/api/v1/issues/:issueId</code> 用路径定位 Issue，
+          <code>?page&amp;pageSize&amp;status&amp;level</code> 用查询控制筛选和分页。
+          面试时被问「什么时候用 path 什么时候用 query」，答这个就对了。
+        </p>
+      </div>
+    </section>
+
+    <section id="s3">
+      <div class="sec-head">
+        <span class="sec-num">03</span>
+        <h2>res：状态码、头和 body 都要你自己写</h2>
+      </div>
+      <p>
+        浏览器端 <code>fetch</code> 帮你把响应解析成了 <code>Response</code> 对象，
+        <code>.json()</code> 一调用就拿到数据。服务端这一侧什么都没有，全要自己组装。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你习惯的读取方式</div>
+          <pre><code><span class="k">const</span> res = <span class="k">await</span> fetch(url);
+
+res.status       <span class="c">// 200</span>
+res.headers.get(<span class="s">'content-type'</span>)
+<span class="k">const</span> data = <span class="k">await</span> res.json();
+<span class="c">// ↑ 自动解析</span></code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">服务端的写入方式</div>
+          <pre><code>res.writeHead(<span class="s">200</span>, {
+  <span class="s">'Content-Type'</span>: <span class="s">'application/json; charset=utf-8'</span>,
+});
+res.end(JSON.stringify(data));
+<span class="c">// ↑ 要自己 stringify，Node 不替你猜</span></code></pre>
+        </div>
+      </div>
+      <p>
+        整个服务端编程，很大一部分就是在决定这三件事：<strong
+          >状态码是多少、带哪些头、body 是什么</strong
+        >。 所以练习 01 就是纯粹的这个。
+      </p>
+      <div class="note trap">
+        <div class="note-title">res.end() 只能调用一次</div>
+        <p>
+          响应一旦发出去就结束了。第二次调用 <code>res.end()</code> 或 <code>writeHead()</code> 会抛
+          <code>ERR_STREAM_WRITE_AFTER_END</code> / <code>ERR_HTTP_HEADERS_SENT</code>。
+        </p>
+        <p>新手最常见的写法错误是忘了 <code>return</code>：</p>
+        <pre><code><span class="k">if</span> (!issue) {
+  json(<span class="s">404</span>, { error: <span class="s">'ISSUE_NOT_FOUND'</span> });   <span class="c">// 忘了 return</span>
+}
+json(<span class="s">200</span>, issue);   <span class="c">// 💥 又发一次，进程报错</span></code></pre>
+        <p>
+          所以本教程的参考答案里，每个分支都写成
+          <code>return json(...)</code> 或者 <code>json(...); return;</code>。 Fastify
+          里这个问题轻一些——handler 的返回值就是响应体，不需要手动 end。
+        </p>
+      </div>
+      <p>
+        另外注意 <code>Content-Type</code> 必须自己设。不设的话 Node 不会加这个头，
+        浏览器就得靠猜，<code>fetch().json()</code> 可能直接失败。
+        <strong>练习 01 会检查这个头。</strong>
+      </p>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head">
+        <span class="sec-num">04</span>
+        <h2>路由：URL 要自己拆</h2>
+      </div>
+      <p>
+        没有框架的时候，「路由」就是一串 <code>if</code>。这件事做一遍，你就知道 Fastify 的
+        <code>app.get('/api/v1/issues/:issueId', ...)</code> 到底省了什么。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">手写（练习 04 要你做的）</div>
+          <pre><code><span class="k">const</span> url = <span class="k">new</span> URL(req.url, <span class="s">'http://localhost'</span>);
+<span class="k">const</span> seg = url.pathname.split(<span class="s">'/'</span>);
+<span class="c">// '/api/v1/issues/iss-hydrate'</span>
+<span class="c">// → ['', 'api', 'v1', 'issues', 'iss-hydrate']</span>
+<span class="c">//    ↑ 注意开头的空字符串</span>
+
+<span class="k">if</span> (seg.length === <span class="s">5</span> &amp;&amp; seg[<span class="s">3</span>] === <span class="s">'issues'</span>) {
+  <span class="k">const</span> issueId = seg[<span class="s">4</span>];
+  <span class="c">// ...</span>
+}</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">Fastify（项目里真实的写法）</div>
+          <pre><code>app.get(
+  <span class="s">'/api/v1/issues/:issueId'</span>,
+  <span class="k">async</span> (request, reply) =&gt; {
+    <span class="k">const</span> issueId = request.params.issueId;
+    <span class="c">// ...</span>
+  },
+);</code></pre>
+        </div>
+      </div>
+      <p>
+        框架做的是「把 URL 模式编译成一棵树，然后一次匹配出方法 + 路径 + 参数」。 Fastify 用的是
+        radix tree，这也是它比 Express 快的主要原因之一。
+        但<strong>概念上就是上面左边那段</strong>，只是更快更整齐。
+      </p>
+      <div class="note tip">
+        <div class="note-title">查询参数拿到的永远是字符串</div>
+        <p>
+          <code>url.searchParams.get('page')</code> 返回 <code>string | null</code>，
+          永远不会是数字。所以 TracePilot 的 <code>routes/issues.ts</code> 里有个
+          <code>positiveInteger()</code> 专门做转换和夹紧—— 这是练习 08
+          的内容，也是<strong>信任边界</strong>的第一课。
+        </p>
+      </div>
+    </section>
+    <section id="s5">
+      <div class="sec-head">
+        <span class="sec-num">05</span>
+        <h2>body 是一个流，不是属性</h2>
+      </div>
+      <p>这是整份教程里最重要的一章。前端所有人都在这里卡过一次。</p>
+      <p>
+        <code>fetch</code> 帮你把 body 封装成了 <code>await res.json()</code>，
+        一行就拿到。服务端没有这一层：<strong>请求体是分块到达的</strong>，
+        <code>req</code> 本身就是一个可读流，你要自己把块拼起来。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你以为的</div>
+          <pre><code><span class="c">// ❌ 这个属性不存在</span>
+<span class="k">const</span> body = req.body;
+
+<span class="c">// undefined</span></code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">实际要写的</div>
+          <pre><code><span class="k">function</span> readBody(req) {
+  <span class="k">return new</span> Promise((resolve, reject) =&gt; {
+    <span class="k">const</span> chunks = [];
+    req.on(<span class="s">'data'</span>, (c) =&gt; chunks.push(c));
+    req.on(<span class="s">'end'</span>, () =&gt; {
+      <span class="k">const</span> raw = Buffer.concat(chunks);
+      resolve(raw.toString(<span class="s">'utf8'</span>));
+    });
+    req.on(<span class="s">'error'</span>, reject);
+  });
+}
+
+<span class="k">const</span> raw = <span class="k">await</span> readBody(req);
+<span class="k">const</span> body = JSON.parse(raw);</code></pre>
+        </div>
+      </div>
+      <p>
+        Node 18+ 里 <code>req</code> 也是异步可迭代的，所以还有个更短的写法，
+        两种都行（练习判分不关心你用哪种）：
+      </p>
+      <div class="code-solo">
+        <div class="pane-label">更短的等价写法</div>
+        <pre><code><span class="k">let</span> raw = <span class="s">''</span>;
+<span class="k">for await</span> (<span class="k">const</span> chunk <span class="k">of</span> req) raw += chunk;</code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">为什么要设计成流</div>
+        <p>
+          因为 body 可能很大。如果 Node 强行把每个请求体都读进内存再给你， 一个 2GB
+          的上传就能把进程打死。流让你可以<strong>边收边处理</strong>，
+          或者在发现太大时<strong>提前掐断</strong>。
+        </p>
+        <p>
+          TracePilot 就用了后者：<code>app.ts</code> 里 <code>bodyLimit: 1_048_576</code>（1MB），
+          注释写得很明白——「在框架解析 JSON 前限制请求体，防止超大遥测包耗尽内存」。 Source Map
+          上传那条路径是单独的 10MB 上限，因为 <code>.map</code> 文件本来就大。
+        </p>
+        <p>
+          <strong>这是一道面试题的标准答案</strong>：「为什么 Node 的请求体是流？」 ——
+          因为内存是有限的，而请求体大小是客户端说了算的。
+        </p>
+      </div>
+      <p>
+        还要注意：<code>JSON.parse</code> 遇到坏数据会<strong>抛异常</strong>。 网络来的 body
+        一定会有坏数据（爬虫、探测、写错的客户端）， 所以必须 <code>try/catch</code>，返回
+        400，而不是让进程崩掉。练习 05 会测这个。
+      </p>
+    </section>
+
+    <section id="s6">
+      <div class="sec-head">
+        <span class="sec-num">06</span>
+        <h2>状态码：用对了它就是文档</h2>
+      </div>
+      <p>
+        前端对状态码的印象通常是「200 好、404 没了、500 后端炸了」。 写服务端要精确得多——<strong
+          >状态码是 API 契约的一部分</strong
+        >， 客户端靠它决定要不要重试、要不要提示用户、要不要跳登录。
+      </p>
+      <p>这是 TracePilot 实际用到的全部状态码，每个都有明确分工：</p>
+      <div class="out">
+        <div class="out-label"><span>项目里的状态码分工</span><span class="n">8 个</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>码</th>
+              <th>含义</th>
+              <th>项目里用在哪</th>
+            </tr>
+            <tr>
+              <td class="ok">200</td>
+              <td>成功，body 是结果</td>
+              <td>所有 GET 查询、PATCH 改状态</td>
+            </tr>
+            <tr>
+              <td class="ok">201</td>
+              <td>成功，<strong>并且创建了新资源</strong></td>
+              <td>Source Map 上传成功</td>
+            </tr>
+            <tr>
+              <td class="ok">202</td>
+              <td>已接收，<strong>但不保证处理完了</strong></td>
+              <td>遥测接入 <code>/api/v1/envelopes</code></td>
+            </tr>
+            <tr>
+              <td class="hl">400</td>
+              <td>你发的东西格式不对</td>
+              <td>Zod 校验失败、状态值非法</td>
+            </tr>
+            <tr>
+              <td class="hl">403</td>
+              <td>格式对，但你没权限</td>
+              <td>DSN Key 无效、projectId 对不上</td>
+            </tr>
+            <tr>
+              <td class="hl">404</td>
+              <td>这个资源不存在</td>
+              <td>Issue / Release 查不到</td>
+            </tr>
+            <tr>
+              <td class="hl">415</td>
+              <td>格式对，但类型我不收</td>
+              <td>上传的不是 <code>.map</code> 文件</td>
+            </tr>
+            <tr>
+              <td class="null">500</td>
+              <td>我这边炸了，不是你的错</td>
+              <td><code>setErrorHandler</code> 兜底</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <div class="note">
+        <div class="note-title">202 是个值得讲的选择</div>
+        <p>
+          遥测接入返回的是 <strong>202 Accepted</strong> 而不是 200。 差别在语义：200
+          说「做完了」，202 说「收到了，后面的事你不用等」。
+        </p>
+        <p>
+          <code>routes/events.ts</code> 的注释写了原因——
+          「表示服务端已经接收并处理该遥测批次，不要求浏览器等待后续调查动作」。 监控 SDK
+          发完就该走人，不该为了等服务端做完聚合而拖慢宿主页面。
+          <strong>用 202 就是在协议层面把这件事说清楚。</strong>
+        </p>
+      </div>
+      <div class="note trap">
+        <div class="note-title">400 和 404 的顺序会暴露你的水平</div>
+        <p>
+          <code>PATCH /api/v1/issues/<em>不存在的 id</em>/status</code>，body 里的 status
+          也是非法值。 该返回 400 还是 404？
+        </p>
+        <p>
+          <strong>400。</strong>先校验输入格式，再查资源存不存在。
+          理由：格式都不对的请求，服务端根本没必要去查数据库；
+          而且「你的参数写错了」比「这个东西不存在」对调用方更有用——
+          后者会让人以为是数据问题，白白排查半天。
+        </p>
+        <p>练习 06 专门测了这个顺序，有一条用例就是「不存在的 Issue + 非法 status」。</p>
+      </div>
+    </section>
+
+    <section id="s7">
+      <div class="sec-head">
+        <span class="sec-num">07</span>
+        <h2>CORS：那个报错其实是服务端的事</h2>
+      </div>
+      <p>
+        每个前端都见过这句：
+        <code>Access to fetch at ... has been blocked by CORS policy</code>。
+        很多人以为是浏览器在找茬，或者以为是自己 fetch 写错了。都不是。
+      </p>
+      <p>
+        <strong>CORS 是一组响应头，由服务端发出。</strong>
+        浏览器只是执行者：它看服务端有没有在响应里说「我允许这个来源读我」， 没说就拦下来，不给 JS
+        读。<strong>请求其实已经发出去了</strong>—— 这一点很多人不知道，所以「CORS
+        报错了但数据库里已经写进去了」是完全可能的。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你看到的（浏览器端）</div>
+          <pre><code><span class="c">// Dashboard 跑在 :4173</span>
+<span class="c">// Server  跑在 :4318</span>
+<span class="c">// 端口不同 = 跨源</span>
+
+fetch(<span class="s">'http://localhost:4318/api/v1/projects'</span>)
+<span class="c">// ❌ blocked by CORS policy</span></code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">要在服务端加的（练习 07）</div>
+          <pre><code>res.setHeader(
+  <span class="s">'Access-Control-Allow-Origin'</span>,
+  <span class="s">'*'</span>,
+);
+
+<span class="c">// 预检请求直接放行，不走业务逻辑</span>
+<span class="k">if</span> (req.method === <span class="s">'OPTIONS'</span>) {
+  res.writeHead(<span class="s">204</span>, {
+    <span class="s">'Access-Control-Allow-Methods'</span>:
+      <span class="s">'GET, POST, PATCH, OPTIONS'</span>,
+    <span class="s">'Access-Control-Allow-Headers'</span>: <span class="s">'content-type'</span>,
+  });
+  <span class="k">return</span> res.end();   <span class="c">// 204 = 无 body</span>
+}</code></pre>
+        </div>
+      </div>
+      <p>
+        TracePilot 里这件事由 <code>@fastify/cors</code> 插件做，就在 <code>app.ts</code> 那一行
+        <code>app.register(cors, { origin: true, ... })</code>。
+        手写一遍之后你就知道那个插件在干什么了。
+      </p>
+      <div class="note">
+        <div class="note-title">预检（preflight）是什么</div>
+        <p>
+          「简单请求」（GET、或者 <code>Content-Type</code> 是表单类型的 POST）浏览器直接发。
+          但只要你带了 <code>Content-Type: application/json</code>、 自定义头、或者用了
+          PATCH/DELETE，浏览器会<strong>先发一个 OPTIONS 请求问一句</strong>，
+          服务端答应了才发真正的请求。
+        </p>
+        <p>
+          这就是为什么你的接口明明是 POST，DevTools 里却看到两条记录。 也是为什么
+          <strong>OPTIONS 必须在业务逻辑之前处理掉</strong>——
+          它不该走进你的路由匹配，更不该因为「没有这个方法」被 405 拒绝。
+        </p>
+        <p>
+          <code>origin: '*'</code> 在开发和公开只读 API 上没问题。 但一旦要带 Cookie 凭证，<code
+            >*</code
+          >
+          就不允许了，必须回显具体来源并加 <code>Access-Control-Allow-Credentials</code>。TracePilot
+          是单用户 MVP，没走到这一步。
+        </p>
+      </div>
+    </section>
+
+    <section id="s8">
+      <div class="sec-head">
+        <span class="sec-num">08</span>
+        <h2>信任边界：网络来的东西一律不可信</h2>
+      </div>
+      <p>
+        从这一章开始，讲的不再是「怎么让它跑起来」，而是<strong>「怎么让它不出事」</strong>。
+        这部分是服务端和前端心态差别最大的地方，也是面试最容易问出深度的地方。
+      </p>
+      <p>
+        一句话原则：<strong>凡是从网络进来的，都当成攻击者精心构造的。</strong>
+        不是因为悲观，而是因为成本不对称——你多写三行校验，对方要绕过就得多花几个数量级的力气。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">前端的假设</div>
+          <pre><code><span class="c">// 这个值来自我自己写的表单</span>
+<span class="c">// 我知道它是 1~100 的整数</span>
+<span class="k">const</span> pageSize = form.pageSize;
+
+fetch(<span class="s">`/api/issues?pageSize=`</span> + pageSize);</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">服务端必须的假设</div>
+          <pre><code><span class="c">// 这个值可能是：</span>
+<span class="c">//   -1       → 非法 LIMIT</span>
+<span class="c">//   999999   → 一次拖垮数据库</span>
+<span class="c">//   'abc'    → NaN</span>
+<span class="c">//   3.7      → 小数</span>
+<span class="c">//   (不传)   → undefined</span>
+<span class="k">const</span> pageSize = positiveInteger(
+  query.pageSize, <span class="s">25</span>, <span class="s">100</span>,
+);</code></pre>
+        </div>
+      </div>
+      <p>
+        <code>positiveInteger</code> 是 TracePilot 真实存在的函数，就在
+        <code>routes/issues.ts</code> 开头。它只有五行，但这五行挡住的是 「有人把
+        <code>pageSize</code> 改成 <code>9999999</code> 然后你的服务器开始往内存里塞一百万行」。
+      </p>
+      <div class="code-solo">
+        <div class="pane-label">apps/server/src/routes/issues.ts</div>
+        <pre><code><span class="k">function</span> positiveInteger(value, fallback, maximum) {
+  <span class="c">// 查询参数均来自字符串；夹紧范围可避免负 LIMIT 或一次读取过多事件。</span>
+  <span class="k">const</span> parsed = Number(value ?? fallback);
+  <span class="k">if</span> (!Number.isFinite(parsed)) <span class="k">return</span> fallback;
+  <span class="k">return</span> Math.max(<span class="s">1</span>, Math.min(maximum, Math.floor(parsed)));
+}</code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">Number() 的三种空值行为要分清</div>
+        <p>
+          <code>Number('')</code> 是 <strong>0</strong>， <code>Number(null)</code> 是
+          <strong>0</strong>， <code>Number('abc')</code> 是 <strong>NaN</strong>，
+          <code>Number(undefined)</code> 也是 <strong>NaN</strong>。
+        </p>
+        <p>
+          所以不能只写 <code>Number(x) || fallback</code>——那样 <code>pageSize=0</code> 和
+          <code>pageSize=abc</code> 会走同一条路， 而且真正传 0 的时候你分不清是「用户传了
+          0」还是「没传」。 先判 <code>Number.isFinite</code>，再夹紧，才是对的。练习 08
+          把这几种输入都测了。
+        </p>
+      </div>
+      <p>
+        还有一个更重要的信任边界：<strong>SQL 注入</strong>。 <code>queries.ts</code> 里有一段动态拼
+        <code>WHERE</code> 的逻辑，注释特意写明了纪律： 「SQL 片段来自固定代码，所有用户值都进入
+        params 占位符」。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">❌ 绝对不能这么写</div>
+          <pre><code>db.prepare(
+  <span class="s">`SELECT * FROM issues
+   WHERE status = '`</span> + query.status + <span class="s">`'`</span>
+).all();
+
+<span class="c">// status = "' OR '1'='1"</span>
+<span class="c">// → 整张表被读走</span></code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">✅ 项目里的写法</div>
+          <pre><code>conditions.push(<span class="s">'i.status = ?'</span>);
+params.push(query.status);
+
+<span class="c">// SQL 文本里只有 ?，用户值单独传</span>
+<span class="c">// 数据库不会把它当语法解析</span>
+db.prepare(sql).all(...params);</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="s9">
+      <div class="sec-head">
+        <span class="sec-num">09</span>
+        <h2>运行时校验：TypeScript 在这里帮不了你</h2>
+      </div>
+      <p>
+        这是前端最容易误判的一点。项目是 TypeScript 写的，接口也声明了类型，
+        很自然会觉得「类型系统会帮我挡住脏数据」。
+      </p>
+      <p><strong>不会。TypeScript 的类型在编译后全部消失。</strong></p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">看起来安全（其实是谎言）</div>
+          <pre><code><span class="k">interface</span> Envelope {
+  dsnKey: <span class="k">string</span>;
+  events: MonitorEvent[];
+}
+
+app.post(<span class="s">'/api/v1/envelopes'</span>, (req) =&gt; {
+  <span class="k">const</span> body = req.body <span class="k">as</span> Envelope;
+  <span class="c">// ↑ as 只是让编译器闭嘴</span>
+  <span class="c">//   运行时 body 可能是 null、字符串、</span>
+  <span class="c">//   或者 events 是个数字</span>
+  body.events.length;  <span class="c">// 💥</span>
+});</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">项目里真实的写法</div>
+          <pre><code><span class="k">const</span> parsed = envelopeSchema.safeParse(req.body);
+<span class="k">if</span> (!parsed.success) {
+  <span class="k">return</span> reply.code(<span class="s">400</span>).send({
+    error: <span class="s">'INVALID_ENVELOPE'</span>,
+    details: parsed.error.flatten(),
+  });
+}
+<span class="c">// 到这里 parsed.data 才真的是 Envelope</span>
+<span class="k">const</span> result =
+  ingestEnvelope(db, parsed.data);</code></pre>
+        </div>
+      </div>
+      <p>
+        这就是 <strong>Zod</strong> 存在的全部理由：它在<strong>运行时</strong>检查一个
+        <code>unknown</code>，检查通过后再用 <code>z.infer</code> 把静态类型推导出来。 一份 schema
+        同时管住编译期和运行期，两边不会漂移。
+      </p>
+      <div class="note tip">
+        <div class="note-title">为什么 schema 放在 shared 包里</div>
+        <p>
+          <code>packages/shared/src/schemas.ts</code> 被 SDK、Server 和 Dashboard 同时依赖。 SDK
+          按它构造事件，Server 按它校验，Dashboard 按它推导 DTO 类型。
+        </p>
+        <p>
+          好处是<strong>字段改一处，三端一起报错</strong>。 如果三边各写各的类型，SDK
+          改了个字段名，Server 只会在运行时静默收到
+          <code>undefined</code>，然后你在生产环境查两天。
+        </p>
+      </div>
+      <p>
+        练习 09 让你手写一个迷你版：检查 <code>dsnKey</code> 是非空字符串、
+        <code>events</code> 是非空数组、每个 event 有必需字段，
+        并且<strong>一次返回全部错误</strong>而不是遇到第一个就停。 写完你就明白
+        <code>error.flatten()</code> 是在解决什么问题了。
+      </p>
+    </section>
+
+    <section id="s10">
+      <div class="sec-head">
+        <span class="sec-num">10</span>
+        <h2>脱敏：数据离开浏览器之后</h2>
+      </div>
+      <p>
+        监控 SDK 会把错误、请求、用户行为发到服务端存起来。
+        这意味着<strong>用户页面上的任何东西都可能被顺手带走</strong>—— 请求头里的
+        <code>Authorization</code>、URL 里的 <code>?token=</code>、 表单里的密码字段。
+      </p>
+      <p>
+        这不是假想。真实的监控系统出过很多次这种事故： 错误消息里带着完整的 JWT，然后整个团队都能在
+        Dashboard 上看到。
+      </p>
+      <div class="code-solo">
+        <div class="pane-label">packages/shared/src/redaction.ts</div>
+        <pre><code><span class="k">const</span> SENSITIVE_KEY =
+  /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
+
+<span class="k">function</span> redactSensitive(value, depth = <span class="s">0</span>) {
+  <span class="c">// 限制递归深度既避免恶意超深对象，也防止遥测清理本身拖慢宿主页面。</span>
+  <span class="k">if</span> (depth &gt; <span class="s">8</span>) <span class="k">return</span> <span class="s">'[Max depth]'</span>;
+  <span class="c">// ... 敏感键整个遮蔽，URL 字段删掉 query</span>
+}</code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">为什么服务端还要再脱敏一次</div>
+        <p>
+          SDK 里已经有 <code>beforeSend</code> 钩子让业务方清理了， 服务端入库前还会<strong
+            >再调一次</strong
+          >
+          <code>redactSensitive</code>。 看起来重复，其实是必须的。
+        </p>
+        <p>
+          理由写在 <code>services/events.ts</code> 的注释里： 「即使 SDK 已运行 beforeSend，Server
+          仍把客户端数据视为不可信并二次脱敏」。
+          <strong>SDK 跑在用户的浏览器里——那是攻击者完全控制的地方。</strong>
+          他可以改掉你的 SDK，可以直接 curl 你的接入接口。
+          客户端的任何清理都只是「优化」，不是「保证」。
+        </p>
+        <p>
+          事实上还有第三道：调用外部模型之前又脱敏了一次 （<code>diagnosis.ts</code> 的
+          <code>buildDiagnosisContext</code>）， 注释说这是「防止历史脏数据进入外部模型」。
+          <strong>三道防线，每一道都假设前一道可能失效。</strong>
+        </p>
+      </div>
+      <p>
+        <code>app.test.ts</code> 里有一条断言专门锁这件事： 造一个带
+        <code>authorization: 'Bearer should-never-be-stored'</code> 的事件，
+        入库后查详情，断言响应里<strong>不含</strong>那个字符串、且<strong>含</strong>
+        <code>[REDACTED]</code>。练习 10 就是这个逻辑的简化版。
+      </p>
+    </section>
+
+    <section id="s11">
+      <div class="sec-head">
+        <span class="sec-num">11</span>
+        <h2>幂等：网络一定会重试</h2>
+      </div>
+      <p>
+        手机从电梯里出来、Wi-Fi 切 4G、服务端超时—— 监控 SDK
+        会重发同一批事件。如果服务端老老实实每次都写进去， 一个错误会被统计成十次，Dashboard
+        上的数字就全是假的。
+      </p>
+      <p>
+        解法叫<strong>幂等</strong>：同一个操作做一次和做十次，结果一样。
+        做法是让客户端给每条事件生成一个唯一 <code>eventId</code>，服务端按它去重。
+      </p>
+      <div class="code-solo">
+        <div class="pane-label">apps/server/src/services/events.ts</div>
+        <pre><code><span class="k">const</span> duplicate = db.prepare(<span class="s">'SELECT 1 FROM events WHERE id = ?'</span>)
+  .get(rawEvent.eventId);
+<span class="k">if</span> (duplicate) {
+  <span class="c">// eventId 是幂等键，浏览器重试同一批次不会重复写入。</span>
+  duplicates += <span class="s">1</span>;
+  <span class="k">continue</span>;
+}</code></pre>
+      </div>
+      <div class="note">
+        <div class="note-title">幂等键换来的性能优化</div>
+        <p>
+          这里有个值得讲的连锁反应。既然重复批次在插入前就被拦掉了， 那么 Issue 的
+          <code>event_count</code> 就<strong>不需要每次重新 COUNT(*)</strong>， 直接
+          <code>+1</code> 就是对的。
+        </p>
+        <p>
+          TracePilot 早期版本为了保证幂等，每条事件入库都用
+          <code>COUNT(*)</code> 从 events 表重新派生计数—— 单次写入因此退化为 O(Issue
+          内事件数)。改成增量之后：
+        </p>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>Issue 内已有事件</th>
+              <th>改动前 P50</th>
+              <th>改动后 P50</th>
+            </tr>
+            <tr>
+              <td>1,000</td>
+              <td>1.79 ms</td>
+              <td class="ok">1.14 ms</td>
+            </tr>
+            <tr>
+              <td>5,000</td>
+              <td>6.57 ms</td>
+              <td class="ok">0.96 ms</td>
+            </tr>
+            <tr>
+              <td>10,000</td>
+              <td class="hl">12.88 ms</td>
+              <td class="ok">0.98 ms</td>
+            </tr>
+          </table>
+        </div>
+        <p>
+          从线性增长变成恒定。<strong>幂等不只是正确性，它还买来了性能。</strong>
+          这个故事可以直接当面试素材——数字由 <code>pnpm benchmark</code> 复现。
+        </p>
+      </div>
+    </section>
+    <section id="s12">
+      <div class="sec-head">
+        <span class="sec-num">12</span>
+        <h2>框架替你做了什么</h2>
+      </div>
+      <p>
+        到这里，前面 11 章的东西你都手写过了。现在把手写版和 Fastify 版并排放一次——
+        这是整份教程的收束点。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你手写的（练习 06）</div>
+          <pre><code>createServer(<span class="k">async</span> (req, res) =&gt; {
+  <span class="k">const</span> url = <span class="k">new</span> URL(req.url, <span class="s">'http://x'</span>);
+  <span class="k">const</span> seg = url.pathname.split(<span class="s">'/'</span>);
+
+  <span class="k">if</span> (req.method !== <span class="s">'PATCH'</span>) { ... }
+  <span class="k">if</span> (seg.length !== <span class="s">6</span>) { ... 404 }
+
+  <span class="k">let</span> raw = <span class="s">''</span>;
+  <span class="k">for await</span> (<span class="k">const</span> c <span class="k">of</span> req) raw += c;
+  <span class="k">let</span> body;
+  <span class="k">try</span> { body = JSON.parse(raw); }
+  <span class="k">catch</span> { ... 400 }
+
+  <span class="k">if</span> (!VALID.has(body?.status)) { ... 400 }
+
+  <span class="k">const</span> n = store.updateIssueStatus(
+    seg[<span class="s">4</span>], body.status);
+  <span class="k">if</span> (n === <span class="s">0</span>) { ... 404 }
+
+  res.writeHead(<span class="s">200</span>, {
+    <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span>});
+  res.end(JSON.stringify({
+    id: seg[<span class="s">4</span>], status: body.status }));
+});</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">routes/issues.ts 里真实的样子</div>
+          <pre><code>app.patch(
+  <span class="s">'/api/v1/issues/:issueId/status'</span>,
+  <span class="k">async</span> (request, reply) =&gt; {
+    <span class="k">const</span> issueId = stringParam(
+      request.params, <span class="s">'issueId'</span>);
+    <span class="k">const</span> parsed = updateIssueStatusSchema
+      .safeParse(request.body);
+
+    <span class="k">if</span> (!parsed.success) {
+      <span class="k">return</span> reply.code(<span class="s">400</span>).send({
+        error: <span class="s">'INVALID_ISSUE_STATUS'</span>, ... });
+    }
+
+    <span class="k">const</span> result = db.sqlite
+      .prepare(<span class="s">'UPDATE issues SET status = ?'</span>
+             + <span class="s">' WHERE id = ?'</span>)
+      .run(parsed.data.status, issueId);
+
+    <span class="k">if</span> (result.changes === <span class="s">0</span>) {
+      <span class="k">return</span> reply.code(<span class="s">404</span>).send({
+        error: <span class="s">'ISSUE_NOT_FOUND'</span>, ... });
+    }
+    <span class="k">return</span> {
+      id: issueId, status: parsed.data.status };
+  },
+);</code></pre>
+        </div>
+      </div>
+      <p>数一数 Fastify 具体省掉了什么：</p>
+      <div class="out">
+        <div class="out-label"><span>框架的职责</span><span class="n">6 项</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>你手写时要做的</th>
+              <th>Fastify 的做法</th>
+            </tr>
+            <tr>
+              <td>拆 URL、比对每一段</td>
+              <td><code>'/api/v1/issues/:issueId/status'</code> → <code>request.params</code></td>
+            </tr>
+            <tr>
+              <td>判断 <code>req.method</code></td>
+              <td><code>app.patch</code> / <code>app.get</code> / <code>app.post</code></td>
+            </tr>
+            <tr>
+              <td>收流、拼 Buffer、<code>JSON.parse</code>、<code>try/catch</code></td>
+              <td><code>request.body</code>，已经是对象</td>
+            </tr>
+            <tr>
+              <td><code>writeHead</code> + <code>JSON.stringify</code> + <code>end</code></td>
+              <td><code>return</code> 一个对象就行</td>
+            </tr>
+            <tr>
+              <td>每个分支记得 <code>return</code>，否则重复发送</td>
+              <td><code>return reply.code(n).send(...)</code></td>
+            </tr>
+            <tr>
+              <td>包一层 <code>try/catch</code> 防止进程崩</td>
+              <td><code>setErrorHandler</code> 统一兜底</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        就这些。<strong>Fastify 没有引入任何你不理解的新概念</strong>，
+        它只是把你刚才手写的六件事做得更快、更整齐。
+        这也是为什么我在开头说「框架不值得当成学习目标」—— 真正的门槛是 HTTP 本身，不是某个框架的
+        API。
+      </p>
+      <div class="note tip">
+        <div class="note-title">Fastify 里另外三个要认识的东西</div>
+        <p>
+          <strong><code>app.register(插件, 选项)</code></strong> —— 装插件。
+          <code>@fastify/cors</code> 装的就是你练习 07 手写的那套头，
+          <code>@fastify/multipart</code> 负责文件上传的解析。 注意 <code>app.ts</code> 里是
+          <code>await app.register(...)</code>—— 注释解释了为什么：「Fastify 插件必须 await
+          注册完成后再挂载依赖它们的路由」。
+        </p>
+        <p>
+          <strong><code>app.addHook('onClose', ...)</code></strong> —— 生命周期钩子。
+          项目用它在应用关闭时释放 SQLite 文件句柄。测试、热重载、正常退出都会走到。
+        </p>
+        <p>
+          <strong><code>app.inject(...)</code></strong> —— 这个最值得学。
+          它能<strong>不监听端口</strong>就跑完整个路由栈，所以测试不用抢端口、不用等启动。
+          <code>app.test.ts</code> 全部用它写的，317 行覆盖了接入、聚合、脱敏、幂等、分页。
+        </p>
+      </div>
+      <p>
+        还有一个设计值得单独说：<code>app.ts</code> 导出的是 <code>buildApp()</code>
+        <strong>工厂函数</strong>，而不是一个现成的 app 实例。 <code>index.ts</code> 拿到它才
+        <code>listen</code>。 这样测试可以用临时数据库构造一个独立的
+        app，基准脚本也能用完全相同的路由栈跑压测——
+        <strong>「构造」和「启动」分开，是服务端一个很通用的模式。</strong>
+      </p>
+    </section>
+
+    <section id="s13">
+      <div class="sec-head">
+        <span class="sec-num">13</span>
+        <h2>为什么这里的数据库调用没有 await</h2>
+      </div>
+      <p>读 TracePilot 的 server 代码时，你一定会在这里卡一下：</p>
+      <div class="code-solo">
+        <div class="pane-label">apps/server/src/routes/issues.ts</div>
+        <pre><code>app.get(<span class="s">'/api/v1/issues/:issueId'</span>, <span class="k">async</span> (request, reply) =&gt; {
+  <span class="k">const</span> issue = getIssue(database, stringParam(request.params, <span class="s">'issueId'</span>));
+  <span class="c">//    ↑ handler 是 async，但这里一个 await 都没有</span>
+  <span class="k">if</span> (!issue) <span class="k">return</span> reply.code(<span class="s">404</span>).send({ ... });
+  <span class="k">return</span> issue;
+});</code></pre>
+      </div>
+      <p>前端的直觉是「所有 I/O 都是 Promise」，所以这看起来像 bug。<strong>它不是。</strong></p>
+      <p>
+        <code>better-sqlite3</code> 是<strong>故意做成同步</strong>的。 因为 SQLite
+        不是那种要走网络的数据库，它就是一个<strong>本地文件</strong>，
+        读它和读一个文件没区别。既然没有网络往返，异步带来的调度开销反而比同步读还大。
+      </p>
+      <div class="pair">
+        <div class="pane pane-js">
+          <div class="pane-label">你习惯的（PostgreSQL / MySQL）</div>
+          <pre><code><span class="c">// 数据库在另一台机器上</span>
+<span class="c">// 要走 TCP，等几毫秒到几十毫秒</span>
+<span class="k">const</span> rows = <span class="k">await</span> pool.query(
+  <span class="s">'SELECT * FROM issues WHERE id = $1'</span>,
+  [id],
+);</code></pre>
+        </div>
+        <div class="pane pane-server">
+          <div class="pane-label">better-sqlite3（本地文件）</div>
+          <pre><code><span class="c">// 数据库就是本进程能直接读的一个文件</span>
+<span class="c">// 微秒级，异步化反而更慢</span>
+<span class="k">const</span> row = db
+  .prepare(<span class="s">'SELECT * FROM issues WHERE id = ?'</span>)
+  .get(id);</code></pre>
+        </div>
+      </div>
+      <div class="note">
+        <div class="note-title">同步还换来了一个关键能力：事务</div>
+        <p><code>services/events.ts</code> 里整批事件的写入是这样的：</p>
+        <pre><code><span class="c">// better-sqlite3 transaction 接受同步回调，回调抛错时会自动 ROLLBACK。</span>
+<span class="k">const</span> ingest = db.sqlite.transaction(() =&gt; {
+  <span class="k">for</span> (<span class="k">const</span> rawEvent <span class="k">of</span> envelope.events) {
+    <span class="c">// 鉴权、幂等、脱敏、聚合、落库……</span>
+  }
+});
+ingest();</code></pre>
+        <p>
+          因为回调是同步的，<strong>中途不会有别的代码插进来</strong>，
+          所以「要么整批成功，要么整批回滚」是有保证的。 如果这里面混进
+          <code>await</code>，事务期间控制权会交还给事件循环，
+          另一个请求就可能在事务中间插一脚——那是非常难查的 bug。
+        </p>
+      </div>
+      <div class="note trap">
+        <div class="note-title">那怎么区分「真异步」和「假异步」</div>
+        <p>同一个文件里，这一行是<strong>真的</strong>要 await：</p>
+        <pre><code><span class="k">const</span> originalStack =
+  <span class="k">await</span> symbolicateStack(database, release.id, stack);</code></pre>
+        <p>
+          因为 <code>source-map</code> 库要读磁盘上的 <code>.map</code> 文件并解析， 那是真正的异步
+          I/O。
+        </p>
+        <p>
+          <strong>判断方法：看它碰的是什么。</strong>
+          碰 SQLite → 同步；碰文件系统的 <code>fs/promises</code>、网络请求、外部模型 API → 异步。
+          能一眼分清这两者，你就真读懂这一层了。
+        </p>
+      </div>
+      <p>
+        代价当然有，注释里也写明了：SQLite 是<strong>单写者</strong>模型，
+        同一时刻只能有一个写事务。项目开了 WAL（<code>journal_mode = WAL</code>）
+        让读和写更好地并行，又设了 <code>busy_timeout = 5000</code>
+        避免短暂写锁立刻报错。但这仍然不是能水平扩展的生产数据库—— README 里没有把本地基准包装成生产
+        SLA，这点很诚实。
+      </p>
+    </section>
+
+    <section id="s14">
+      <div class="sec-head">
+        <span class="sec-num">14</span>
+        <h2>Drizzle：这个项目里只有 6 处</h2>
+      </div>
+      <p>最后说 Drizzle，因为它在这个项目里的分量比名字听起来小得多。 实际数一下调用点：</p>
+      <div class="out">
+        <div class="out-label">
+          <span>数据访问方式统计（不含测试）</span><span class="n">53 处</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>方式</th>
+              <th>调用点</th>
+              <th>用在哪</th>
+            </tr>
+            <tr>
+              <td>原生 SQL <code>prepare()</code></td>
+              <td class="hl">47 处</td>
+              <td>几乎所有读查询，以及部分写入</td>
+            </tr>
+            <tr>
+              <td>Drizzle <code>insert</code> / <code>update</code></td>
+              <td>6 处</td>
+              <td>只在 <code>services/events.ts</code> 等写入路径</td>
+            </tr>
+            <tr>
+              <td>Drizzle <code>select</code></td>
+              <td class="null">0 处</td>
+              <td>一次都没用</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>
+        所有复杂查询——分页、<code>EXISTS</code> 子查询、<code>json_extract</code>、
+        时间桶聚合——全是手写 SQL。也就是说，<strong
+          >你上一份教程学的 SQL 已经覆盖了数据层九成的代码</strong
+        >。
+      </p>
+      <p>Drizzle 对你只剩两个知识点：</p>
+      <ul>
+        <li>
+          <strong>它不是数据库，是个带 TypeScript 类型的 SQL 生成器。</strong>
+          <code>db/schema.ts</code> 那 111 行声明的是列名和类型， 让
+          <code>insert().values({...})</code> 能在编译期查出字段写错。
+        </li>
+        <li>
+          <strong>它和建表 DDL 是两处，必须手动保持同步。</strong>
+          <code>db/client.ts</code> 里的 <code>CREATE TABLE</code> 才真正建表，
+          <code>db/schema.ts</code> 只是给 TypeScript 看的。 注释里明确写了这是 MVP
+          的取舍：「正式演进时应替换为版本化 migration」。
+        </li>
+      </ul>
+      <div class="note tip">
+        <div class="note-title">这个取舍本身就是面试素材</div>
+        <p>
+          被问「为什么写入用 Drizzle，查询用原生 SQL」，答案是清楚的：
+          <strong>写入需要类型安全</strong>（字段多、容易写错、改 schema 时要能编译期发现），
+          <strong>复杂查询需要控制力</strong>（ORM 生成的 SQL 很难精确控制分页、子查询和索引使用）。
+        </p>
+        <p>
+          两种访问面同时保留，各用在擅长的地方——<code>db/client.ts</code>
+          的注释就是这么写的：「Drizzle 用于类型安全写入，原生 prepared SQL 用于复杂聚合查询」。
+        </p>
+      </div>
+    </section>
+
+    <section id="s15">
+      <div class="sec-head">
+        <span class="sec-num">15</span>
+        <h2>12 道练习</h2>
+      </div>
+      <p>题目从「返回一个 JSON」一路到「完整的遥测接入端点」， 每一道都对应项目里一段真实代码。</p>
+      <div class="out">
+        <div class="out-label"><span>练习与真实代码的对应</span><span class="n">12 题</span></div>
+        <div class="scroll">
+          <table>
+            <tr>
+              <th>#</th>
+              <th>题目</th>
+              <th>对应项目里的代码</th>
+            </tr>
+            <tr>
+              <td>01</td>
+              <td>返回一个 JSON 响应</td>
+              <td><code>app.ts</code> 的 <code>/health</code></td>
+            </tr>
+            <tr>
+              <td>02</td>
+              <td>按请求方法分流</td>
+              <td>所有路由的方法约定</td>
+            </tr>
+            <tr>
+              <td>03</td>
+              <td>读取查询参数做分页</td>
+              <td><code>routes/issues.ts</code></td>
+            </tr>
+            <tr>
+              <td>04</td>
+              <td>匹配路径参数</td>
+              <td><code>routes/issues.ts:47</code></td>
+            </tr>
+            <tr>
+              <td>05</td>
+              <td>读取请求 body（流）</td>
+              <td>所有 POST / PATCH 路由</td>
+            </tr>
+            <tr>
+              <td>06</td>
+              <td>用状态码表达不同的失败</td>
+              <td><code>routes/issues.ts:63</code></td>
+            </tr>
+            <tr>
+              <td>07</td>
+              <td>CORS 与预检请求</td>
+              <td><code>app.ts</code> 的 <code>@fastify/cors</code></td>
+            </tr>
+            <tr>
+              <td>08</td>
+              <td>把查询参数夹进合法区间</td>
+              <td><code>positiveInteger</code></td>
+            </tr>
+            <tr>
+              <td>09</td>
+              <td>校验 body（手写迷你 Zod）</td>
+              <td><code>envelopeSchema.safeParse</code></td>
+            </tr>
+            <tr>
+              <td>10</td>
+              <td>入库前脱敏</td>
+              <td><code>shared/redaction.ts</code></td>
+            </tr>
+            <tr>
+              <td>11</td>
+              <td>幂等：重发不能重复入库</td>
+              <td><code>services/events.ts</code></td>
+            </tr>
+            <tr>
+              <td class="hl">12</td>
+              <td>把前面全部拼起来</td>
+              <td><code>routes/events.ts</code> + <code>services/events.ts</code></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+      <p>全部做完之后跑一次总检查，会看到：</p>
+      <div class="term">
+        <pre><code>$ node docs/server-tutorial/check.mjs
+
+✅ 01. 返回一个 JSON 响应
+✅ 02. 按请求方法分流
+✅ 03. 读取查询参数做分页
+✅ 04. 匹配路径参数
+✅ 05. 读取请求 body（它是一个流）
+✅ 06. 用状态码表达不同的失败
+✅ 07. CORS 与预检请求
+✅ 08. 把不可信的查询参数夹进合法区间
+✅ 09. 校验 body 的结构（手写一个迷你 Zod）
+✅ 10. 入库前脱敏
+✅ 11. 幂等：同一批事件重发不能重复入库
+✅ 12. 把前面全部拼起来：真正的接入端点
+
+通过 12 / 12</code></pre>
+      </div>
+      <div class="note trap">
+        <div class="note-title">第 12 题复现了一个真实的 bug，值得单独说</div>
+        <p>
+          它要求：判定「该用户是否已在此 Issue 出现过」<strong>必须在事件落库之前</strong>。
+          顺序反了的话，会查到刚刚写进去的那一行，<code>user_count</code> 永远是 0。
+        </p>
+        <p>
+          这个 bug 的阴险之处在于——<strong>HTTP 响应完全正确</strong>。 状态码对、<code
+            >accepted</code
+          >
+          和 <code>duplicates</code> 都对， 只有数据库里的计数悄悄错了。把判定挪到插入之后再跑判分：
+        </p>
+        <pre><code>❌ 12. 把前面全部拼起来：真正的接入端点
+   请求：（响应都对，但写入数据库的结果不对）
+   你的响应：[... <span class="s">"eventCount":26, "userCount":9</span>  ...]
+   期望响应：[... <span class="s">"eventCount":26, "userCount":10</span> ...]</code></pre>
+        <p>
+          所以第 12 题的判分除了比对响应，还会比对<strong>写入后的数据状态</strong>。 TracePilot
+          第一版就写反了，是既有测试断言抓出来的； 现在有一条回归测试专门锁定这个顺序。
+        </p>
+        <p>
+          <strong>教训比题目本身重要</strong>：接口测试只断言响应是不够的， 有一类 bug
+          只在数据里显形。
+        </p>
+      </div>
+    </section>
+
+    <section id="s16">
+      <div class="sec-head">
+        <span class="sec-num">16</span>
+        <h2>接下来读什么</h2>
+      </div>
+      <p>
+        练完这 12 题，<code>apps/server/src</code> 的 HTTP 层对你就没有黑盒了。
+        接下来按<strong>一条事件的生命周期</strong>读真实代码，不要按文件读：
+      </p>
+      <div class="code-solo">
+        <div class="pane-label">推荐的阅读路径</div>
+        <pre><code>routes/events.ts      <span class="c">→ Zod 校验、403 / 202 的判断</span>
+  ↓
+services/events.ts    <span class="c">→ 事务边界、DSN 鉴权、幂等、二次脱敏</span>
+  ↓
+lib/fingerprint.ts    <span class="c">→ 为什么要归一化 UUID/时间戳才能聚合</span>
+  ↓
+db/client.ts          <span class="c">→ 索引 events_issue_user 为什么存在</span></code></pre>
+      </div>
+      <p>
+        这四个文件加起来不到 400 行，但串起了 README 里「技术难点 2」那个完整故事：
+        <strong>发现 O(n) 写放大 → 定位根因 → 改成增量 → 基准验证</strong>。
+        面试时这是一条能讲五分钟、而且每个数字都可复现的线。
+      </p>
+      <p>
+        <code>services/queries.ts</code> 是最大的文件（503
+        行），但对现在的你<strong>最简单</strong>—— 它基本就是 SQL 加一层 <code>snake_case</code> →
+        <code>camelCase</code> 的映射。 放到最后读，会很轻松。
+      </p>
+      <div class="note tip">
+        <div class="note-title">三个可以带进面试的问题</div>
+        <p>
+          <strong>「为什么服务端要再脱敏一次？」</strong>
+          因为 SDK 跑在用户浏览器里，那是攻击者能改的地方。客户端清理是优化，不是保证。
+        </p>
+        <p>
+          <strong>「为什么数据库调用没有 await？」</strong>
+          SQLite 是本地文件，没有网络往返；同步还让事务回调中间不会被其它请求插入。
+        </p>
+        <p>
+          <strong>「幂等和性能有什么关系？」</strong>
+          有了 eventId 去重，计数就不必每次重新 COUNT(*)，单次写入从 O(n) 变成 O(1)， 一万条事件时
+          P50 从 12.88 ms 降到 0.98 ms。
+        </p>
+      </div>
+      <p class="lede" style="margin-top: 28px">
+        最后一句：这份教程从头到尾没让你装一个依赖。 服务端不是一堆需要背的框架 API，它就是
+        <strong>「把一个字节流拆开，决定要不要信它，然后组装一个响应发回去」</strong>。
+        剩下的都是这件事的变奏。
+      </p>
+    </section>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var STORE = 'server-tutorial-progress';
+    var toc = document.getElementById('toc');
+    var sections = Array.prototype.slice.call(document.querySelectorAll('section[id]'));
+
+    var done = {};
+    try {
+      done = JSON.parse(localStorage.getItem(STORE) || '{}') || {};
+    } catch (e) {
+      done = {};
+    }
+
+    var links = sections.map(function (sec) {
+      var num = sec.querySelector('.sec-num').textContent;
+      var title = sec.querySelector('h2').textContent;
+      var li = document.createElement('li');
+      var a = document.createElement('a');
+      a.href = '#' + sec.id;
+      a.innerHTML = '<span class="num"></span><span class="txt"></span><span class="tick">✓</span>';
+      a.querySelector('.num').textContent = num;
+      a.querySelector('.txt').textContent = title;
+      if (done[sec.id]) a.classList.add('done');
+      li.appendChild(a);
+      toc.appendChild(li);
+      return a;
+    });
+
+    // 读过的章节打勾：滚动到该章节顶部附近即视为读过，进度只存在本机浏览器里。
+    function mark(id) {
+      if (done[id]) return;
+      done[id] = 1;
+      try {
+        localStorage.setItem(STORE, JSON.stringify(done));
+      } catch (e) {
+        /* 无痕模式等场景忽略 */
+      }
+      var i = sections.findIndex(function (s) {
+        return s.id === id;
+      });
+      if (i >= 0) links[i].classList.add('done');
+    }
+
+    var current = null;
+    function onScroll() {
+      var best = null;
+      var bestTop = -Infinity;
+      for (var i = 0; i < sections.length; i++) {
+        var top = sections[i].getBoundingClientRect().top;
+        if (top < 120 && top > bestTop) {
+          bestTop = top;
+          best = i;
+        }
+      }
+      if (best === null) best = 0;
+      if (best !== current) {
+        if (current !== null) links[current].classList.remove('on');
+        links[best].classList.add('on');
+        current = best;
+        mark(sections[best].id);
+      }
+    }
+
+    addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    document.getElementById('reset').addEventListener('click', function () {
+      done = {};
+      try {
+        localStorage.removeItem(STORE);
+      } catch (e) {
+        /* 同上 */
+      }
+      links.forEach(function (a) {
+        a.classList.remove('done');
+      });
+    });
+  })();
+</script>

@@ -16,3 +16,5 @@ docs/plans
 # SQL 教程的本地练习库与个人答案，不进入版本库
 docs/sql-tutorial/.data
 docs/sql-tutorial/answers/*.sql
+# Node + HTTP 教程的个人答案，不进入版本库
+docs/server-tutorial/answers/*.mjs

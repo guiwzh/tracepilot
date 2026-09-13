@@ -57,3 +57,8 @@ alias q='node --experimental-sqlite docs/sql-tutorial/q.mjs'
 
 练习库写在 `docs/sql-tutorial/.data/`（已被 `.gitignore` 忽略），
 与项目自己的 `apps/server/.tracepilot/` 完全隔离，怎么折腾都不影响开发数据。
+
+## 下一步
+
+练完 SQL 之后，接着做 [Node + HTTP 练习环境](../server-tutorial/README.md)——
+同一套数据，换成练「数据怎么经过 HTTP 安全地收进来、发出去」。
