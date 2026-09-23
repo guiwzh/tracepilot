@@ -1,0 +1,806 @@
+<title>TracePilot 数据结构</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;600;700&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+/>
+<style>
+  :root {
+    --paper: #f2f4f7;
+    --surface: #ffffff;
+    --surface-2: #e9edf2;
+    --ink: #131b24;
+    --muted: #5a6875;
+    --rule: #d3dae2;
+    --accent: #1f4fd8;
+    --accent-wash: #e7edfc;
+    --cascade: #b03a22;
+    --cascade-wash: #fbeae5;
+    --setnull: #1f6b4a;
+    --setnull-wash: #e4f1ea;
+    --shadow: 0 1px 2px rgba(19, 27, 36, 0.06), 0 8px 24px -16px rgba(19, 27, 36, 0.28);
+    --serif: 'Spectral', Georgia, 'Songti SC', 'Noto Serif CJK SC', serif;
+    --sans:
+      'Source Sans 3', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --paper: #0f151b;
+      --surface: #161e26;
+      --surface-2: #1d2731;
+      --ink: #e4eaf0;
+      --muted: #94a4b3;
+      --rule: #2a3641;
+      --accent: #7ba0ff;
+      --accent-wash: #17243d;
+      --cascade: #e8735a;
+      --cascade-wash: #33201b;
+      --setnull: #55b98a;
+      --setnull-wash: #15291f;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+    }
+  }
+  :root[data-theme='dark'] {
+    --paper: #0f151b;
+    --surface: #161e26;
+    --surface-2: #1d2731;
+    --ink: #e4eaf0;
+    --muted: #94a4b3;
+    --rule: #2a3641;
+    --accent: #7ba0ff;
+    --accent-wash: #17243d;
+    --cascade: #e8735a;
+    --cascade-wash: #33201b;
+    --setnull: #55b98a;
+    --setnull-wash: #15291f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -16px rgba(0, 0, 0, 0.7);
+  }
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.65;
+    margin: 0;
+    padding-block: 40px 88px;
+    padding-inline: 20px;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 1080px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 34px;
+  }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(30px, 5vw, 44px);
+    line-height: 1.15;
+    font-weight: 700;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  h2 {
+    font-family: var(--serif);
+    font-size: 23px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 17px;
+    color: var(--ink);
+    margin: 0 0 12px;
+    max-width: 68ch;
+  }
+  p {
+    margin: 0 0 12px;
+    max-width: 72ch;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+  header {
+    margin-bottom: 2px;
+  }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .prov {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-family: var(--mono);
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--setnull);
+    flex: none;
+  }
+
+  /* ---------- 图 ---------- */
+  figure {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .fig-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface-2);
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .legend b {
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .key {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .key i {
+    width: 22px;
+    height: 0;
+    border-top: 2px solid currentColor;
+    flex: none;
+  }
+  .key.c {
+    color: var(--cascade);
+  }
+  .key.s {
+    color: var(--setnull);
+  }
+  .hint {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .reset {
+    font: inherit;
+    font-size: 13px;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 4px 11px;
+    cursor: pointer;
+  }
+  .reset:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+  }
+  .reset[hidden] {
+    display: none;
+  }
+  .fig-scroll {
+    overflow-x: auto;
+    padding: 20px 18px;
+  }
+  svg.er {
+    display: block;
+    width: 100%;
+    min-width: 880px;
+    max-width: 1052px;
+    height: auto;
+    margin: 0 auto;
+  }
+  figcaption {
+    padding: 13px 18px;
+    border-top: 1px solid var(--rule);
+    font-size: 13.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+  }
+
+  /* ---------- SVG 内部 ---------- */
+  .tbl-box {
+    fill: var(--surface);
+    stroke: var(--rule);
+    stroke-width: 1;
+  }
+  .tbl-head {
+    fill: var(--surface-2);
+  }
+  .tbl-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    fill: var(--ink);
+  }
+  .tbl-count {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    fill: var(--muted);
+  }
+  .col-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    fill: var(--ink);
+  }
+  .col-name.is-null {
+    fill: var(--muted);
+  }
+  .col-type {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    fill: var(--muted);
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+  }
+  .badge-pk {
+    fill: var(--accent);
+  }
+  .badge-fk.is-cascade {
+    fill: var(--cascade);
+  }
+  .badge-fk.is-setnull {
+    fill: var(--setnull);
+  }
+  .edge-line {
+    fill: none;
+    stroke-width: 1.7;
+  }
+  .edge.is-cascade .edge-line {
+    stroke: var(--cascade);
+  }
+  .edge.is-setnull .edge-line {
+    stroke: var(--setnull);
+    stroke-dasharray: 5 3;
+  }
+  .arw.is-cascade {
+    fill: var(--cascade);
+  }
+  .arw.is-setnull {
+    fill: var(--setnull);
+  }
+  .edge-chip {
+    stroke-width: 1;
+  }
+  .edge.is-cascade .edge-chip {
+    fill: var(--cascade-wash);
+    stroke: var(--cascade);
+  }
+  .edge.is-setnull .edge-chip {
+    fill: var(--setnull-wash);
+    stroke: var(--setnull);
+  }
+  .edge-label {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    font-weight: 600;
+  }
+  .edge.is-cascade .edge-label {
+    fill: var(--cascade);
+  }
+  .edge.is-setnull .edge-label {
+    fill: var(--setnull);
+  }
+  .tbl {
+    cursor: pointer;
+  }
+  .tbl:focus {
+    outline: none;
+  }
+  .tbl:focus-visible .tbl-box,
+  .tbl:hover .tbl-box {
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  /* 选中某张表时，弱化无关部分 */
+  .er.picked .tbl,
+  .er.picked .edge {
+    opacity: 0.16;
+    transition: opacity 0.16s ease;
+  }
+  .er.picked .tbl.on,
+  .er.picked .edge.on {
+    opacity: 1;
+  }
+  .er.picked .tbl.on .tbl-box {
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+    }
+  }
+
+  /* ---------- 版块 ---------- */
+  section {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 22px;
+    box-shadow: var(--shadow);
+  }
+  .sec-head {
+    margin-bottom: 14px;
+  }
+  .sec-head p {
+    color: var(--muted);
+    font-size: 14.5px;
+    margin: 0;
+  }
+  .two {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 6px;
+  }
+  @media (max-width: 720px) {
+    .two {
+      grid-template-columns: 1fr;
+    }
+  }
+  .card {
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 15px 16px;
+    background: var(--paper);
+  }
+  .card.c {
+    border-left: 3px solid var(--cascade);
+  }
+  .card.s {
+    border-left: 3px solid var(--setnull);
+  }
+  .card h3 {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    font-weight: 600;
+    margin: 0 0 8px;
+  }
+  .card.c h3 {
+    color: var(--cascade);
+  }
+  .card.s h3 {
+    color: var(--setnull);
+  }
+  .card p {
+    font-size: 14.5px;
+    margin: 0 0 8px;
+  }
+  .card ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .card li {
+    margin-bottom: 3px;
+  }
+  .card li code {
+    font-size: 0.86em;
+  }
+  .pull {
+    margin-top: 16px;
+    padding: 13px 16px;
+    background: var(--accent-wash);
+    border-radius: 9px;
+    font-size: 15px;
+  }
+  .pull b {
+    color: var(--accent);
+  }
+
+  .scroll {
+    overflow-x: auto;
+    margin-top: 6px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td.m {
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  tr.is-auto td {
+    color: var(--muted);
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .tag-exp {
+    background: var(--accent-wash);
+    color: var(--accent);
+  }
+  .tag-auto {
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .tag-uniq {
+    background: var(--setnull-wash);
+    color: var(--setnull);
+  }
+
+  .quirk {
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 15px 16px;
+    background: var(--paper);
+    margin-top: 12px;
+  }
+  .quirk-h {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    margin-bottom: 7px;
+  }
+  .quirk-n {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    flex: none;
+  }
+  .quirk-t {
+    font-weight: 600;
+    font-size: 15.5px;
+  }
+  .quirk p {
+    font-size: 14.5px;
+    margin: 0 0 8px;
+  }
+  pre {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 11px 13px;
+    overflow-x: auto;
+    margin: 9px 0 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .ok {
+    color: var(--setnull);
+    font-weight: 600;
+  }
+  .warn {
+    color: var(--cascade);
+    font-weight: 600;
+  }
+  footer {
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+  }
+</style>
+
+<main>
+  <header>
+    <p class="eyebrow">TracePilot · apps/server/src/db/client.ts</p>
+    <h1>TracePilot 数据结构</h1>
+    <p class="lede">
+      六张表、46 个列、6 条外键、17 个索引。整张图不是手画的——它由启动时那段
+      <code>INITIAL_SCHEMA</code> 真实建库后，从 <code>PRAGMA table_info</code> /
+      <code>foreign_key_list</code> /
+      <code>index_list</code> 内省出来再渲染，所以图和代码不可能对不上。
+    </p>
+    <span class="prov"><span class="dot"></span>由真实数据库内省生成，非手绘</span>
+  </header>
+
+  <figure>
+    <div class="fig-top">
+      <div class="legend">
+        <span class="key c"><i></i><b>CASCADE</b>：父没了，子一起删</span>
+        <span class="key s"><i></i><b>SET NULL</b>：父没了，子留着，外键置空</span>
+      </div>
+      <div>
+        <span class="hint" id="hint">点任意一张表，只看它的关系</span>
+        <button class="reset" id="reset" type="button" hidden>显示全部</button>
+      </div>
+    </div>
+    <div class="fig-scroll">
+      <!--ER-SVG-->
+    </div>
+    <figcaption>
+      <code>projects</code> 是根。<code>releases</code> 和
+      <code>issues</code> 挂在它下面，随项目删除而级联消失。
+      <code>events</code> 是唯一同时引用两个父表的表，而且是唯一用
+      <code>SET NULL</code> 的——因为一条事件是<strong>原始证据</strong>，即使它所属的 Issue 被删了，
+      「某年某月某用户的浏览器上确实发生过这件事」这个事实仍然成立。
+    </figcaption>
+  </figure>
+
+  <section>
+    <div class="sec-head">
+      <h2>整段 DDL 里最值得讲的一个决定</h2>
+      <p>六条外键，四条 CASCADE、两条 SET NULL。判断标准只有一句话。</p>
+    </div>
+    <div class="two">
+      <div class="card c">
+        <h3>ON DELETE CASCADE ×4</h3>
+        <p>子记录脱离父记录之后<strong>毫无意义</strong>，所以一起删干净，不留孤儿。</p>
+        <ul>
+          <li><code>releases</code> → 没有项目的版本号是什么？</li>
+          <li><code>issues</code> → 不属于任何项目的问题？</li>
+          <li><code>source_maps</code> → 没有 Release 的 map 映射不回任何东西</li>
+          <li><code>diagnoses</code> → 诊断的对象都没了，结论还有什么用</li>
+        </ul>
+      </div>
+      <div class="card s">
+        <h3>ON DELETE SET NULL ×2</h3>
+        <p>子记录<strong>自身仍有价值</strong>，所以留下来，只把失效的引用置空。</p>
+        <ul>
+          <li><code>events.issue_id</code> → Issue 是我们「归纳」出来的</li>
+          <li><code>events.release_id</code> → 版本是我们「关联」上去的</li>
+          <li>但事件本身是浏览器上<strong>真实发生过</strong>的观测记录</li>
+          <li>删掉归纳结论，不该抹掉原始观测</li>
+        </ul>
+      </div>
+    </div>
+    <div class="pull">
+      <b>判断外键该用哪个策略，问一句就够：</b>这条子记录脱离父记录之后，还有价值吗？ 有 →
+      <code>SET NULL</code>；没有 → <code>CASCADE</code>。 这也解释了 SQL 教程练习数据里那两条
+      <code>issue_id</code> 为 <code>NULL</code> 的「孤儿事件」—— 它们正是
+      <code>SET NULL</code> 的产物。
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>17 个索引，其中只有 6 个是手写的</h2>
+      <p>
+        每个 <code>UNIQUE</code> 约束会让 SQLite
+        自动生成一个索引（<code>sqlite_autoindex_*</code>）， 所以真正由
+        <code>CREATE INDEX</code> 建的只有 6 个。索引加速读，但每次写都要多维护一份——
+        <code>events</code> 是写入最频繁的表，所以只建了真正用得上的 4 个。
+      </p>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>来源</th>
+            <th>表</th>
+            <th>索引名</th>
+            <th>列</th>
+            <th>唯一</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!--INDEX-ROWS-->
+        </tbody>
+      </table>
+    </div>
+    <div class="pull">
+      <b>复合索引的列顺序有讲究。</b><code>events_issue_user (issue_id, user_id)</code>
+      就是 README「技术难点 2」的主角：它让「该用户是否已在此 Issue 出现过」的判定代价
+      <strong>与 Issue 已有事件数无关</strong>，<code>user_count</code> 才能做增量累加。
+      没有它就得扫该 Issue 的全部事件，单次写入退化成 O(n)。
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>三个跑出来才发现的细节</h2>
+      <p>都在上面那个真实建的库里验证过，不是从文档上抄的。</p>
+    </div>
+
+    <div class="quirk">
+      <div class="quirk-h">
+        <span class="quirk-n">01</span>
+        <span class="quirk-t"> <code>TEXT PRIMARY KEY</code> 居然可以是 <code>NULL</code> </span>
+      </div>
+      <p>
+        内省结果里六张表的 <code>id</code> 全都显示 <strong>nullable</strong>。这不是读错了—— SQLite
+        为兼容一个很早期的版本行为，<strong
+          >只有 <code>INTEGER PRIMARY KEY</code> 才隐含 NOT NULL</strong
+        >，其它类型的主键不强制。实测：
+      </p>
+      <pre><code>INSERT INTO projects (id,name,dsn_key,created_at) VALUES (NULL,'x','k1',1);
+<span class="warn">⚠️ 插进去了</span>  → [{"id":null,"name":"x"}]
+再插一条 NULL 也可以 → 2 行
+
+-- 对比 INTEGER PRIMARY KEY：NULL 会被自动分配 rowid
+INSERT INTO t_int (id,v) VALUES (NULL,'auto');  → [{"id":1,"v":"auto"}]</code></pre>
+      <p style="margin-top: 9px">
+        实际上不会出事，因为 id 全部由 <code>randomUUID()</code> 在应用层生成、 Drizzle
+        也一定会带上这一列。但严格写法应该是 <code>id TEXT PRIMARY KEY NOT NULL</code>。
+      </p>
+    </div>
+
+    <div class="quirk">
+      <div class="quirk-h">
+        <span class="quirk-n">02</span>
+        <span class="quirk-t"
+          ><code>event_count</code> 的 <code>DEFAULT 1</code> 是个永不生效的遗留</span
+        >
+      </div>
+      <p>
+        DDL 写的是 <code>event_count INTEGER NOT NULL DEFAULT 1</code>，但全项目唯一插入
+        <code>issues</code> 的地方（<code>services/events.ts:95</code>）显式写死了
+        <code>eventCount: 0</code>，注释还专门解释过为什么必须从 0 起步：
+        <em>「避免新建 Issue 的首条事件被同时计入初始值和增量而重复计数」</em>。
+      </p>
+      <p>
+        所以这个 <code>DEFAULT 1</code> 是<strong>性能优化之前的残留</strong>——老实现里新建 Issue
+        时首条事件就算 1，改成增量累加后起点变成 0，DDL 没跟着改。目前无害， 但哪天有人写个裸
+        <code>INSERT</code> 忘了带这一列，会静默得到 1，和增量设计差 1。
+      </p>
+    </div>
+
+    <div class="quirk">
+      <div class="quirk-h">
+        <span class="quirk-n">03</span>
+        <span class="quirk-t"><code>schema.ts</code> 里那些具名唯一索引，数据库里并不存在</span>
+      </div>
+      <p>
+        <code>db/schema.ts</code> 声明了 <code>uniqueIndex('issues_project_fingerprint')</code>，
+        但内省结果里根本没有这个名字，只有 <code>sqlite_autoindex_issues_2</code>。
+      </p>
+      <p>
+        原因就是 <code>client.ts</code> 注释说的那件事：<strong
+          >真正建表的是 DDL， <code>schema.ts</code> 只是给 TypeScript 看的类型声明</strong
+        >。DDL 写的是表级 <code>UNIQUE(...)</code>（SQLite 自动命名），schema.ts
+        声明的是具名唯一索引—— 约束效果相同，索引名不同。
+      </p>
+      <p>
+        不影响正确性，但正好印证了那句警告：<strong>「两处结构变更必须保持同步」</strong>。 这是用
+        MVP 幂等 DDL 换来的已知成本，注释里也写了正式演进应替换为版本化 migration。
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    自己验证：<code>node --experimental-sqlite docs/sql-tutorial/q.mjs --schema</code>
+  </footer>
+</main>
+
+<script>
+  (function () {
+    var svg = document.querySelector('svg.er');
+    var reset = document.getElementById('reset');
+    var hint = document.getElementById('hint');
+    if (!svg) return;
+
+    var tables = Array.prototype.slice.call(svg.querySelectorAll('.tbl'));
+    var edges = Array.prototype.slice.call(svg.querySelectorAll('.edge'));
+    var selected = null;
+
+    function clear() {
+      svg.classList.remove('picked');
+      tables.concat(edges).forEach(function (el) {
+        el.classList.remove('on');
+      });
+      reset.hidden = true;
+      hint.hidden = false;
+    }
+
+    /** 选中一张表：点亮它、与它直接相连的边、以及边另一端的表。 */
+    function pick(name) {
+      var keep = {};
+      keep[name] = 1;
+      edges.forEach(function (edge) {
+        var parent = edge.getAttribute('data-parent');
+        var child = edge.getAttribute('data-child');
+        var hit = parent === name || child === name;
+        edge.classList.toggle('on', hit);
+        if (hit) {
+          keep[parent] = 1;
+          keep[child] = 1;
+        }
+      });
+      tables.forEach(function (tbl) {
+        tbl.classList.toggle('on', !!keep[tbl.getAttribute('data-table')]);
+      });
+      svg.classList.add('picked');
+      reset.hidden = false;
+      hint.hidden = true;
+    }
+
+    function dismiss() {
+      selected = null;
+      clear();
+    }
+
+    /** 再点一次同一张表即取消选中。 */
+    function choose(name) {
+      if (selected === name) {
+        dismiss();
+        return;
+      }
+      selected = name;
+      pick(name);
+    }
+
+    tables.forEach(function (tbl) {
+      var name = tbl.getAttribute('data-table');
+      tbl.addEventListener('click', function (event) {
+        event.stopPropagation();
+        choose(name);
+      });
+      tbl.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          choose(name);
+        } else if (event.key === 'Escape') {
+          dismiss();
+        }
+      });
+    });
+
+    reset.addEventListener('click', dismiss);
+    document.addEventListener('click', function (event) {
+      if (!svg.contains(event.target)) dismiss();
+    });
+  })();
+</script>

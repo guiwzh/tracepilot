@@ -1,0 +1,3 @@
+# 由 docs/schema/generate.mjs 生成的产物，格式由生成器决定；
+# 交给 Prettier 格式化会让每次重新生成都产生无意义的 diff。
+docs/schema/er-diagram.html
