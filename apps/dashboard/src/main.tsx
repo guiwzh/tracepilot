@@ -5,7 +5,6 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import './styles.css';
 
-// React Query 负责服务端状态缓存；组件只声明 queryKey/queryFn，不手写 loading 数据仓库。
 const queryClient = new QueryClient({
   defaultOptions: {
     // 15 秒内数据视为新鲜；查询最多重试一次，写操作不自动重试以免重复副作用。

@@ -1,4 +1,4 @@
-// Barrel file（统一导出入口）：调用方只需要依赖 @trace-pilot/shared，无需知道内部文件结构。
+// 注意：这个 barrel 会把 zod 带进任何引用方；浏览器侧能摇掉它，依赖的是 package.json 里的 "sideEffects": false。
 export * from './constants';
 export * from './redaction';
 export * from './schemas';

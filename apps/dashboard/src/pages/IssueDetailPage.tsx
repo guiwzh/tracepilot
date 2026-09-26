@@ -28,7 +28,6 @@ import { IssueStatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
 
-// as const 把数组元素收窄为字面量联合类型，非法 tab 在编译期就会报错。
 const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'diagnosis'] as const;
 type Tab = (typeof tabs)[number];
 
@@ -280,7 +279,6 @@ export function IssueDetailPage() {
     tabs.includes(searchParams.get('tab') as Tab) ? searchParams.get('tab') : 'overview'
   ) as Tab;
   const queryClient = useQueryClient();
-  // Issue 摘要和事件样本可并行请求，React Query 分别缓存。
   const issue = useQuery({ queryKey: ['issue', issueId], queryFn: () => api.issue(issueId) });
   const events = useQuery({
     queryKey: ['issue-events', issueId],

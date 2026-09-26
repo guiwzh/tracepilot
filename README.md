@@ -334,18 +334,10 @@ packages/monitor-sdk 插件化浏览器 SDK
 packages/shared      Zod Schema、类型、隐私工具
 scripts              体积测量、生产冒烟、README 截图
 docs/reports         性能与诊断评测的权威基线
-docs/stages          每阶段实现与验证记录
 tests/e2e            浏览器闭环测试
 ```
 
-## 代码阅读
-
-如果你不熟悉项目中的 TypeScript、Zod、浏览器 SDK、Fastify、SQLite/Drizzle、React Query 或
-Playwright，可以按[代码阅读指南](docs/code-reading-guide.md)给出的数据流和文件顺序学习。
-核心源码也已补充中文注释，重点解释生命周期、缓存、事务、隐私和降级策略。
-
-真实浏览器检查结果见[浏览器质量审查](docs/reports/browser-audit.md)，后续补强项见
-[TODO.md](TODO.md)。
+真实浏览器检查结果见[浏览器质量审查](docs/reports/browser-audit.md)。
 
 ## 仍然不做
 

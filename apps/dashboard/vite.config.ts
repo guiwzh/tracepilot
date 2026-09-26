@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Vite 负责开发服务器和生产打包；React 插件提供 JSX 转换与 Fast Refresh。
 export default defineConfig({
   plugins: [react()],
   build: {

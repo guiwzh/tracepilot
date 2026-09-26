@@ -6,7 +6,7 @@ import { api } from '../services/api';
 import { IssueStatusBadge, LevelMark } from './Status';
 import { relativeTime } from '../utils/format';
 
-/** 项目内页面共用的侧栏与顶栏；Outlet 是 React Router 留给当前子路由的插槽。 */
+/** 项目内页面共用的侧栏与顶栏。 */
 export function AppShell() {
   const { projectId = 'demo-project' } = useParams();
   const navigate = useNavigate();

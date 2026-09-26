@@ -9,7 +9,6 @@ export function createId(): string {
 }
 
 export function getPageContext(): MonitorEvent['page'] {
-  // typeof 检查不会在 Node/SSR 环境中触发 ReferenceError。
   if (typeof location === 'undefined') return { url: 'unknown://' };
   return {
     url: location.href,

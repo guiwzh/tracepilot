@@ -4,7 +4,6 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
-// ESLint Flat Config：从通用 JS 规则逐层叠加 TypeScript、React Hooks 和测试例外。
 export default tseslint.config(
   {
     ignores: [

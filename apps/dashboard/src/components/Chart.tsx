@@ -33,7 +33,6 @@ export type ChartOption = echarts.ComposeOption<
 > & { xAxis?: unknown; yAxis?: unknown };
 
 export function Chart({ option, height = 260 }: { option: ChartOption; height?: number }) {
-  // ref 指向 React 管理的 DOM 节点，ECharts 在该节点内部执行命令式绘制。
   const ref = useRef<HTMLDivElement>(null);
   // 实例句柄跨 effect 共享：实例生命周期与数据更新分成两个 effect，
   // 避免 option 引用变化（React Query 每次 refetch 都会产生新引用）触发整图销毁重建。
