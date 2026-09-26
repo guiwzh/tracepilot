@@ -1,77 +1,157 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MonitorCore } from '../core/MonitorCore';
-import { PerformancePlugin } from './PerformancePlugin';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Metric } from 'web-vitals';
+import type { MonitorCore } from '../core/MonitorCore';
 
-// FakePerformanceObserver 主动发出浏览器性能条目，精确验证最终上报时机和计算规则。
-type EmitEntries = (entries: PerformanceEntry[]) => void;
+/**
+ * web-vitals 被替换成可手动触发的假实现：指标算法由官方库负责并有它自己的测试，
+ * 这里只验证本插件的上报时机、去重与单例注册。
+ */
+const webVitals = vi.hoisted(() => ({
+  callbacks: new Map<string, (metric: unknown) => void>(),
+  registrations: 0,
+}));
 
-const emitters = new Map<string, EmitEntries>();
+vi.mock('web-vitals', () => {
+  const register = (name: string) => (callback: (metric: unknown) => void) => {
+    webVitals.registrations += 1;
+    webVitals.callbacks.set(name, callback);
+  };
+  return {
+    onLCP: register('LCP'),
+    onCLS: register('CLS'),
+    onINP: register('INP'),
+    onFCP: register('FCP'),
+    onTTFB: register('TTFB'),
+  };
+});
 
-class FakePerformanceObserver {
-  constructor(private readonly callback: PerformanceObserverCallback) {}
-
-  observe(options: PerformanceObserverInit): void {
-    if (!options.type) return;
-    emitters.set(options.type, (entries) => {
-      this.callback(
-        { getEntries: () => entries } as PerformanceObserverEntryList,
-        this as unknown as PerformanceObserver,
-      );
-    });
-  }
-
-  disconnect(): void {}
+function emit(name: Metric['name'], value: number, id = `v6-${name}-1`): void {
+  webVitals.callbacks.get(name)?.({
+    name,
+    value,
+    rating: 'good',
+    delta: value,
+    id,
+    entries: [],
+    navigationType: 'navigate',
+    navigationId: 1,
+  } satisfies Metric);
 }
 
-function entry(name: string, startTime: number, duration = 0): PerformanceEntry {
-  return { name, entryType: name, startTime, duration, toJSON: () => ({}) };
+// 插件的单例状态是模块级的，每个用例重新加载模块，互不影响。
+async function freshPlugin() {
+  const { PerformancePlugin } = await import('./PerformancePlugin');
+  return new PerformancePlugin();
 }
+
+function fakeCore() {
+  const captureEvent = vi.fn((_type: string, _payload: Record<string, unknown>) => 'event-id');
+  return { captureEvent, core: { captureEvent } as unknown as MonitorCore };
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  webVitals.callbacks.clear();
+  webVitals.registrations = 0;
+});
 
 afterEach(() => {
-  emitters.clear();
   vi.unstubAllGlobals();
 });
 
 describe('PerformancePlugin', () => {
-  it('reports one final LCP, CLS, and INP sample when the page is hidden', async () => {
-    vi.stubGlobal('PerformanceObserver', FakePerformanceObserver);
-    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([]);
-    const captureEvent = vi.fn();
-    const plugin = new PerformancePlugin();
-    plugin.setup({ captureEvent } as unknown as MonitorCore);
-    await Promise.resolve();
+  it('reports FCP on arrival and the latest LCP, CLS and INP only when the page is hidden', async () => {
+    const plugin = await freshPlugin();
+    const { captureEvent, core } = fakeCore();
+    plugin.setup(core);
 
-    emitters.get('largest-contentful-paint')?.([
-      entry('largest-contentful-paint', 1_200),
-      entry('largest-contentful-paint', 2_200),
-    ]);
-    emitters.get('layout-shift')?.([
-      { ...entry('layout-shift', 100), value: 0.05, hadRecentInput: false } as PerformanceEntry,
-      { ...entry('layout-shift', 200), value: 0.1, hadRecentInput: false } as PerformanceEntry,
-      { ...entry('layout-shift', 300), value: 0.9, hadRecentInput: true } as PerformanceEntry,
-    ]);
-    emitters.get('event')?.([entry('event', 400, 80), entry('event', 500, 180)]);
+    emit('FCP', 900);
+    expect(captureEvent).toHaveBeenCalledTimes(1);
 
-    expect(captureEvent).not.toHaveBeenCalled();
+    emit('LCP', 1_200);
+    emit('LCP', 2_200);
+    emit('CLS', 0.05);
+    emit('CLS', 0.15);
+    emit('INP', 80);
+    emit('INP', 180);
+    expect(captureEvent).toHaveBeenCalledTimes(1);
+
     window.dispatchEvent(new Event('pagehide'));
     window.dispatchEvent(new Event('pagehide'));
 
-    expect(captureEvent.mock.calls).toEqual([
-      ['performance', { metric: 'LCP', value: 2_200, rating: 'good' }],
-      ['performance', { metric: 'CLS', value: 0.15, rating: 'needs-improvement' }],
-      ['performance', { metric: 'INP', value: 180, rating: 'good' }],
+    expect(captureEvent.mock.calls.map(([, payload]) => [payload.metric, payload.value])).toEqual([
+      ['FCP', 900],
+      ['LCP', 2_200],
+      ['CLS', 0.15],
+      ['INP', 180],
     ]);
+    expect(captureEvent.mock.calls[1]![1]).toMatchObject({ metricId: 'v6-LCP-1' });
     plugin.teardown();
   });
 
+  it('reports a grown value again under the same metric id so the server can overwrite it', async () => {
+    const plugin = await freshPlugin();
+    const { captureEvent, core } = fakeCore();
+    plugin.setup(core);
+
+    emit('CLS', 0.15);
+    window.dispatchEvent(new Event('pagehide'));
+    // 用户切回标签页后又发生了布局偏移。
+    emit('CLS', 0.3);
+    window.dispatchEvent(new Event('pagehide'));
+
+    expect(captureEvent.mock.calls.map(([, payload]) => [payload.metricId, payload.value])).toEqual(
+      [
+        ['v6-CLS-1', 0.15],
+        ['v6-CLS-1', 0.3],
+      ],
+    );
+    plugin.teardown();
+  });
+
+  it('registers web-vitals once per page however many times monitors start and stop', async () => {
+    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const first = fakeCore();
+    for (let round = 0; round < 3; round += 1) {
+      const plugin = new PerformancePlugin();
+      plugin.setup(round === 0 ? first.core : fakeCore().core);
+      plugin.teardown();
+    }
+    // 5 个指标各注册一次，而不是 15 次——库没有注销 API，重复注册会一直累积。
+    expect(webVitals.registrations).toBe(5);
+
+    emit('FCP', 700);
+    // 已销毁的实例不再收到指标。
+    expect(first.captureEvent).not.toHaveBeenCalled();
+  });
+
+  it('replays metrics that arrived before a later instance started', async () => {
+    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const early = new PerformancePlugin();
+    early.setup(fakeCore().core);
+    emit('TTFB', 320);
+    early.teardown();
+
+    const late = new PerformancePlugin();
+    const { captureEvent, core } = fakeCore();
+    late.setup(core);
+    await Promise.resolve();
+
+    expect(captureEvent).toHaveBeenCalledWith(
+      'performance',
+      expect.objectContaining({ metric: 'TTFB', value: 320, metricId: 'v6-TTFB-1' }),
+    );
+    late.teardown();
+  });
+
   /**
-   * 上一条用 mock core 隔离验证计算规则，但正因为绕开了 MonitorCore，它无法发现
-   * 真实链路上的问题：核心的生命周期闸门曾把 teardown 里的提交一并拦掉，
-   * destroy() 于是静默丢弃全部最终指标。这条测试接真实核心，堵住那个盲区。
+   * 上面几条用假核心隔离验证上报规则，但正因为绕开了 MonitorCore，它们发现不了真实链路上的问题：
+   * 核心的生命周期闸门曾把 teardown 里的提交一并拦掉，destroy() 于是静默丢弃全部最终指标。
+   * 这条测试接真实核心，堵住那个盲区。
    */
-  it('delivers final metrics to the transport when the real core is destroyed', async () => {
-    vi.stubGlobal('PerformanceObserver', FakePerformanceObserver);
-    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([]);
+  it('delivers pending metrics to the transport when the real core is destroyed', async () => {
+    const { MonitorCore } = await import('../core/MonitorCore');
+    const { PerformancePlugin } = await import('./PerformancePlugin');
     const monitor = new MonitorCore({
       dsn: 'http://localhost/envelopes',
       dsnKey: 'test-key',
@@ -79,13 +159,13 @@ describe('PerformancePlugin', () => {
       release: '1.0.0',
       environment: 'test',
       batchSize: 100,
+      persistence: false,
     });
     monitor.use(new PerformancePlugin());
     monitor.start();
-    await Promise.resolve();
 
-    emitters.get('largest-contentful-paint')?.([entry('largest-contentful-paint', 2_200)]);
-    // 页面还活着，最终值尚未提交。
+    emit('LCP', 2_200);
+    // 页面还活着，LCP 仍可能变化，尚未提交。
     expect(monitor.transport.pending()).toBe(0);
 
     monitor.destroy();

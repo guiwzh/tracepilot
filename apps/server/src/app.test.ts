@@ -256,6 +256,63 @@ describe('telemetry ingestion', () => {
     expect(projects.json().items[0]).toMatchObject({ issueCount: 0, eventCount: 1 });
   });
 
+  it('overwrites a Web Vital reported again under the same metric id', async () => {
+    // web-vitals 在页面生命周期里会以同一个 id 报出更大的 LCP/CLS/INP；按 id 覆盖，
+    // 一次访问只贡献一个样本，否则多个中间值会把 p75 拉偏。
+    const now = Date.now();
+    const lcp = (eventId: string, value: number, timestamp: number) => ({
+      ...event(eventId, '12345678', timestamp),
+      eventType: 'performance' as const,
+      payload: { metric: 'LCP', value, rating: 'good', metricId: 'v6-1727000000000-42' },
+    });
+    const send = (events: MonitorEvent[]) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/envelopes',
+        payload: { dsnKey: 'demo-dsn-key', sentAt: now, events },
+      });
+    const lcpSummary = async () =>
+      (await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/performance' }))
+        .json()
+        .items.find((item: { metric: string }) => item.metric === 'LCP');
+
+    expect((await send([lcp('first-report', 1_200, now - 2_000)])).json()).toMatchObject({
+      accepted: 1,
+    });
+    expect((await send([lcp('grown-report', 2_400, now)])).json()).toMatchObject({
+      accepted: 0,
+      metricUpdates: 1,
+    });
+    expect(await lcpSummary()).toMatchObject({ p75: 2_400, samples: 1 });
+
+    // 重试或补发的旧值晚到：以采集时间为准，不能覆盖已入库的新值。
+    await send([lcp('stale-retry', 1_200, now - 2_000)]);
+    expect(await lcpSummary()).toMatchObject({ p75: 2_400, samples: 1 });
+  });
+
+  it('accepts envelopes sent as text/plain so browsers skip the CORS preflight', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      headers: { 'content-type': 'text/plain;charset=UTF-8' },
+      payload: JSON.stringify({
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [event('plain-text', '55512345')],
+      }),
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ accepted: 1 });
+
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      headers: { 'content-type': 'text/plain;charset=UTF-8' },
+      payload: '{"dsnKey":',
+    });
+    expect(malformed.statusCode).toBe(400);
+  });
+
   it('normalizes invalid pagination and event limit query values', async () => {
     await app.inject({
       method: 'POST',

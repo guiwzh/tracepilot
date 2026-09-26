@@ -40,10 +40,10 @@ export class NetworkPlugin implements MonitorPlugin {
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = inputUrl(input);
       // 跳过 SDK 自己的上报请求，否则会出现“记录上报请求 → 再上报”的递归。
-      if (
-        url.includes(core.options.dsn) ||
-        new Headers(init?.headers).has('x-tracepilot-internal')
-      ) {
+      // Transport 构造时保存了原生 fetch，正常情况下上报根本不经过这里；这道判断兜住的是
+      // 另一个 SDK 实例在本插件之后创建、因而保存到了包装版本的情况。
+      // 不用自定义请求头做标记：自定义头会让每次跨域上报多一次 CORS 预检。
+      if (url.includes(core.options.dsn)) {
         return original.call(window, input, init);
       }
       const method = (

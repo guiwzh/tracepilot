@@ -17,7 +17,31 @@ import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
 export interface IngestResult {
   accepted: number;
   duplicates: number;
+  /** 以同一个 metricId 再次上报、覆盖了旧值的 Web Vitals 样本数。 */
+  metricUpdates: number;
   issueIds: string[];
+}
+
+/**
+ * web-vitals 为每个页面加载中的每个指标分配唯一 id；LCP/CLS/INP 的值在页面生命周期里会增长，
+ * SDK 会以同一个 id 再报一次。按 id 覆盖而不是追加，否则同一次访问的多个中间值会把 p75 拉偏。
+ */
+function metricInstanceId(event: MonitorEvent): string | null {
+  if (event.eventType !== 'performance') return null;
+  const metricId = event.payload.metricId;
+  return typeof metricId === 'string' && metricId.length > 0 && metricId.length <= 200
+    ? metricId
+    : null;
+}
+
+function eventContext(event: MonitorEvent) {
+  return {
+    page: { ...event.page, url: stripUrlQuery(event.page.url) },
+    device: event.device,
+    payload: event.payload,
+    environment: event.environment,
+    release: event.release,
+  };
 }
 
 function shouldCreateIssue(event: MonitorEvent): boolean {
@@ -148,17 +172,35 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
 
   let accepted = 0;
   let duplicates = 0;
+  let metricUpdates = 0;
   const issueIds = new Set<string>();
 
   // better-sqlite3 transaction 接受同步回调，回调抛错时会自动 ROLLBACK。
   const ingest = database.sqlite.transaction(() => {
     for (const rawEvent of envelope.events) {
       if (rawEvent.projectId !== project.id) throw new Error('PROJECT_DSN_MISMATCH');
-      const duplicate = database.sqlite
-        .prepare('SELECT 1 FROM events WHERE id = ?')
-        .get(rawEvent.eventId);
-      if (duplicate) {
-        // eventId 是幂等键，浏览器重试同一批次不会重复写入。
+      const metricId = metricInstanceId(rawEvent);
+      // 指标样本的行 id 由 metricId 派生，普通事件沿用 SDK 生成的 eventId。
+      const rowId = metricId ? `metric:${project.id}:${metricId}` : rawEvent.eventId;
+      const existing = database.sqlite
+        .prepare('SELECT created_at FROM events WHERE id = ?')
+        .get(rowId) as { created_at: number } | undefined;
+      if (existing && metricId) {
+        // 以采集时间为准做「后写者胜」：重试或补发的旧值晚到时，不能覆盖已经入库的新值。
+        if (rawEvent.timestamp >= existing.created_at) {
+          database.sqlite
+            .prepare('UPDATE events SET context_json = ?, created_at = ? WHERE id = ?')
+            .run(
+              JSON.stringify(eventContext(redactSensitive(rawEvent))),
+              rawEvent.timestamp,
+              rowId,
+            );
+        }
+        metricUpdates += 1;
+        continue;
+      }
+      if (existing) {
+        // eventId 是幂等键，浏览器重试同一批次、或 beacon 与在途请求重复送达时不会重复写入。
         duplicates += 1;
         continue;
       }
@@ -170,13 +212,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
       const message = eventTitle(event);
       const stack = typeof event.payload.stack === 'string' ? event.payload.stack : null;
       const userId = event.user?.id ?? event.user?.anonymousId ?? null;
-      const context = {
-        page: { ...event.page, url: stripUrlQuery(event.page.url) },
-        device: event.device,
-        payload: event.payload,
-        environment: event.environment,
-        release: event.release,
-      };
+      const context = eventContext(event);
 
       // 必须在事件落库之前判定，否则会查到本条刚写入的记录。
       const firstSeenForUser = issueId ? isFirstEventForUser(database, issueId, userId) : false;
@@ -184,7 +220,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
       database.db
         .insert(events)
         .values({
-          id: event.eventId,
+          id: rowId,
           issueId,
           releaseId,
           type: event.eventType,
@@ -205,5 +241,5 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
     }
   });
   ingest();
-  return { accepted, duplicates, issueIds: [...issueIds] };
+  return { accepted, duplicates, metricUpdates, issueIds: [...issueIds] };
 }

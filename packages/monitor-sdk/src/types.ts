@@ -15,7 +15,7 @@ export interface MonitorOptions {
   projectId: string;
   release: string;
   environment: 'development' | 'test' | 'production';
-  /** 0 到 1；在浏览器端随机丢弃部分事件，1 表示全部采集。 */
+  /** 0 到 1；按会话采样的比例，1 表示全部采集。同一标签页会话内的决定保持一致。 */
   sampleRate?: number;
   /** 队列达到该数量时立即发送。 */
   batchSize?: number;
@@ -27,6 +27,11 @@ export interface MonitorOptions {
   maxQueueSize?: number;
   /** 同类错误的短窗口去重时间，单位毫秒。 */
   dedupeWindow?: number;
+  /**
+   * 页面退出时浏览器只允许约 64 KiB 的 beacon 在途数据，发不完的事件默认写入 localStorage，
+   * 下次加载时补发（服务端按 eventId 去重）。设为 false 可关闭。
+   */
+  persistence?: boolean;
   user?: MonitorUser;
   /** 最后的业务侧隐私闸门；返回 null 可以取消本次事件。 */
   beforeSend?: (event: MonitorEvent) => MonitorEvent | null;

@@ -22,7 +22,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@trace-pilot/shared": "workspace:*"
+    "@trace-pilot/shared": "workspace:*",
+    "web-vitals": "^6.2.2"
   },
   "devDependencies": {
     "happy-dom": "^18.0.1",

@@ -4,9 +4,34 @@ import type { TraceDatabase } from '../db/client';
 import { ingestEnvelope } from '../services/events';
 import { symbolicateStack } from '../services/sourcemaps';
 
+function invalidJson(): Error {
+  return Object.assign(new Error('The telemetry envelope is not valid JSON.'), { statusCode: 400 });
+}
+
 /** 浏览器遥测入口：运行时校验 → 授权/入库 → 可选 Source Map 还原。 */
 export function registerEventRoutes(app: FastifyInstance, database: TraceDatabase): void {
-  app.post('/api/v1/envelopes', { config: { rawBody: false } }, async (request, reply) => {
+  // SDK 用 text/plain 发送 JSON：它是 CORS 安全列表类型，跨域上报不触发预检，
+  // sendBeacon 也不必走带凭据的预检。只在接入路由所在的封装作用域里改写这个解析器。
+  void app.register(async (scope) => {
+    scope.removeContentTypeParser('text/plain');
+    scope.addContentTypeParser('text/plain', { parseAs: 'string' }, (_request, body, done) => {
+      try {
+        done(null, JSON.parse(String(body)));
+      } catch {
+        done(invalidJson(), undefined);
+      }
+    });
+    registerEnvelopeRoute(scope, database);
+  });
+
+  app.get('/api/v1/playground/fail', async (_request, reply) => {
+    // 仅供本地 Playground 稳定制造 503，不代理任何真实上游服务。
+    return reply.code(503).send({ error: 'CHECKOUT_UPSTREAM_UNAVAILABLE', retryAfter: 30 });
+  });
+}
+
+function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): void {
+  app.post('/api/v1/envelopes', async (request, reply) => {
     // request.body 来自网络，必须先通过 Zod 才能作为 EventEnvelope 使用。
     const parsed = envelopeSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -45,10 +70,5 @@ export function registerEventRoutes(app: FastifyInstance, database: TraceDatabas
       }
       throw error;
     }
-  });
-
-  app.get('/api/v1/playground/fail', async (_request, reply) => {
-    // 仅供本地 Playground 稳定制造 503，不代理任何真实上游服务。
-    return reply.code(503).send({ error: 'CHECKOUT_UPSTREAM_UNAVAILABLE', retryAfter: 30 });
   });
 }

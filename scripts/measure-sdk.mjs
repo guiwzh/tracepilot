@@ -23,9 +23,10 @@ const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 
 // 预算留了约 15% 余量：既能挡住依赖链回归，又不会因为正常改动天天报警。
+// 2026-09 引入 web-vitals 后重新设定：它被 external 化，只体现在接入成本里，约占 2.9 KB gzip。
 const BUDGETS = {
-  artifactGzipBytes: 5_000,
-  consumerGzipBytes: 5_000,
+  artifactGzipBytes: 6_500,
+  consumerGzipBytes: 9_800,
   consumerZodIdentifiers: 0,
 };
 
@@ -83,22 +84,28 @@ monitor.start();
 globalThis.__sizeProbe = monitor;
 `;
 
-const bundled = await esbuild.build({
-  stdin: {
-    contents: consumerSource,
-    resolveDir: resolve(repoRoot, 'apps/playground'),
-    sourcefile: 'consumer-probe.js',
-    loader: 'js',
-  },
-  bundle: true,
-  minify: true,
-  format: 'esm',
-  platform: 'browser',
-  write: false,
-  logLevel: 'warning',
-});
+async function bundleConsumer(external = []) {
+  const bundled = await esbuild.build({
+    stdin: {
+      contents: consumerSource,
+      resolveDir: resolve(repoRoot, 'apps/playground'),
+      sourcefile: 'consumer-probe.js',
+      loader: 'js',
+    },
+    bundle: true,
+    minify: true,
+    format: 'esm',
+    platform: 'browser',
+    external,
+    write: false,
+    logLevel: 'warning',
+  });
+  return bundled.outputFiles[0].text;
+}
 
-const consumerBundle = bundled.outputFiles[0].text;
+const consumerBundle = await bundleConsumer();
+// 把 web-vitals 排除后再打一次，差值就是这个依赖在接入方包里的实际份额。
+const withoutWebVitals = Buffer.from(await bundleConsumer(['web-vitals']));
 // zod 的类名在压缩后仍然保留，因此可以作为“运行时依赖是否泄漏进浏览器包”的可靠信号。
 const zodIdentifiers = (consumerBundle.match(/\bZod[A-Z]\w*/g) ?? []).length;
 const consumerBytes = Buffer.from(consumerBundle);
@@ -116,6 +123,9 @@ const report = {
     minifiedBytes: consumerBytes.byteLength,
     gzipBytes: gzipSync(consumerBytes, { level: 9 }).byteLength,
     zodIdentifiers,
+    webVitalsGzipBytes:
+      gzipSync(consumerBytes, { level: 9 }).byteLength -
+      gzipSync(withoutWebVitals, { level: 9 }).byteLength,
   },
   budgets: BUDGETS,
   measuredAt: new Date().toISOString(),

@@ -150,6 +150,9 @@ const report = await page.evaluate(
       // 关掉定时冲刷，让测量只反映采集路径本身，不掺入网络往返。
       flushInterval: 86_400_000,
       batchSize: 100_000,
+      // 几百个实例在同一页面反复创建销毁：若开启退出持久化，前一个实例留下的事件会被
+      // 后一个实例补发，队列与丢弃计数就不再只反映本轮操作。
+      persistence: false,
     };
 
     const percentile = (values, quantile) => {

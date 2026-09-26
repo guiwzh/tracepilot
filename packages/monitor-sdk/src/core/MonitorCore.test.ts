@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorPlugin } from '../types';
 import { MonitorCore } from './MonitorCore';
 
@@ -11,9 +11,14 @@ function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> =
     release: '1.0.0',
     environment: 'test',
     batchSize: 100,
+    persistence: false,
     ...overrides,
   });
 }
+
+afterEach(() => {
+  sessionStorage.clear();
+});
 
 describe('MonitorCore', () => {
   it('registers a plugin once and tears it down', () => {
@@ -101,6 +106,48 @@ describe('MonitorCore', () => {
     expect(monitor.captureMessage('outer')).toBeTruthy();
     expect(reentered).toBe(1);
     expect(monitor.transport.pending()).toBe(1);
+    monitor.destroy();
+  });
+
+  it('samples whole sessions so an error never loses the context around it', () => {
+    // 按事件采样会让一条错误被采到、而它之前的请求没被采到，证据链因此断裂。
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const skipped = core({ sampleRate: 0.5 });
+    const plugin = { name: 'probe', setup: vi.fn(), teardown: vi.fn() };
+    skipped.use(plugin).start();
+    expect(skipped.captureMessage('dropped')).toBeNull();
+    // 未采样的会话连插件都不安装，宿主页面不承担包装全局 API 的开销。
+    expect(plugin.setup).not.toHaveBeenCalled();
+    skipped.destroy();
+
+    // 同一标签页会话里，刷新后的新实例沿用之前的决定，而不是重新掷骰子。
+    random.mockReturnValue(0.1);
+    const reloaded = core({ sampleRate: 0.5 });
+    reloaded.start();
+    expect(reloaded.captureMessage('still dropped')).toBeNull();
+    reloaded.destroy();
+
+    // 采样率变化后重新决定。
+    const rateChanged = core({ sampleRate: 0.4 });
+    rateChanged.start();
+    expect(rateChanged.captureMessage('now sampled')).toBeTruthy();
+    rateChanged.destroy();
+  });
+
+  it('deduplicates Firefox and Safari stacks by their first frame', () => {
+    // V8 的栈首行是消息本身；Firefox / Safari 没有消息行，第一行就是栈帧。
+    const monitor = core({ dedupeWindow: 10_000 });
+    monitor.start();
+    const firefoxError = (column: number, fn = 'calculateTotal') =>
+      Object.assign(new Error('total is undefined'), {
+        stack: `${fn}@https://shop.test/assets/app.js:1:${column}\nsubmit@https://shop.test/assets/app.js:1:900`,
+      });
+
+    expect(monitor.captureException(firefoxError(420))).toBeTruthy();
+    // 同一位置、列号随构建变化：视为重复。
+    expect(monitor.captureException(firefoxError(421))).toBeNull();
+    // 不同的首帧是另一个问题。
+    expect(monitor.captureException(firefoxError(420, 'applyPromotion'))).toBeTruthy();
     monitor.destroy();
   });
 

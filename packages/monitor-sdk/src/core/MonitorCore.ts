@@ -12,7 +12,15 @@ import type {
   MonitorUser,
 } from '../types';
 import { Transport } from '../transport/Transport';
-import { breadcrumbId, createId, errorPayload, getDeviceContext, getPageContext } from './helpers';
+import {
+  breadcrumbId,
+  createId,
+  errorPayload,
+  firstFrame,
+  getDeviceContext,
+  getPageContext,
+  sessionSampled,
+} from './helpers';
 
 // 所有外部数字配置都在边界处夹紧，避免 0 批量、无限重试等配置让 SDK 失控。
 function boundedNumber(
@@ -48,6 +56,8 @@ export class MonitorCore implements MonitorClient {
   private readonly recentErrors = new Map<string, number>();
   private started = false;
   private destroyed = false;
+  // 本会话是否被采样。未被采样时插件根本不安装，宿主页面不承担任何包装和监听的开销。
+  private readonly sampled: boolean;
   private user?: MonitorUser;
   // protect() 的重入标志：只负责“同一时刻不嵌套执行插件生命周期代码”。
   private protecting = false;
@@ -70,6 +80,7 @@ export class MonitorCore implements MonitorClient {
       maxQueueSize: boundedInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE, 10, 10_000),
     };
     this.user = options.user;
+    this.sampled = sessionSampled(options.projectId, this.options.sampleRate);
     this.transport = new Transport({
       endpoint: options.dsn,
       dsnKey: options.dsnKey ?? options.projectId,
@@ -77,6 +88,8 @@ export class MonitorCore implements MonitorClient {
       flushInterval: this.options.flushInterval,
       maxRetries: this.options.maxRetries,
       maxQueueSize: this.options.maxQueueSize,
+      // undefined 表示使用默认的 localStorage；显式关闭时不做退出持久化。
+      storage: options.persistence === false ? null : undefined,
     });
   }
 
@@ -84,7 +97,7 @@ export class MonitorCore implements MonitorClient {
     // 同名插件只注册一次；start 之后动态 use 时也能立即挂载。
     if (this.plugins.some((candidate) => candidate.name === plugin.name)) return this;
     this.plugins.push(plugin);
-    if (this.started) this.protect(() => plugin.setup(this));
+    if (this.started && this.sampled) this.protect(() => plugin.setup(this));
     return this;
   }
 
@@ -92,6 +105,7 @@ export class MonitorCore implements MonitorClient {
     // start/destroy 都设计为幂等，适配 React StrictMode 中开发期的重复生命周期。
     if (this.started || this.destroyed) return;
     this.started = true;
+    if (!this.sampled) return;
     for (const plugin of this.plugins) this.protect(() => plugin.setup(this));
   }
 
@@ -106,7 +120,7 @@ export class MonitorCore implements MonitorClient {
   addBreadcrumb(
     breadcrumb: Omit<Breadcrumb, 'id' | 'timestamp'> & Partial<Pick<Breadcrumb, 'timestamp'>>,
   ): void {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.sampled) return;
     // Breadcrumb 是一个有界环形历史：超过上限时丢弃最旧项，控制每个事件的体积。
     this.breadcrumbs.push(
       breadcrumbId({ ...breadcrumb, timestamp: breadcrumb.timestamp ?? Date.now() }),
@@ -128,12 +142,11 @@ export class MonitorCore implements MonitorClient {
   }
 
   captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null {
-    if (!this.started || this.destroyed || this.suppressCapture) return null;
+    if (!this.started || this.destroyed || !this.sampled || this.suppressCapture) return null;
     // 采集不能自我触发：beforeSend 若在回调里再次调用 captureException，
     // 没有这道闸门就会无限递归下去。
     if (this.capturing) return null;
-    // 先采样、再去重，尽量在创建完整上下文前快速退出。
-    if (Math.random() > this.options.sampleRate) return null;
+    // 去重放在创建完整上下文之前，错误风暴中被挡下的事件几乎没有开销。
     if (eventType === 'error' && this.isDuplicate(payload)) return null;
 
     const event: MonitorEvent = {
@@ -166,11 +179,7 @@ export class MonitorCore implements MonitorClient {
 
   private isDuplicate(payload: CapturePayload): boolean {
     // 行列号常随构建变化；签名只保留错误类型、消息和归一化后的首个调用帧。
-    const frame = (String(payload.stack ?? '').split('\n')[1] ?? '').replace(
-      /:\d+:\d+(?=\)?$)/,
-      ':line:column',
-    );
-    const signature = `${String(payload.name ?? '')}|${String(payload.message ?? '')}|${frame}`;
+    const signature = `${String(payload.name ?? '')}|${String(payload.message ?? '')}|${firstFrame(payload.stack)}`;
     const now = Date.now();
     const last = this.recentErrors.get(signature);
     this.recentErrors.set(signature, now);

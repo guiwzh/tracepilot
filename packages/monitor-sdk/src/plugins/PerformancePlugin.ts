@@ -1,104 +1,101 @@
-import { WEB_VITAL_THRESHOLDS } from '@trace-pilot/shared';
+import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from 'web-vitals';
 import type { MonitorPlugin } from '../types';
 import type { MonitorCore } from '../core/MonitorCore';
 
-type VitalName = keyof typeof WEB_VITAL_THRESHOLDS;
+/**
+ * 指标的计算交给 Google 官方的 web-vitals 库，本插件只决定「什么时候、以什么形式」上报。
+ *
+ * 早期版本自己用 PerformanceObserver 计算，三个口径都是错的：CLS 把所有偏移直接累加
+ * （现行定义是按会话窗口取最大值），INP 取了所有 event 条目的最大时长（应只看带
+ * interactionId 的交互、按交互分组后取高分位），LCP 在用户首次输入后仍在更新。
+ * 这些规则还在演进（2024 年 INP 取代了 FID），跟着官方库走比自己维护可靠。
+ *
+ * web-vitals 的 onXXX 没有注销 API，注册的 PerformanceObserver 和监听器会存活到页面结束。
+ * 如果每次 setup 都注册一遍，SPA 里反复 start/destroy 会让它们无限累积。
+ * 所以整页只注册一次（模块级单例），插件实例只是这个分发中心的订阅者。
+ */
+type Subscriber = (metric: Metric) => void;
 
-// 将原始数值映射到 Dashboard 使用的三档评级，阈值由 shared 包统一提供。
-function rating(metric: VitalName, value: number): 'good' | 'needs-improvement' | 'poor' {
-  const [good, poor] = WEB_VITAL_THRESHOLDS[metric];
-  return value <= good ? 'good' : value <= poor ? 'needs-improvement' : 'poor';
+const subscribers = new Set<Subscriber>();
+const latest = new Map<Metric['name'], Metric>();
+let registered = false;
+
+function registerOnce(): void {
+  if (registered) return;
+  registered = true;
+  const forward = (metric: Metric) => {
+    latest.set(metric.name, metric);
+    for (const subscriber of subscribers) subscriber(metric);
+  };
+  // reportAllChanges：每次数值变化都回调。插件因此总能拿到最新值，
+  // 即使 destroy() 发生在页面隐藏之前（SPA 卸载、热更新），也能提交当时的值。
+  onLCP(forward, { reportAllChanges: true });
+  onCLS(forward, { reportAllChanges: true });
+  onINP(forward, { reportAllChanges: true });
+  onFCP(forward);
+  onTTFB(forward);
 }
+
+// FCP 和 TTFB 一经产生就不再变化，到达即上报；另外三个在页面生命周期里持续变化，
+// 只在页面隐藏或插件销毁时提交最新值。
+const FINAL_ON_ARRIVAL = new Set<Metric['name']>(['FCP', 'TTFB']);
 
 export class PerformancePlugin implements MonitorPlugin {
   readonly name = 'PerformancePlugin';
   private core?: MonitorCore;
-  private readonly observers: PerformanceObserver[] = [];
-  private cls = 0;
-  private inp = 0;
-  private lcp?: number;
-  private hasCls = false;
-  private hasInp = false;
-  private finalized = false;
-  private readonly reported = new Set<VitalName>();
-  private readonly onPageHide = () => this.finalize();
+  // 每个指标实例（metric.id）已经上报过的值。值变化后会以同一个 id 再报一次，服务端按 id 覆盖。
+  private readonly reported = new Map<string, number>();
+  private readonly pending = new Map<Metric['name'], Metric>();
+  private readonly onMetric = (metric: Metric) => {
+    if (FINAL_ON_ARRIVAL.has(metric.name)) this.report(metric);
+    else this.pending.set(metric.name, metric);
+  };
+  private readonly onPageHide = () => this.flushPending();
   private readonly onVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') this.finalize();
+    if (document.visibilityState === 'hidden') this.flushPending();
   };
 
   setup(core: MonitorCore): void {
-    if (this.core || typeof window === 'undefined') return;
+    if (this.core || typeof window === 'undefined' || typeof document === 'undefined') return;
     this.core = core;
-    if (typeof PerformanceObserver === 'undefined') return;
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
-    // buffered: true 会把 observer 创建前已发生的性能条目也补回来。
-    this.observe('paint', (entry) => {
-      if (entry.name === 'first-contentful-paint') this.reportOnce('FCP', entry.startTime);
-    });
-    this.observe('largest-contentful-paint', (entry) => {
-      this.lcp = entry.startTime;
-    });
-    this.observe('layout-shift', (entry) => {
-      const shift = entry as PerformanceEntry & { value?: number; hadRecentInput?: boolean };
-      // 用户主动点击导致的布局变化不计入 CLS。
-      if (!shift.hadRecentInput) {
-        this.cls += shift.value ?? 0;
-        this.hasCls = true;
-      }
-    });
-    this.observe('event', (entry) => {
-      // INP 关注最慢交互，本地 MVP 取观察期内最大的 event duration。
-      this.inp = Math.max(this.inp, entry.duration);
-      this.hasInp = true;
-    });
+    subscribers.add(this.onMetric);
+    registerOnce();
+    // 晚于首批指标创建的实例（例如 StrictMode 下的第二次挂载）补收已有的值。
+    // 放进微任务是因为 setup 期间核心会屏蔽采集；重复的值与之前同 id，服务端覆盖而不是重复计数。
     queueMicrotask(() => {
-      // Navigation Timing 的 responseStart 近似当前页面的 TTFB。
-      const navigation = performance.getEntriesByType('navigation')[0] as
-        PerformanceNavigationTiming | undefined;
-      if (navigation) this.reportOnce('TTFB', navigation.responseStart);
+      if (!this.core) return;
+      for (const metric of latest.values()) this.onMetric(metric);
     });
   }
 
-  private observe(type: string, onEntry: (entry: PerformanceEntry) => void): void {
-    try {
-      const observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) onEntry(entry);
-      });
-      observer.observe({ type, buffered: true });
-      this.observers.push(observer);
-    } catch {
-      // 各浏览器支持的 entry type 不同；单个指标不可用不应影响其他采集。
-    }
-  }
-
-  private reportOnce(metric: VitalName, value: number): void {
-    if (this.reported.has(metric)) return;
-    this.reported.add(metric);
-    this.core?.captureEvent('performance', {
-      metric,
-      value: Number(value.toFixed(metric === 'CLS' ? 4 : 1)),
-      rating: rating(metric, value),
+  private report(metric: Metric): void {
+    if (this.reported.get(metric.id) === metric.value) return;
+    const eventId = this.core?.captureEvent('performance', {
+      metric: metric.name,
+      value: Number(metric.value.toFixed(metric.name === 'CLS' ? 4 : 1)),
+      rating: metric.rating,
+      metricId: metric.id,
+      navigationType: metric.navigationType,
     });
+    // 只在真正进入采集链路后才记为已上报；被闸门或 beforeSend 拦下的值下次还有机会。
+    if (eventId) this.reported.set(metric.id, metric.value);
   }
 
-  private finalize(): void {
-    // LCP/CLS/INP 在页面生命周期中会变化，页面隐藏时才提交最终值。
-    if (this.finalized) return;
-    this.finalized = true;
-    if (this.lcp !== undefined) this.reportOnce('LCP', this.lcp);
-    if (this.hasCls) this.reportOnce('CLS', this.cls);
-    if (this.hasInp) this.reportOnce('INP', this.inp);
+  private flushPending(): void {
+    for (const metric of this.pending.values()) this.report(metric);
+    this.pending.clear();
   }
 
   teardown(): void {
-    this.finalize();
-    for (const observer of this.observers) observer.disconnect();
-    this.observers.length = 0;
+    this.flushPending();
+    subscribers.delete(this.onMetric);
     if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibilityChange);
     }
+    this.reported.clear();
     this.core = undefined;
   }
 }

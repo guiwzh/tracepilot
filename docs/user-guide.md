@@ -302,11 +302,12 @@ monitor.destroy();
 | release       | 是           | 无        | 必须与 Releases 中的版本完全一致           |
 | environment   | 是           | 无        | development、test 或 production            |
 | user          | 否           | 无        | id 或 anonymousId，用于影响用户去重        |
-| sampleRate    | 否           | 1         | 0 至 1 的采样率                            |
+| sampleRate    | 否           | 1         | 0 至 1，按标签页会话采样，会话内决定不变   |
 | batchSize     | 否           | 10        | 1 至 100 条事件一批                        |
 | flushInterval | 否           | 5000 ms   | 定时发送间隔                               |
 | maxRetries    | 否           | 2         | 失败后的有限重试次数                       |
 | dedupeWindow  | 否           | 5000 ms   | 相同错误的短窗口去重时间                   |
+| persistence   | 否           | true      | 退出时发不完的事件写入 localStorage 补发   |
 | beforeSend    | 否           | 原样返回  | 发送前删除字段或返回 null 取消事件         |
 
 createMonitor 默认启用：
@@ -314,8 +315,9 @@ createMonitor 默认启用：
 - 运行时错误、未处理 Promise 和资源加载错误。
 - Fetch 与 XMLHttpRequest 结果及耗时。
 - 点击和 SPA 路由 Breadcrumb。
-- LCP、INP、CLS、FCP、TTFB。
-- 批量、定时、页面隐藏时的发送，以及有限重试。
+- LCP、INP、CLS、FCP、TTFB（由官方 web-vitals 库计算）。
+- 批量、定时、页面隐藏时的发送，以及有限重试；退出时按浏览器 64 KiB 配额分块发送，
+  发不完的写入 localStorage，下次加载补发。
 
 ## 6. 隐私与数据边界
 
