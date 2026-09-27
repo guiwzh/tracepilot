@@ -43,8 +43,7 @@ export interface InvestigationViewState {
   usage: InvestigationUsage | null;
 }
 
-export type InvestigationAction =
-  { type: 'reset' } | { type: 'events'; records: InvestigationStreamEvent[] };
+export type InvestigationAction = { type: 'events'; records: InvestigationStreamEvent[] };
 
 export const initialInvestigationState: InvestigationViewState = {
   lastSeq: 0,
@@ -163,7 +162,6 @@ export function investigationReducer(
   state: InvestigationViewState,
   action: InvestigationAction,
 ): InvestigationViewState {
-  if (action.type === 'reset') return initialInvestigationState;
   let next = state;
   for (const record of action.records) {
     if (record.seq <= next.lastSeq) continue;

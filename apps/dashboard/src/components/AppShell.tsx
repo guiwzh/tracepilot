@@ -73,10 +73,13 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [dismissSearch, openSearch, searchOpen]);
 
-  useEffect(() => {
+  // 切换项目时关闭搜索并清空输入：渲染期间比较上一次的 projectId 直接调整，避免 effect 里 setState。
+  const [searchProjectId, setSearchProjectId] = useState(projectId);
+  if (searchProjectId !== projectId) {
+    setSearchProjectId(projectId);
     setSearchOpen(false);
     setSearchValue('');
-  }, [projectId]);
+  }
 
   return (
     <div className="app-shell">

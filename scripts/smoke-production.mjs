@@ -137,7 +137,9 @@ const processExit = new Promise((resolveExit) => {
 try {
   await waitForHealth(`http://127.0.0.1:${port}/health`, processExit);
 } catch (error) {
-  throw new Error(`${error instanceof Error ? error.message : String(error)}\n${serverOutput}`);
+  throw new Error(`${error instanceof Error ? error.message : String(error)}\n${serverOutput}`, {
+    cause: error,
+  });
 } finally {
   await stopProcess(server, processExit);
   await rm(temporaryRoot, { recursive: true, force: true });

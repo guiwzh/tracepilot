@@ -13,6 +13,25 @@ import { formatNumber, relativeTime } from '../utils/format';
 
 const ISSUE_PAGE_SIZES = [10, 25, 50, 100] as const;
 
+const WINDOW_MS: Record<string, number> = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * URL 里保存的是相对时间窗口（window=24h），换算成绝对的 from 放在请求发出时：
+ * Date.now() 放在渲染期间是不纯的；更实际的问题是，早先在 useMemo 里换算时，
+ * from 只在 URL 变化时才重算，React Query 重新请求会沿用旧时间，窗口不再滑动。
+ */
+function withAbsoluteWindow(params: URLSearchParams): URLSearchParams {
+  const next = new URLSearchParams(params);
+  const duration = WINDOW_MS[next.get('window') ?? ''];
+  next.delete('window');
+  if (duration) next.set('from', String(Date.now() - duration));
+  return next;
+}
+
 /** Issue 列表把 URL 查询参数作为筛选状态的唯一事实来源，链接可复制、刷新可恢复。 */
 export function IssuesPage() {
   const { projectId = '' } = useParams();
@@ -21,17 +40,9 @@ export function IssuesPage() {
   const [route, setRoute] = useState(searchParams.get('route') ?? '');
   const compactRows = usePreferences((state) => state.compactRows);
   const setCompactRows = usePreferences((state) => state.setCompactRows);
-  // useMemo 避免每次渲染都创建新 URLSearchParams，并把 UI 的 window 选项转换为绝对时间。
+  // 补齐分页默认值；queryKey 用规范化后的查询串，时间窗口保持相对值，缓存键不随时间漂移。
   const requestParams = useMemo(() => {
     const params = new URLSearchParams(searchParams);
-    const durations: Record<string, number> = {
-      '24h': 24 * 60 * 60 * 1000,
-      '7d': 7 * 24 * 60 * 60 * 1000,
-      '30d': 30 * 24 * 60 * 60 * 1000,
-    };
-    const duration = durations[params.get('window') ?? ''];
-    params.delete('window');
-    if (duration) params.set('from', String(Date.now() - duration));
     if (!params.has('page')) params.set('page', '1');
     const requestedPageSize = Number(params.get('pageSize'));
     if (!ISSUE_PAGE_SIZES.includes(requestedPageSize as (typeof ISSUE_PAGE_SIZES)[number])) {
@@ -42,7 +53,7 @@ export function IssuesPage() {
   const issues = useQuery({
     // queryKey 包含项目和完整查询串，任一筛选变化都会对应独立缓存。
     queryKey: ['issues', projectId, requestParams.toString()],
-    queryFn: () => api.issues(projectId, requestParams),
+    queryFn: () => api.issues(projectId, withAbsoluteWindow(requestParams)),
   });
   const overview = useQuery({
     queryKey: ['overview', projectId],
@@ -55,11 +66,14 @@ export function IssuesPage() {
   });
   const project = projects.data?.items.find((item) => item.id === projectId);
 
-  useEffect(() => {
-    // 浏览器前进/后退或全局搜索进入列表时，同步 URL 中已经提交的筛选值。
+  // 浏览器前进/后退或全局搜索进入列表时，同步 URL 中已经提交的筛选值。
+  // 在渲染期间与上一次的参数比较并调整输入框状态，而不是在 effect 里 setState 多渲染一轮。
+  const [syncedParams, setSyncedParams] = useState(searchParams);
+  if (syncedParams !== searchParams) {
+    setSyncedParams(searchParams);
     setSearch(searchParams.get('search') ?? '');
     setRoute(searchParams.get('route') ?? '');
-  }, [searchParams]);
+  }
 
   // ECharts option 只在服务端趋势数据变化时重建，避免 Chart effect 反复 dispose/init。
   const trendOption = useMemo<ChartOption>(

@@ -390,7 +390,7 @@ export class Transport {
           KEEPALIVE_BUDGET_BYTES,
         );
         const body = this.envelopeBody(candidates.slice(sent, sent + count));
-        let accepted = false;
+        let accepted: boolean;
         try {
           accepted = navigator.sendBeacon(
             this.options.endpoint,

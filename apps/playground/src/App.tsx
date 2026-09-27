@@ -126,6 +126,9 @@ export function App() {
     });
     monitor.start();
     monitorRef.current = monitor;
+    // SDK 依赖浏览器全局并需在卸载时销毁，只能在 effect 里同步启动；它没有「已启动」事件可订阅，
+    // 所以在这里反映一次状态。只在挂载时发生，StrictMode 下的重复挂载也各只一次。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStatus('connected');
     return () => {
       // destroy 会移除所有全局监听器并尝试冲刷剩余队列。
