@@ -80,9 +80,11 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
       });
     }
     // prepared statement 的占位符确保状态和 ID 不会被解释为 SQL。
+    // 标记为已解决时记下时间：之后发生的新事件会把它重新打开（见 services/events.ts 的 upsertIssue）。
+    const resolvedAt = parsed.data.status === 'resolved' ? Date.now() : null;
     const result = database.sqlite
-      .prepare('UPDATE issues SET status = ? WHERE id = ?')
-      .run(parsed.data.status, issueId);
+      .prepare('UPDATE issues SET status = ?, resolved_at = ? WHERE id = ?')
+      .run(parsed.data.status, resolvedAt, issueId);
     // run() 返回受影响的行数；0 行说明没有这个 id 的 Issue。一条 UPDATE 同时完成了
     // 「是否存在」和「修改」，不需要先查一次。
     if (result.changes === 0) {

@@ -174,6 +174,58 @@ describe('telemetry ingestion', () => {
     });
   });
 
+  it('reopens a resolved issue when it happens again, but not for events from before the fix', async () => {
+    const send = (id: string, timestamp: number) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/envelopes',
+        payload: {
+          dsnKey: 'demo-dsn-key',
+          sentAt: Date.now(),
+          events: [event(id, '51234567', timestamp)],
+        },
+      });
+    const status = async (issueId: string) =>
+      (await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}` })).json().status;
+    const issueId = (await send('before-fix', Date.now() - 60_000)).json().issueIds[0];
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/issues/${issueId}/status`,
+      payload: { status: 'resolved' },
+    });
+
+    // 修复之前就发生、只是迟到的事件（SDK 从 localStorage 补发的积压）不算回归。
+    await send('late-arrival', Date.now() - 30_000);
+    expect(await status(issueId)).toBe('resolved');
+
+    // 回归：曾经 Issue 停在「已解决」，概览的未解决数不包含它，按未解决筛选也看不到。
+    await send('after-fix', Date.now() + 1_000);
+    expect(await status(issueId)).toBe('unresolved');
+    const overview = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/overview',
+    });
+    expect(overview.json().unresolvedIssues).toBe(1);
+  });
+
+  it('keeps an ignored issue ignored when new events arrive', async () => {
+    const send = (id: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/envelopes',
+        payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [event(id, '51234567')] },
+      });
+    const issueId = (await send('first')).json().issueIds[0];
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/issues/${issueId}/status`,
+      payload: { status: 'ignored' },
+    });
+    await send('second');
+    const issue = await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}` });
+    expect(issue.json()).toMatchObject({ status: 'ignored', eventCount: 2 });
+  });
+
   it('removes arbitrary URL query values from stored payloads and breadcrumbs', async () => {
     const unsafe = event('privacy-event', '93849202');
     unsafe.page.url = 'https://shop.test/checkout?campaign=private-campaign#payment';

@@ -241,7 +241,7 @@ flowchart LR
 核心原则：模型不可用时监控仍然可用；每条证据必须指向一次真实的工具调用并经服务端核对；遥测文本
 一律视为不可信数据；Source Map 和密钥永不发往浏览器。
 
-技术栈：`React 19 · TypeScript 6 · Fastify 5 · SQLite/Drizzle · Zod 4 · pnpm 12 Monorepo · Vite 8 · tsdown · Vitest 5 · web-vitals · Playwright`
+技术栈：`React 19 · TypeScript 6 · Fastify 5 · SQLite（better-sqlite3，手写 SQL + 编号迁移） · Zod 4 · pnpm 12 Monorepo · Vite 8 · tsdown · Vitest 5 · web-vitals · Playwright`
 
 详细设计见 [architecture.md](docs/architecture.md)，关键决策见
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、

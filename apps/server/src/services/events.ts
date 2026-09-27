@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
 import {
   redactPayload,
   redactSensitive,
@@ -8,7 +7,6 @@ import {
   type MonitorEvent,
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
-import { events, issues, releases } from '../db/schema';
 import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
 import type { StoredStack } from './sourcemaps';
 
@@ -104,60 +102,52 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
     .get(event.projectId, event.release) as { id: string } | undefined;
   if (existing) return existing.id;
   const id = randomUUID();
-  database.db
-    .insert(releases)
-    .values({ id, projectId: event.projectId, version: event.release, createdAt: event.timestamp })
-    .run();
+  database.sqlite
+    .prepare('INSERT INTO releases (id, project_id, version, created_at) VALUES (?, ?, ?, ?)')
+    .run(id, event.projectId, event.release, event.timestamp);
   return id;
 }
 
 /**
  * 把事件归到一个 Issue 上：已有相同指纹的 Issue 就更新它，没有就新建（这种「有则更新、无则插入」
  * 常被叫作 upsert）。成功的网络请求、性能样本不形成 Issue，返回 null。
+ *
+ * 一条 INSERT … ON CONFLICT DO UPDATE 完成：UNIQUE(project_id, fingerprint) 冲突时走更新分支。
+ * 更新分支里不带前缀的列名指已有的那一行，excluded.列名 指这次本想插入的值；
+ * SET 右边读到的都是更新之前的旧值，所以几个 CASE 判断的是同一个旧状态。
+ *
+ * - 出现时间：取最早和最晚；事件乱序到达时，只有更新的事件才改写标题。
+ * - 回归：已解决的 Issue 又发生了新事件（发生时间晚于标记解决的时间），重新打开为未解决。
+ *   只看发生时间，所以 SDK 补发的、解决之前就发生的积压事件不会把它重新打开。已忽略的 Issue 保持忽略。
+ * - 计数（event_count、user_count）从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加，
+ *   避免新建 Issue 的首条事件被同时计入初始值和增量而重复计数。
  */
 function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | null {
   if (!shouldCreateIssue(event)) return null;
-  // 指纹是聚合键；同项目相同指纹复用 Issue，只更新出现时间和最新标题。
-  const fingerprint = eventFingerprint(event);
-  const existing = database.sqlite
+  const row = database.sqlite
     .prepare(
-      'SELECT id, first_seen_at, last_seen_at FROM issues WHERE project_id = ? AND fingerprint = ?',
+      `INSERT INTO issues (id, project_id, fingerprint, title, status, level, first_seen_at, last_seen_at)
+       VALUES (@id, @projectId, @fingerprint, @title, 'unresolved', @level, @timestamp, @timestamp)
+       ON CONFLICT(project_id, fingerprint) DO UPDATE SET
+         first_seen_at = MIN(first_seen_at, excluded.first_seen_at),
+         last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
+         title = CASE WHEN excluded.last_seen_at >= last_seen_at THEN excluded.title ELSE title END,
+         status = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
+           THEN 'unresolved' ELSE status END,
+         resolved_at = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
+           THEN NULL ELSE resolved_at END
+       RETURNING id`,
     )
-    .get(event.projectId, fingerprint) as
-    { id: string; first_seen_at: number; last_seen_at: number } | undefined;
-
-  if (existing) {
-    database.db
-      .update(issues)
-      .set({
-        firstSeenAt: Math.min(existing.first_seen_at, event.timestamp),
-        lastSeenAt: Math.max(existing.last_seen_at, event.timestamp),
-        ...(event.timestamp >= existing.last_seen_at ? { title: eventTitle(event) } : {}),
-      })
-      .where(eq(issues.id, existing.id))
-      .run();
-    return existing.id;
-  }
-
-  const id = randomUUID();
-  database.db
-    .insert(issues)
-    .values({
-      id,
+    .get({
+      id: randomUUID(),
       projectId: event.projectId,
-      fingerprint,
+      // 指纹是聚合键；同项目相同指纹复用同一个 Issue。
+      fingerprint: eventFingerprint(event),
       title: eventTitle(event),
-      status: 'unresolved',
       level: eventLevel(event),
-      firstSeenAt: event.timestamp,
-      lastSeenAt: event.timestamp,
-      // 两个计数都从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加，
-      // 避免新建 Issue 的首条事件被同时计入初始值和增量而重复计数。
-      eventCount: 0,
-      userCount: 0,
-    })
-    .run();
-  return id;
+      timestamp: event.timestamp,
+    }) as { id: string };
+  return row.id;
 }
 
 function isFirstEventForUser(
@@ -256,22 +246,25 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
       // 必须在事件落库之前判定，否则会查到本条刚写入的记录。
       const firstSeenForUser = issueId ? isFirstEventForUser(database, issueId, userId) : false;
 
-      database.db
-        .insert(events)
-        .values({
-          id: rowId,
+      database.sqlite
+        .prepare(
+          `INSERT INTO events (id, issue_id, release_id, type, message, stack, page_url, user_id,
+             context_json, breadcrumbs_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          rowId,
           issueId,
           releaseId,
-          type: event.eventType,
+          event.eventType,
           message,
           stack,
-          pageUrl: stripUrlQuery(event.page.url),
+          stripUrlQuery(event.page.url),
           userId,
-          contextJson: JSON.stringify(context),
-          breadcrumbsJson: JSON.stringify(event.breadcrumbs),
-          createdAt: event.timestamp,
-        })
-        .run();
+          JSON.stringify(context),
+          JSON.stringify(event.breadcrumbs),
+          event.timestamp,
+        );
       if (issueId) {
         updateIssueCounters(database, issueId, firstSeenForUser);
         issueIds.add(issueId);
