@@ -21,12 +21,16 @@
 打开堆栈与 Release 页面。说明压缩后的文件名与 Release 会共同选定私有 Source Map；缺少 Map
 时会保留原始堆栈，并明确提示已降级。也可以上传单元测试使用的 Source Map 测试样例进行演示。
 
-## 3:00–4:00 — 诊断
+## 3:00–4:00 — 排障 Agent
 
-打开诊断页并生成报告。展示证据引用、置信度条、调查步骤、缺失信息、模型/Token/延迟元数据，
-以及只读声明。再次生成报告，演示上下文未变化时的缓存复用。
+打开 `Cannot read properties … (reading 'total')` 的 **Investigation** 标签并开始调查。边看边讲：
+
+- 每一步的思路流式出现，工具调用逐个完成；刷新页面，调查从事件日志续上，步骤不重复。
+- 报告里每条证据都有逐字引用和「已核验」标记，点击可跳回并展开当时返回给模型的原始结果。
+- 源码片段来自 Source Map 内联的源码；2.3.9 没有上传 map，这是 Agent 会如实记录的缺口。
+- 没有配置密钥时，界面标注为离线脚本：同一条循环、同一批工具与校验，但不是模型推理。
 
 ## 4:00–4:40 — 工程质量证明
 
-运行 `pnpm verify`、`pnpm test:e2e`、`pnpm benchmark` 和 `pnpm evaluate:diagnosis`。说明文档中的
+运行 `pnpm verify`、`pnpm test:e2e`、`pnpm benchmark` 和 `pnpm evaluate:agent`。说明文档中的
 所有数据都能追溯到可复现的脚本与报告，并明确本地微基准测试结果不代表生产 SLA。

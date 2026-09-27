@@ -1,4 +1,7 @@
-# 诊断冒烟评测
+# 单次诊断的契约冒烟测试
+
+> 这里的 100% 是确定性代码对 Schema 与缓存契约的检查，**不是诊断质量**。
+> 根因是否找对，见带标注的评测集：[agent-evaluation.md](agent-evaluation.md)。
 
 - 测量时间：2026-08-31（Asia/Shanghai）
 - 引擎：`local-evidence-engine`
