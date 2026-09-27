@@ -97,7 +97,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // 插件要先注册完成（await），依赖它们的路由才能正常工作。
   // origin: true 表示把请求的 Origin 原样回显为允许来源，也就是允许任何网页跨域调用。
   // 本地单用户的 MVP 可以接受；部署到公网前必须改成明确的域名白名单。
-  await app.register(cors, { origin: true, methods: ['GET', 'POST', 'PATCH', 'OPTIONS'] });
+  // Retry-After 不在 CORS 默认可读的响应头里：不显式暴露，跨域上报的 SDK 读不到它，
+  // 限流或维护时就无法照服务端要求的时间退避。
+  await app.register(cors, {
+    origin: true,
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    exposedHeaders: ['retry-after'],
+  });
   // multipart/form-data 是浏览器上传文件时的请求格式（Source Map 上传用到）。
   // 单文件最大 10 MB、只接受 1 个文件和 4 个普通字段，防止上传把内存或磁盘撑满。
   await app.register(multipart, {

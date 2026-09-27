@@ -1,95 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { createMonitor, type MonitorCore } from '@trace-pilot/monitor-sdk';
-
-const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:4318';
-
-/** 每个场景都通过浏览器真实 API 制造信号，验证 SDK 插件而不是伪造 Dashboard 数据。 */
-interface Scenario {
-  id: string;
-  number: string;
-  title: string;
-  description: string;
-  run(monitor: MonitorCore): void | Promise<void>;
-}
-
-const scenarios: Scenario[] = [
-  {
-    id: 'exception',
-    number: '01',
-    title: 'Runtime exception',
-    description: 'Throws outside the React event call stack so window.error observes it.',
-    run: () => {
-      // 抛到当前 React 点击回调之外，错误才会到达 window.error 全局监听器。
-      window.setTimeout(() => {
-        throw new TypeError(
-          `Cannot read properties of undefined (reading 'total') — order ${Date.now()}`,
-        );
-      });
-    },
-  },
-  {
-    id: 'promise',
-    number: '02',
-    title: 'Unhandled promise',
-    description: 'Rejects a payment promise without a catch handler.',
-    run: () => {
-      void Promise.reject(new Error(`Payment intent ${crypto.randomUUID()} was not initialized`));
-    },
-  },
-  {
-    id: 'resource',
-    number: '03',
-    title: 'Broken resource',
-    description: 'Adds an image whose URL returns no asset.',
-    run: () => {
-      // DOM 资源加载失败使用 error 捕获阶段传播，与普通 JavaScript 异常机制不同。
-      const image = new Image();
-      image.alt = 'Deliberately missing checkout badge';
-      image.src = `/missing-checkout-badge-${Date.now()}.png`;
-      image.hidden = true;
-      document.body.append(image);
-      window.setTimeout(() => image.remove(), 2_000);
-    },
-  },
-  {
-    id: 'fetch',
-    number: '04',
-    title: 'Fetch 503',
-    description: 'Calls a controlled upstream-failure endpoint.',
-    run: async () => {
-      await fetch(`${apiUrl}/api/v1/playground/fail?token=demo-secret`);
-    },
-  },
-  {
-    id: 'xhr',
-    number: '05',
-    title: 'XHR 503',
-    description: 'Exercises the legacy request instrumentation path.',
-    run: () => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', `${apiUrl}/api/v1/playground/fail?source=xhr`);
-      xhr.send();
-    },
-  },
-  {
-    id: 'route',
-    number: '06',
-    title: 'SPA route change',
-    description: 'Creates a navigation breadcrumb without reloading the page.',
-    run: () => {
-      history.pushState({}, '', `/checkout/review?session=${Date.now()}`);
-    },
-  },
-  {
-    id: 'custom',
-    number: '07',
-    title: 'Captured warning',
-    description: 'Sends an application-owned diagnostic message.',
-    run: (monitor) => {
-      monitor.captureMessage('Inventory response omitted warehouseId', 'warning');
-    },
-  },
-];
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import type { DeliveryStats } from '@trace-pilot/monitor-sdk';
+import { CrashWidget } from './CrashWidget';
+import { activitySnapshot, labTarget, monitor, record, subscribeActivity } from './lab';
+import { scenarios, type Lab, type Scenario } from './scenarios';
 
 function timeLabel(value: number): string {
   return new Intl.DateTimeFormat('en', {
@@ -99,55 +12,47 @@ function timeLabel(value: number): string {
   }).format(value);
 }
 
+/** 投递失败的原因与下一次自动重试的时间。 */
+function failureText(stats: DeliveryStats): string {
+  const status = stats.lastFailure?.status;
+  const reason =
+    status === null || status === undefined ? 'server unreachable' : `server answered ${status}`;
+  if (!stats.nextAttemptAt) return reason;
+  return `${reason}; next automatic retry in ${Math.max(1, Math.ceil((stats.nextAttemptAt - Date.now()) / 1000))} s`;
+}
+
 export function App() {
-  // SDK 实例是可变对象但不参与渲染，用 useRef 保存可避免每次更新 activity 都重新创建。
-  const monitorRef = useRef<MonitorCore | null>(null);
-  const [activity, setActivity] = useState<Array<{ label: string; time: number }>>([]);
-  const [status, setStatus] = useState<'starting' | 'connected'>('starting');
+  const activity = useSyncExternalStore(subscribeActivity, activitySnapshot);
+  const [stats, setStats] = useState(() => monitor.stats());
+  const [crashes, setCrashes] = useState(0);
 
   useEffect(() => {
-    // effect 负责 SDK 的完整生命周期；cleanup 在路由卸载和 StrictMode 检查时都会执行。
-    const monitor = createMonitor({
-      dsn: `${apiUrl}/api/v1/envelopes`,
-      dsnKey: import.meta.env.VITE_DEMO_DSN_KEY ?? 'demo-dsn-key',
-      projectId: import.meta.env.VITE_DEMO_PROJECT_ID ?? 'demo-project',
-      release: '2.4.1',
-      environment: 'production',
-      user: { id: `lab-user-${Math.floor(Math.random() * 6) + 1}` },
-      batchSize: 3,
-      flushInterval: 2_000,
-      beforeSend(event) {
-        // 演示业务侧 beforeSend：可追加标记，也可提前移除敏感字段。
-        return {
-          ...event,
-          payload: { ...event.payload, labScenario: true, password: '[removed by playground]' },
-        };
-      },
-    });
-    monitor.start();
-    monitorRef.current = monitor;
-    // SDK 依赖浏览器全局并需在卸载时销毁，只能在 effect 里同步启动；它没有「已启动」事件可订阅，
-    // 所以在这里反映一次状态。只在挂载时发生，StrictMode 下的重复挂载也各只一次。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setStatus('connected');
-    return () => {
-      // destroy 会移除所有全局监听器并尝试冲刷剩余队列。
-      monitor.destroy();
-      monitorRef.current = null;
-    };
+    // 投递状况没有事件可订阅，每秒读一次：服务端不可达时，页头如实显示积压和重试时间。
+    const timer = window.setInterval(() => setStats(monitor.stats()), 1_000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  async function runScenario(scenario: Scenario) {
-    const monitor = monitorRef.current;
-    if (!monitor) return;
-    setActivity((items) => [{ label: scenario.title, time: Date.now() }, ...items].slice(0, 6));
-    await scenario.run(monitor);
+  const lab: Lab = { monitor, crashWidget: () => setCrashes((count) => count + 1) };
+
+  function runScenario(scenario: Scenario) {
+    record('action', `Triggered ${scenario.number} · ${scenario.title}`);
+    // 同步调用：场景 01 要在点击处理函数里直接抛错。异步场景自身的失败（比如请求被取消）
+    // SDK 已经记录过了，这里接住它，免得再多出一条未处理的 rejection。
+    const result = scenario.run(lab);
+    if (result instanceof Promise) result.catch(() => {});
   }
 
   async function flush() {
-    await monitorRef.current?.flush();
-    setActivity((items) => [{ label: 'Buffer flushed', time: Date.now() }, ...items].slice(0, 6));
+    const result = await monitor.flush();
+    setStats(result);
+    if (result.pending === 0) {
+      record('delivery', 'Flush: queue empty', `${result.delivered} events delivered so far`);
+    } else {
+      record('problem', `Flush: ${result.pending} still pending`, failureText(result));
+    }
   }
+
+  const failing = stats.pending > 0 && stats.lastFailure !== null;
 
   return (
     <main>
@@ -156,14 +61,20 @@ export function App() {
           <span className="mark">TP</span>
           <span>TracePilot / incident lab</span>
         </a>
-        <div className="connection" data-state={status}>
-          <span /> {status === 'connected' ? 'SDK armed' : 'Starting SDK'}
+        <div className="connection" data-state={failing ? 'failing' : 'armed'} role="status">
+          <span />
+          {failing ? 'Delivery failing' : 'SDK armed'}
+          <small>
+            {stats.delivered} delivered · {stats.pending} pending
+          </small>
         </div>
       </header>
 
       <section className="intro">
         <div>
-          <p className="eyebrow">Controlled environment · release 2.4.1</p>
+          <p className="eyebrow">
+            Controlled environment · {labTarget.projectId} · release {labTarget.release}
+          </p>
           <h1>
             Break the checkout.
             <br />
@@ -173,10 +84,10 @@ export function App() {
         <div className="intro-note">
           <span className="signal-line" />
           <p>
-            Every control below creates a real browser signal. Run several in sequence to produce
-            the breadcrumbs an investigator would see around an incident.
+            Every control below creates a real browser signal. The flight recorder shows what the
+            SDK actually captured and whether the server received it.
           </p>
-          <button className="flush-button" onClick={flush}>
+          <button className="flush-button" onClick={() => void flush()}>
             Flush event buffer
           </button>
         </div>
@@ -184,7 +95,12 @@ export function App() {
 
       <section className="scenario-grid" aria-label="Failure scenarios">
         {scenarios.map((scenario) => (
-          <button className="scenario" key={scenario.id} onClick={() => void runScenario(scenario)}>
+          <button
+            className="scenario"
+            key={scenario.id}
+            data-scenario={scenario.id}
+            onClick={() => runScenario(scenario)}
+          >
             <span className="scenario-number">{scenario.number}</span>
             <span className="scenario-content">
               <strong>{scenario.title}</strong>
@@ -197,19 +113,26 @@ export function App() {
         ))}
       </section>
 
-      <aside className="activity" aria-live="polite">
+      <aside className="activity">
         <div>
-          <p className="eyebrow">Local activity</p>
+          <p className="eyebrow">What the SDK did</p>
           <h2>Flight recorder</h2>
+          <div className="widget" aria-label="Order summary widget">
+            <small>React widget · scenario 08</small>
+            <CrashWidget crashes={crashes} />
+          </div>
         </div>
-        <ol>
+        <ol aria-live="polite">
           {activity.length === 0 ? (
-            <li className="empty">No scenarios triggered in this page session.</li>
+            <li className="empty">No signals in this page session yet.</li>
           ) : (
-            activity.map((item, index) => (
-              <li key={`${item.time}-${index}`}>
+            activity.map((item) => (
+              <li key={item.id} data-kind={item.kind}>
                 <time>{timeLabel(item.time)}</time>
-                <span>{item.label}</span>
+                <span>
+                  {item.label}
+                  {item.detail && <small>{item.detail}</small>}
+                </span>
               </li>
             ))
           )}

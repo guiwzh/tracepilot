@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Metric } from 'web-vitals';
-import type { MonitorCore } from '../core/MonitorCore';
+import type { MonitorEvent } from '@trace-pilot/shared';
+import type { PluginContext } from '../types';
 
 /**
  * web-vitals 被替换成可手动触发的假实现：指标算法由官方库负责并有它自己的测试，
@@ -44,9 +45,9 @@ async function freshPlugin() {
   return new PerformancePlugin();
 }
 
-function fakeCore() {
+function fakeContext() {
   const captureEvent = vi.fn((_type: string, _payload: Record<string, unknown>) => 'event-id');
-  return { captureEvent, core: { captureEvent } as unknown as MonitorCore };
+  return { captureEvent, context: { captureEvent } as unknown as PluginContext };
 }
 
 beforeEach(() => {
@@ -62,8 +63,8 @@ afterEach(() => {
 describe('PerformancePlugin', () => {
   it('reports FCP on arrival and the latest LCP, CLS and INP only when the page is hidden', async () => {
     const plugin = await freshPlugin();
-    const { captureEvent, core } = fakeCore();
-    plugin.setup(core);
+    const { captureEvent, context } = fakeContext();
+    plugin.setup(context);
 
     emit('FCP', 900);
     expect(captureEvent).toHaveBeenCalledTimes(1);
@@ -76,8 +77,9 @@ describe('PerformancePlugin', () => {
     emit('INP', 180);
     expect(captureEvent).toHaveBeenCalledTimes(1);
 
-    window.dispatchEvent(new Event('pagehide'));
-    window.dispatchEvent(new Event('pagehide'));
+    // 页面隐藏由核心通过 onPageHidden 通知；同一值重复通知不会重复上报。
+    plugin.onPageHidden();
+    plugin.onPageHidden();
 
     expect(captureEvent.mock.calls.map(([, payload]) => [payload.metric, payload.value])).toEqual([
       ['FCP', 900],
@@ -91,14 +93,14 @@ describe('PerformancePlugin', () => {
 
   it('reports a grown value again under the same metric id so the server can overwrite it', async () => {
     const plugin = await freshPlugin();
-    const { captureEvent, core } = fakeCore();
-    plugin.setup(core);
+    const { captureEvent, context } = fakeContext();
+    plugin.setup(context);
 
     emit('CLS', 0.15);
-    window.dispatchEvent(new Event('pagehide'));
+    plugin.onPageHidden();
     // 用户切回标签页后又发生了布局偏移。
     emit('CLS', 0.3);
-    window.dispatchEvent(new Event('pagehide'));
+    plugin.onPageHidden();
 
     expect(captureEvent.mock.calls.map(([, payload]) => [payload.metricId, payload.value])).toEqual(
       [
@@ -111,10 +113,10 @@ describe('PerformancePlugin', () => {
 
   it('registers web-vitals once per page however many times monitors start and stop', async () => {
     const { PerformancePlugin } = await import('./PerformancePlugin');
-    const first = fakeCore();
+    const first = fakeContext();
     for (let round = 0; round < 3; round += 1) {
       const plugin = new PerformancePlugin();
-      plugin.setup(round === 0 ? first.core : fakeCore().core);
+      plugin.setup(round === 0 ? first.context : fakeContext().context);
       plugin.teardown();
     }
     // 5 个指标各注册一次，而不是 15 次——库没有注销 API，重复注册会一直累积。
@@ -128,13 +130,13 @@ describe('PerformancePlugin', () => {
   it('replays metrics that arrived before a later instance started', async () => {
     const { PerformancePlugin } = await import('./PerformancePlugin');
     const early = new PerformancePlugin();
-    early.setup(fakeCore().core);
+    early.setup(fakeContext().context);
     emit('TTFB', 320);
     early.teardown();
 
     const late = new PerformancePlugin();
-    const { captureEvent, core } = fakeCore();
-    late.setup(core);
+    const { captureEvent, context } = fakeContext();
+    late.setup(context);
     await Promise.resolve();
 
     expect(captureEvent).toHaveBeenCalledWith(
@@ -147,9 +149,9 @@ describe('PerformancePlugin', () => {
   /**
    * 上面几条用假核心隔离验证上报规则，但正因为绕开了 MonitorCore，它们发现不了真实链路上的问题：
    * 核心的生命周期闸门曾把 teardown 里的提交一并拦掉，destroy() 于是静默丢弃全部最终指标。
-   * 这条测试接真实核心，堵住那个盲区。
+   * 这两条测试接真实核心，堵住那个盲区。
    */
-  it('delivers pending metrics to the transport when the real core is destroyed', async () => {
+  it('delivers pending metrics with the exit flush when the real core is destroyed', async () => {
     const { MonitorCore } = await import('../core/MonitorCore');
     const { PerformancePlugin } = await import('./PerformancePlugin');
     const monitor = new MonitorCore({
@@ -166,9 +168,39 @@ describe('PerformancePlugin', () => {
 
     emit('LCP', 2_200);
     // 页面还活着，LCP 仍可能变化，尚未提交。
-    expect(monitor.transport.pending()).toBe(0);
+    expect(monitor.stats().pending).toBe(0);
 
     monitor.destroy();
-    expect(monitor.transport.pending()).toBe(1);
+    expect(await beaconMetrics()).toEqual([['LCP', 2_200]]);
+  });
+
+  it('submits the latest values before the exit flush when the page is hidden', async () => {
+    const { MonitorCore } = await import('../core/MonitorCore');
+    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const monitor = new MonitorCore({
+      dsn: 'http://localhost/envelopes',
+      dsnKey: 'test-key',
+      projectId: 'test-project',
+      release: '1.0.0',
+      environment: 'test',
+      batchSize: 100,
+      persistence: false,
+    });
+    monitor.use(new PerformancePlugin());
+    monitor.start();
+
+    emit('INP', 180);
+    window.dispatchEvent(new Event('pagehide'));
+    // 核心先通知插件提交，再由传输层发出退出 beacon：INP 就在这一个 beacon 里。
+    expect(await beaconMetrics()).toEqual([['INP', 180]]);
+    monitor.destroy();
   });
 });
+
+async function beaconMetrics(): Promise<Array<[unknown, unknown]>> {
+  const calls = vi.mocked(navigator.sendBeacon).mock.calls;
+  const bodies = await Promise.all(calls.map(([, body]) => (body as Blob).text()));
+  return bodies
+    .flatMap((body) => (JSON.parse(body) as { events: MonitorEvent[] }).events)
+    .map((event) => [event.payload.metric, event.payload.value]);
+}

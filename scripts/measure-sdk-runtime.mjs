@@ -197,7 +197,7 @@ const report = await page.evaluate(
     const captureMeans = batchedMicros(samples.captureBatches, samples.capturePerBatch, (index) => {
       captureMonitor.captureException(errors[index]);
     });
-    const capturedCount = captureMonitor.transport.pending();
+    const capturedCount = captureMonitor.stats().pending;
     captureMonitor.destroy();
 
     // ---- 3a. 重复风暴：少数根因高频重复，验证短窗口去重 ----
@@ -208,7 +208,7 @@ const report = await page.evaluate(
       repeatMonitor.captureException(new Error(`storm signature ${index % 10}`));
     }
     const repeatTotalMs = performance.now() - repeatStartedAt;
-    const repeatQueued = repeatMonitor.transport.pending();
+    const repeatQueued = repeatMonitor.stats().pending;
     repeatMonitor.destroy();
 
     // ---- 3b. 独特风暴：全部签名互不相同，去重帮不上忙，只能靠队列上限兜底 ----
@@ -223,8 +223,9 @@ const report = await page.evaluate(
     for (let index = 0; index < samples.uniqueStorm; index += 1) {
       uniqueMonitor.captureException(new Error(`unique failure ${index}`));
     }
-    const uniqueQueued = uniqueMonitor.transport.pending();
-    const uniqueDropped = uniqueMonitor.transport.dropped();
+    const uniqueStats = uniqueMonitor.stats();
+    const uniqueQueued = uniqueStats.pending;
+    const uniqueDropped = Object.values(uniqueStats.dropped).reduce((sum, count) => sum + count, 0);
     uniqueMonitor.destroy();
 
     // ---- 4. 反复 start/destroy 是否泄漏 ----

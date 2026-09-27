@@ -60,6 +60,26 @@ export function normalizeMinifiedFile(value: string): string {
   }
 }
 
+/** 上传的文件不是可用的 Source Map。路由据此返回 400，其余错误（例如磁盘写入失败）按 500 处理。 */
+export class InvalidSourceMapError extends Error {
+  constructor(reason: string) {
+    super(`INVALID_SOURCE_MAP: ${reason}`);
+  }
+}
+
+/**
+ * 读取并解析一份已登记的 map。读不到或解析失败（文件被清理、内容损坏）时返回 null：
+ * 调用方把它当作「没有 map」处理，保留压缩位置，而不是让整次接入或回填失败。
+ */
+async function loadConsumer(mapPath: string): Promise<SourceMapConsumer | null> {
+  try {
+    const rawMap = JSON.parse(await readFile(mapPath, 'utf8')) as RawSourceMap;
+    return await new SourceMapConsumer(rawMap);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 保存一份上传的 Source Map：校验 → 写入磁盘 → 在数据库登记 → 回填该版本的历史事件。
  * 同一版本重复上传同名文件时覆盖旧文件，而不是新增一份。
@@ -72,9 +92,21 @@ export async function saveSourceMap(
   content: Buffer,
 ): Promise<SourceMapRecord> {
   // 扩展名之外再验证 Source Map v3 的关键字段，拒绝任意 JSON 文件。
-  const parsed = JSON.parse(content.toString('utf8')) as Partial<RawSourceMap>;
+  let parsed: Partial<RawSourceMap>;
+  try {
+    parsed = JSON.parse(content.toString('utf8')) as Partial<RawSourceMap>;
+  } catch {
+    throw new InvalidSourceMapError('not JSON');
+  }
   if (parsed.version !== 3 || typeof parsed.mappings !== 'string') {
-    throw new Error('INVALID_SOURCE_MAP');
+    throw new InvalidSourceMapError('not a version 3 source map');
+  }
+  // 落盘和登记之前完整解析一遍：字段齐全却无法解析的 map（例如 sources 不是数组）
+  // 曾经先被保存下来，之后该版本每一次还原都会失败。
+  try {
+    (await new SourceMapConsumer(parsed as RawSourceMap)).destroy();
+  } catch {
+    throw new InvalidSourceMapError('mappings cannot be parsed');
   }
   await mkdir(sourceMapDir, { recursive: true });
   const now = Date.now();
@@ -139,7 +171,8 @@ export async function symbolicateStack(
    * 真正的开销在解析 mappings（VLQ 解码，source-map 库用 WebAssembly 实现），而不是读文件。
    * 早期实现逐帧调用 SourceMapConsumer.with，10 帧堆栈会把同一份 map 重复解析 10 次。
    */
-  const consumers = new Map<string, SourceMapConsumer>();
+  // 值为 null 表示这份 map 读不到或解析失败，同一次还原里不再重复尝试。
+  const consumers = new Map<string, SourceMapConsumer | null>();
 
   try {
     for (const line of lines) {
@@ -157,10 +190,13 @@ export async function symbolicateStack(
         continue;
       }
       let consumer = consumers.get(sourceMapRow.map_path);
-      if (!consumer) {
-        const rawMap = JSON.parse(await readFile(sourceMapRow.map_path, 'utf8')) as RawSourceMap;
-        consumer = await new SourceMapConsumer(rawMap);
+      if (consumer === undefined) {
+        consumer = await loadConsumer(sourceMapRow.map_path);
         consumers.set(sourceMapRow.map_path, consumer);
+      }
+      if (!consumer) {
+        result.push(line);
+        continue;
       }
       // 浏览器列号从 1 开始，source-map 库列号从 0 开始；读写时各转换一次。
       const original = consumer.originalPositionFor({
@@ -179,7 +215,7 @@ export async function symbolicateStack(
   } finally {
     // Consumer 的数据放在 WebAssembly 内存里，JS 的垃圾回收管不到，必须手动 destroy，
     // 否则回填整个 Release 时内存会持续增长。finally 保证中途抛错也会释放。
-    for (const consumer of consumers.values()) consumer.destroy();
+    for (const consumer of consumers.values()) consumer?.destroy();
   }
   // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
   return mapped > 0 ? result.join('\n') : null;
@@ -221,8 +257,9 @@ export async function sourceContext(
     .get(releaseId, normalizeMinifiedFile(frame.file)) as { map_path: string } | undefined;
   if (!row) return { ok: false, reason: 'NO_SOURCE_MAP' };
 
-  const rawMap = JSON.parse(await readFile(row.map_path, 'utf8')) as RawSourceMap;
-  const consumer = await new SourceMapConsumer(rawMap);
+  // 登记了但读不到（文件被清理或损坏），对调查来说就是缺少 map。
+  const consumer = await loadConsumer(row.map_path);
+  if (!consumer) return { ok: false, reason: 'NO_SOURCE_MAP' };
   try {
     // 与 symbolicateStack 相同：浏览器列号 1 基，source-map 库 0 基。
     const original = consumer.originalPositionFor({

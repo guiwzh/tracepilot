@@ -169,7 +169,7 @@ export function IssuesPage() {
             <span className="metric-signal">Needs review</span>
           </article>
           <article>
-            <small>Events / 24 h</small>
+            <small>Error events / 24 h</small>
             <strong>{formatNumber(overview.data?.events24h ?? 0)}</strong>
             <span>Across all releases</span>
           </article>

@@ -24,9 +24,12 @@ const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 
 // 预算留了约 15% 余量：既能挡住依赖链回归，又不会因为正常改动天天报警。
 // 2026-09 引入 web-vitals 后重新设定：它被 external 化，只体现在接入成本里，约占 2.9 KB gzip。
+// 2026-09-28 再次设定：SDK 端默认脱敏（含 shared 的脱敏规则）、噪声过滤与多类型去重、
+// 跨周期退避与 Retry-After、按标签页持久化、React 错误回调适配器，产物 +1.8 KB、接入 +2.2 KB gzip，
+// 明细见 docs/reports/performance.md。
 const BUDGETS = {
-  artifactGzipBytes: 6_500,
-  consumerGzipBytes: 9_800,
+  artifactGzipBytes: 8_600,
+  consumerGzipBytes: 12_200,
   consumerZodIdentifiers: 0,
 };
 

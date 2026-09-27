@@ -76,9 +76,21 @@ main {
   border-radius: 50%;
   background: #97a0a4;
 }
-.connection[data-state='connected'] span {
+.connection[data-state='armed'] span {
   background: #2f8a69;
   box-shadow: 0 0 0 4px rgba(47, 138, 105, 0.12);
+}
+.connection[data-state='failing'] {
+  color: var(--signal);
+}
+.connection[data-state='failing'] span {
+  background: var(--signal);
+  box-shadow: 0 0 0 4px rgba(231, 95, 43, 0.14);
+}
+.connection small {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 .intro {
   padding: 76px 0 60px;
@@ -211,6 +223,58 @@ h1 {
   color: var(--muted);
   display: block;
 }
+.activity li small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font:
+    400 11px 'DM Mono',
+    monospace;
+}
+.activity li[data-kind='event'] span::before,
+.activity li[data-kind='delivery'] span::before,
+.activity li[data-kind='problem'] span::before {
+  display: inline-block;
+  margin-right: 8px;
+  font:
+    500 10px 'DM Mono',
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.activity li[data-kind='event'] span::before {
+  content: 'Captured';
+  color: #2f8a69;
+}
+.activity li[data-kind='delivery'] span::before {
+  content: 'Server';
+  color: #2f8a69;
+}
+.activity li[data-kind='problem'] span::before {
+  content: 'Problem';
+  color: var(--signal);
+}
+.widget {
+  margin-top: 28px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.widget small {
+  color: var(--muted);
+  font:
+    500 10px 'DM Mono',
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.widget-state {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.widget-state.is-failed {
+  color: var(--signal);
+}
 
 @media (max-width: 760px) {
   main {
@@ -221,6 +285,9 @@ h1 {
   }
   .connection {
     font-size: 10px;
+  }
+  .connection small {
+    display: none;
   }
   .intro {
     grid-template-columns: 1fr;

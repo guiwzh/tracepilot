@@ -74,7 +74,9 @@ export interface IssueListResponse {
 
 export interface ProjectOverview {
   unresolvedIssues: number;
+  /** 24 小时内归入 Issue 的事件数（错误、失败的请求、资源加载失败），不含性能样本。 */
   events24h: number;
+  /** 24 小时内遇到过上述事件的去重用户数。 */
   affectedUsers24h: number;
   releases: number;
   trend: Array<{ timestamp: number; errors: number; users: number }>;

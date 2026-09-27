@@ -320,11 +320,11 @@ export function listIssueEvents(
 }
 
 /**
- * 项目概览：未解决 Issue 数、24 小时事件数与影响用户数、版本数，以及按小时分桶的 24 小时趋势。
+ * 项目概览：未解决 Issue 数、24 小时错误事件数与受影响用户数、版本数，以及按小时分桶的 24 小时趋势。
  *
- * 性能样本和成功请求不属于任何 Issue（issue_id 为 NULL），只能通过所在的 release 找到项目，
- * 所以用两个 LEFT JOIN 分别关联 issue 和 release，再用 COALESCE（取第一个非 NULL 的值）
- * 得出事件所属的项目。
+ * 事件数和用户数只统计归入 Issue 的事件（错误、失败的请求、资源加载失败）。性能样本不属于任何
+ * Issue：早先把它们也算进来，「受影响用户」就成了「这段时间访问过的所有用户」，
+ * 每个只上报过一次性能样本的访客都被算作受影响。
  */
 export function getProjectOverview(database: TraceDatabase, projectId: string): ProjectOverview {
   const since = Date.now() - 24 * 60 * 60 * 1000;
@@ -332,22 +332,20 @@ export function getProjectOverview(database: TraceDatabase, projectId: string): 
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM issues WHERE project_id = ? AND status = 'unresolved') unresolved,
-        (SELECT COUNT(*) FROM events e LEFT JOIN issues i ON i.id = e.issue_id
-         LEFT JOIN releases r ON r.id = e.release_id
-         WHERE COALESCE(i.project_id, r.project_id) = ? AND e.created_at >= ?) events,
-        (SELECT COUNT(DISTINCT e.user_id) FROM events e LEFT JOIN issues i ON i.id = e.issue_id
-         LEFT JOIN releases r ON r.id = e.release_id
-         WHERE COALESCE(i.project_id, r.project_id) = ? AND e.created_at >= ? AND e.user_id IS NOT NULL) users,
+        (SELECT COUNT(*) FROM events e JOIN issues i ON i.id = e.issue_id
+         WHERE i.project_id = ? AND e.created_at >= ?) events,
+        (SELECT COUNT(DISTINCT e.user_id) FROM events e JOIN issues i ON i.id = e.issue_id
+         WHERE i.project_id = ? AND e.created_at >= ? AND e.user_id IS NOT NULL) users,
         (SELECT COUNT(*) FROM releases WHERE project_id = ?) releases`,
     )
     .get(projectId, projectId, since, projectId, since, projectId) as Row;
   const buckets = database.sqlite
     .prepare(
       `SELECT CAST((e.created_at - ?) / 3600000 AS INTEGER) bucket,
-        COUNT(CASE WHEN e.issue_id IS NOT NULL THEN 1 END) errors,
+        COUNT(*) errors,
         COUNT(DISTINCT e.user_id) users
-       FROM events e LEFT JOIN issues i ON i.id = e.issue_id LEFT JOIN releases r ON r.id = e.release_id
-       WHERE COALESCE(i.project_id, r.project_id) = ? AND e.created_at >= ? GROUP BY bucket`,
+       FROM events e JOIN issues i ON i.id = e.issue_id
+       WHERE i.project_id = ? AND e.created_at >= ? GROUP BY bucket`,
     )
     .all(since, projectId, since) as Row[];
   const bucketMap = new Map(buckets.map((row) => [number(row.bucket), row]));

@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MonitorPlugin } from '../types';
+import type { MonitorEvent } from '@trace-pilot/shared';
+import { createMonitor } from '../index';
+import { ErrorPlugin } from '../plugins/ErrorPlugin';
+import type { MonitorPlugin, PluginContext } from '../types';
 import { MonitorCore } from './MonitorCore';
 
-// 直接实例化核心，隔离验证插件幂等、短窗口去重和 beforeSend 边界。
+// 直接实例化核心，隔离验证插件幂等、短窗口去重、脱敏和 beforeSend 边界。
 function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> = {}) {
   return new MonitorCore({
     dsn: 'http://localhost/envelopes',
@@ -14,6 +17,26 @@ function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> =
     persistence: false,
     ...overrides,
   });
+}
+
+/** 退出发送交给 sendBeacon 的全部事件（setup.ts 已把它换成不出网的替身）。 */
+async function beaconEvents(): Promise<MonitorEvent[]> {
+  const calls = vi.mocked(navigator.sendBeacon).mock.calls;
+  const bodies = await Promise.all(calls.map(([, body]) => (body as Blob).text()));
+  return bodies.flatMap((body) => (JSON.parse(body) as { events: MonitorEvent[] }).events);
+}
+
+/** 用 beforeSend 截下核心最终交给传输层的事件。 */
+function capturing(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> = {}) {
+  const events: MonitorEvent[] = [];
+  const monitor = core({
+    ...overrides,
+    beforeSend: (event) => {
+      events.push(event);
+      return event;
+    },
+  });
+  return { monitor, events };
 }
 
 afterEach(() => {
@@ -41,7 +64,7 @@ describe('MonitorCore', () => {
     const second = monitor.captureException(new Error('same failure'));
     expect(first).toBeTruthy();
     expect(second).toBeNull();
-    expect(monitor.transport.pending()).toBe(1);
+    expect(monitor.stats().pending).toBe(1);
     monitor.destroy();
   });
 
@@ -56,23 +79,84 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
-  it('lets a plugin submit its final sample while tearing down', () => {
+  it('lets a plugin submit its final sample while tearing down', async () => {
     // PerformancePlugin 的最终 LCP/CLS/INP 是在 teardown 里提交的。生命周期闸门
     // 曾经把这些提交一并拦掉，导致 destroy() 静默丢指标——而 SPA 组件卸载、热更新
     // 和 StrictMode 双次挂载都会走 destroy()。
     const monitor = core();
+    let context: PluginContext | undefined;
     monitor.use({
       name: 'final-sample',
-      setup: () => {},
+      setup: (value) => {
+        context = value;
+      },
       teardown: () => {
-        monitor.captureEvent('performance', { metric: 'LCP', value: 2_200, rating: 'good' });
+        context?.captureEvent('performance', { metric: 'LCP', value: 2_200, rating: 'good' });
       },
     });
     monitor.start();
-    expect(monitor.transport.pending()).toBe(0);
+    expect(monitor.stats().pending).toBe(0);
 
     monitor.destroy();
-    expect(monitor.transport.pending()).toBe(1);
+    // 核心先 teardown 插件、最后才销毁传输层，这个样本随退出发送一起交给了浏览器。
+    expect((await beaconEvents()).map((event) => event.payload.metric)).toEqual(['LCP']);
+  });
+
+  it('delivers what a plugin added after createMonitor submits on teardown', async () => {
+    // 回归：传输层曾是一个必须最后注册的插件。createMonitor(...).use(插件) 让新插件排在它后面，
+    // 新插件收尾时提交的事件留在已经销毁的队列里，一个 beacon 都没有发出。
+    let context: PluginContext | undefined;
+    const monitor = createMonitor({
+      dsn: 'http://localhost/envelopes',
+      projectId: 'test-project',
+      release: '1.0.0',
+      environment: 'test',
+      persistence: false,
+    }).use({
+      name: 'session-summary',
+      setup: (value) => {
+        context = value;
+      },
+      teardown: () => {
+        context?.captureEvent('error', { name: 'Message', message: 'final summary' });
+      },
+    });
+    monitor.start();
+    monitor.destroy();
+
+    expect((await beaconEvents()).map((event) => event.payload.message)).toContain('final summary');
+  });
+
+  it('sends on its own schedule when plugins are composed by hand', async () => {
+    // 回归：手动组合 MonitorCore 与插件而漏掉传输插件时，事件永远停在队列里。
+    const monitor = core({ flushInterval: 100 }).use(new ErrorPlugin());
+    monitor.start();
+    monitor.captureException(new Error('composed by hand'));
+
+    await vi.waitFor(() => expect(monitor.stats().delivered).toBe(1));
+    expect(vi.mocked(window.fetch)).toHaveBeenCalledTimes(1);
+    monitor.destroy();
+  });
+
+  it('asks plugins for their last samples before the exit flush', async () => {
+    const monitor = core();
+    let context: PluginContext | undefined;
+    monitor.start();
+    // start 之后才注册的插件同样赶得上：核心的页面隐藏监听早于传输层注册，并在事件发生时遍历全部插件。
+    monitor.use({
+      name: 'late-reporter',
+      setup: (value) => {
+        context = value;
+      },
+      teardown: () => {},
+      onPageHidden: () => {
+        context?.captureEvent('performance', { metric: 'CLS', value: 0.2, rating: 'good' });
+      },
+    });
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect((await beaconEvents()).map((event) => event.payload.metric)).toEqual(['CLS']);
+    monitor.destroy();
   });
 
   it('discards signals that plugin setup produces as a side effect', () => {
@@ -81,13 +165,13 @@ describe('MonitorCore', () => {
     const monitor = core();
     monitor.use({
       name: 'noisy-setup',
-      setup: () => {
-        monitor.captureMessage('instrumentation side effect');
+      setup: (context) => {
+        context.captureEvent('error', { name: 'Message', message: 'instrumentation side effect' });
       },
       teardown: () => {},
     });
     monitor.start();
-    expect(monitor.transport.pending()).toBe(0);
+    expect(monitor.stats().pending).toBe(0);
     monitor.destroy();
   });
 
@@ -105,7 +189,7 @@ describe('MonitorCore', () => {
     monitor.start();
     expect(monitor.captureMessage('outer')).toBeTruthy();
     expect(reentered).toBe(1);
-    expect(monitor.transport.pending()).toBe(1);
+    expect(monitor.stats().pending).toBe(1);
     monitor.destroy();
   });
 
@@ -119,6 +203,7 @@ describe('MonitorCore', () => {
     // 未采样的会话连插件都不安装，宿主页面不承担包装全局 API 的开销。
     expect(plugin.setup).not.toHaveBeenCalled();
     skipped.destroy();
+    expect(plugin.teardown).not.toHaveBeenCalled();
 
     // 同一标签页会话里，刷新后的新实例沿用之前的决定，而不是重新掷骰子。
     random.mockReturnValue(0.1);
@@ -148,6 +233,138 @@ describe('MonitorCore', () => {
     expect(monitor.captureException(firefoxError(421))).toBeNull();
     // 不同的首帧是另一个问题。
     expect(monitor.captureException(firefoxError(420, 'applyPromotion'))).toBeTruthy();
+    monitor.destroy();
+  });
+
+  it('deduplicates resources and failed requests that differ only in numbers or query', () => {
+    const monitor = core({ dedupeWindow: 10_000 });
+    monitor.start();
+    const image = (index: number) => ({
+      tagName: 'img',
+      url: `https://shop.test/thumbs/product-${index}.png?v=${index}`,
+    });
+    expect(monitor.captureEvent('resource', image(17))).toBeTruthy();
+    expect(monitor.captureEvent('resource', image(18))).toBeNull();
+    expect(
+      monitor.captureEvent('resource', { tagName: 'script', url: 'https://shop.test/a.js' }),
+    ).toBeTruthy();
+
+    const request = (id: number, status: number) => ({
+      method: 'GET',
+      url: `https://api.test/orders/${id}`,
+      status,
+      success: false,
+    });
+    expect(monitor.captureEvent('network', request(1001, 503))).toBeTruthy();
+    expect(monitor.captureEvent('network', request(1002, 503))).toBeNull();
+    // 同一个接口的另一种失败是新的证据。
+    expect(monitor.captureEvent('network', request(1002, 500))).toBeTruthy();
+    // 指标样本不参与去重：同一指标的新值必须送达，服务端按 metricId 覆盖。
+    expect(monitor.captureEvent('performance', { metric: 'LCP', value: 1 })).toBeTruthy();
+    expect(monitor.captureEvent('performance', { metric: 'LCP', value: 1 })).toBeTruthy();
+    monitor.destroy();
+  });
+
+  it('ignores errors that carry no diagnosable information by default', () => {
+    const monitor = core({ ignoreErrors: ['Third-party widget', /^Loading chunk \d+ failed/] });
+    monitor.start();
+    const capture = (payload: Record<string, unknown>) => monitor.captureEvent('error', payload);
+
+    expect(capture({ name: 'Error', message: 'Script error.' })).toBeNull();
+    expect(
+      capture({
+        name: 'Error',
+        message: 'ResizeObserver loop completed with undelivered notifications.',
+      }),
+    ).toBeNull();
+    expect(capture({ name: 'Error', message: 'ResizeObserver loop limit exceeded' })).toBeNull();
+    expect(
+      capture({
+        name: 'TypeError',
+        message: 'x is null',
+        filename: 'chrome-extension://abc/content.js',
+      }),
+    ).toBeNull();
+    expect(
+      capture({
+        name: 'TypeError',
+        message: 'y is null',
+        stack: 'TypeError: y is null\n    at inject (moz-extension://abc/inject.js:1:20)',
+      }),
+    ).toBeNull();
+    expect(capture({ name: 'Error', message: 'Third-party widget crashed' })).toBeNull();
+    expect(capture({ name: 'ChunkLoadError', message: 'Loading chunk 42 failed.' })).toBeNull();
+    expect(capture({ name: 'TypeError', message: 'cart.total is undefined' })).toBeTruthy();
+    monitor.destroy();
+  });
+
+  it('keeps breadcrumbs off metric samples but on events that form issues', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.addBreadcrumb({ type: 'click', category: 'ui.click', message: 'button#pay' });
+    monitor.captureEvent('performance', { metric: 'LCP', value: 2_200 });
+    monitor.captureEvent('network', { method: 'POST', url: '/pay', status: 503, success: false });
+    monitor.captureException(new Error('payment failed'));
+
+    expect(events.map((event) => [event.eventType, event.breadcrumbs.length])).toEqual([
+      ['performance', 0],
+      ['network', 1],
+      ['error', 1],
+    ]);
+    monitor.destroy();
+  });
+
+  it('scrubs URLs and secrets before beforeSend without breaking stack line numbers', () => {
+    history.replaceState({}, '', '/checkout/review?session=abc123#step-2');
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.addBreadcrumb({
+      type: 'network',
+      category: 'http',
+      message: 'GET /api/cart?token=secret → 200',
+      data: { url: 'https://api.test/cart?token=secret', authorization: 'Bearer abc' },
+    });
+    monitor.captureException(
+      Object.assign(new Error('Failed to load https://cdn.test/app.js?sig=secret'), {
+        stack:
+          'Error: Failed to load https://cdn.test/app.js?sig=secret\n' +
+          '    at load (https://cdn.test/app.js?v=3:1:420)\n' +
+          '    at run@https://cdn.test/vendor.js?t=99#x:2:15',
+      }),
+      { apiKey: 'sk-live-123' },
+    );
+
+    const [event] = events;
+    expect(event!.page.url).toBe(`${location.origin}/checkout/review`);
+    expect(event!.payload).toMatchObject({
+      message: 'Failed to load https://cdn.test/app.js',
+      apiKey: '[REDACTED]',
+    });
+    // 栈帧只删查询参数，行列号保留，服务端才能用 Source Map 还原。
+    expect(String(event!.payload.stack).split('\n')).toEqual([
+      'Error: Failed to load https://cdn.test/app.js',
+      '    at load (https://cdn.test/app.js:1:420)',
+      '    at run@https://cdn.test/vendor.js:2:15',
+    ]);
+    expect(event!.breadcrumbs[0]).toMatchObject({
+      message: 'GET /api/cart → 200',
+      data: { url: 'https://api.test/cart', authorization: '[REDACTED]' },
+    });
+    monitor.destroy();
+    history.replaceState({}, '', '/');
+  });
+
+  it('reports through flush() whether events actually reached the server', async () => {
+    const monitor = core({ maxRetries: 0 });
+    vi.mocked(window.fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    monitor.start();
+    monitor.captureMessage('checkout degraded', 'warning');
+
+    const failed = await monitor.flush();
+    expect(failed).toMatchObject({ pending: 1, delivered: 0, lastFailure: { status: null } });
+
+    const recovered = await monitor.flush();
+    expect(recovered).toMatchObject({ pending: 0, delivered: 1 });
     monitor.destroy();
   });
 

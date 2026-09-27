@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ServerConfig } from '../config';
 import type { TraceDatabase } from '../db/client';
-import { listSourceMaps, saveSourceMap } from '../services/sourcemaps';
+import { InvalidSourceMapError, listSourceMaps, saveSourceMap } from '../services/sourcemaps';
 
 /**
  * Source Map 接口：列出某个版本已上传的 map、上传新的 map。
@@ -75,6 +75,9 @@ export function registerSourceMapRoutes(
       );
       return reply.code(201).send(record);
     } catch (error) {
+      // 只有文件本身不合格才是 400；磁盘写入失败等服务端问题交给统一错误处理返回 500，
+      // 不能让上传方误以为是自己的 map 有问题。
+      if (!(error instanceof InvalidSourceMapError)) throw error;
       request.log.warn({ err: error }, 'invalid source map upload');
       return reply.code(400).send({
         error: 'INVALID_SOURCE_MAP',

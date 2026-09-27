@@ -45,7 +45,21 @@ function memoryStorage() {
     getItem: (key: string) => map.get(key) ?? null,
     setItem: (key: string, value: string) => void map.set(key, value),
     removeItem: (key: string) => void map.delete(key),
+    key: (index: number) => [...map.keys()][index] ?? null,
+    get length() {
+      return map.size;
+    },
   };
+}
+
+/** 某个接入键下每个标签页留下的持久化副本：键 → 其中事件的 eventId。 */
+function persistedCopies(storage: ReturnType<typeof memoryStorage>, dsnKey = 'public-key') {
+  return [...storage.map.entries()]
+    .filter(([key]) => key.startsWith(`tracepilot:pending:${dsnKey}`))
+    .map(([key, value]) => ({
+      key,
+      eventIds: (JSON.parse(value) as MonitorEvent[]).map((item) => item.eventId),
+    }));
 }
 
 function createTransport(overrides: Partial<TransportInit> = {}) {
@@ -211,10 +225,9 @@ describe('Transport', () => {
     const accepted = (await beaconEvents(sendBeacon)).length;
     expect(accepted).toBeGreaterThan(0);
 
-    const persisted = JSON.parse(storage.map.get('tracepilot:pending:public-key')!) as Array<{
-      eventId: string;
-    }>;
-    expect(persisted.map((item) => item.eventId)).toEqual(
+    const [copy, ...others] = persistedCopies(storage);
+    expect(others).toHaveLength(0);
+    expect(copy!.eventIds).toEqual(
       Array.from({ length: 6 - accepted }, (_, index) => `exit-${accepted + index}`),
     );
     // 标签页切到后台也会触发这条路径，页面未必真的卸载：持久化的事件仍留在队列里继续发送。
@@ -241,8 +254,103 @@ describe('Transport', () => {
       'left-over-1',
       'left-over-2',
     ]);
-    expect(storage.map.has('tracepilot:pending:public-key')).toBe(false);
+    expect(persistedCopies(storage)).toHaveLength(0);
     transport.destroy();
+  });
+
+  it('keeps one persisted copy per tab so tabs closing together do not overwrite each other', async () => {
+    // 回归：副本曾只按接入键存一份。两个标签页都开着、先后关闭时，后关闭的覆盖了先关闭的，
+    // 前一个标签页发不完的事件就此丢失。
+    vi.stubGlobal('navigator', { sendBeacon: vi.fn().mockReturnValue(false) });
+    const storage = memoryStorage();
+    const first = createTransport({ batchSize: 100, storage });
+    const second = createTransport({ batchSize: 100, storage });
+    first.start();
+    second.start();
+    first.enqueue({ ...event, eventId: 'tab-a' });
+    second.enqueue({ ...event, eventId: 'tab-b' });
+
+    first.destroy();
+    second.destroy();
+    expect(persistedCopies(storage).map((copy) => copy.eventIds)).toEqual([['tab-a'], ['tab-b']]);
+
+    // 下一次加载补发所有标签页的副本（包括旧版本不带实例编号的键），然后删掉它们。
+    storage.setItem(
+      'tracepilot:pending:public-key',
+      JSON.stringify([{ ...event, eventId: 'legacy' }]),
+    );
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    const next = createTransport({ storage, fetchImpl });
+    next.start();
+    await next.flush();
+    expect(
+      sentEvents(fetchImpl.mock.calls[0]![1]!.body)
+        .map((item) => item.eventId)
+        .sort(),
+    ).toEqual(['legacy', 'tab-a', 'tab-b']);
+    expect(persistedCopies(storage)).toHaveLength(0);
+    next.destroy();
+  });
+
+  it('clears only its own persisted copy once its queue drains', async () => {
+    vi.stubGlobal('navigator', { sendBeacon: vi.fn().mockReturnValue(false) });
+    const storage = memoryStorage();
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    const background = createTransport({ batchSize: 100, storage, fetchImpl });
+    background.enqueue({ ...event, eventId: 'background-tab' });
+    // 切到后台：发不出去的事件写进副本，但仍留在队列里。
+    await background.flush(true);
+    // 另一个标签页随后关闭，留下自己的副本。
+    const closing = createTransport({ batchSize: 100, storage });
+    closing.enqueue({ ...event, eventId: 'closed-tab' });
+    closing.destroy();
+
+    // 回到前台后排空队列，只删自己的副本，不能把别的标签页刚存下的删掉。
+    await background.flush();
+    expect(persistedCopies(storage).map((copy) => copy.eventIds)).toEqual([['closed-tab']]);
+  });
+
+  it('backs off automatic sends after a failure but still lets an explicit flush through', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    const transport = createTransport({ batchSize: 1, fetchImpl });
+
+    transport.enqueue({ ...event, eventId: 'first' });
+    await vi.waitFor(() => expect(transport.stats().lastFailure).not.toBeNull());
+    const { nextAttemptAt } = transport.stats();
+    expect(nextAttemptAt).toBeGreaterThan(Date.now());
+
+    // 退避期内，攒够一批也不会自动发送。
+    transport.enqueue({ ...event, eventId: 'second' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(transport.pending()).toBe(2);
+
+    // 调用方显式 flush 不受退避约束；送达后退避清零（batchSize 为 1，两条各发一次）。
+    await transport.flush();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(transport.stats()).toMatchObject({ pending: 0, delivered: 2, nextAttemptAt: null });
+  });
+
+  it('does not retry a rate-limited batch at once and honours Retry-After', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 429, headers: { 'retry-after': '30' } }));
+    const transport = createTransport({ maxRetries: 2, fetchImpl });
+    transport.enqueue(event);
+    await transport.flush();
+
+    // 429 不做同一轮里的快速重试。
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const { nextAttemptAt, lastFailure } = transport.stats();
+    expect(lastFailure?.status).toBe(429);
+    expect(nextAttemptAt).toBeGreaterThanOrEqual(Date.now() + 29_000);
+
+    // 服务端要求的等待连显式 flush 也要遵守。
+    await transport.flush();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(transport.pending()).toBe(1);
   });
 
   it('caps the queue so an error storm cannot grow it without bound', () => {

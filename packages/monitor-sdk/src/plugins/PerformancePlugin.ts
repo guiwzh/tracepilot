@@ -1,6 +1,5 @@
 import { onCLS, onFCP, onINP, onLCP, onTTFB, type Metric } from 'web-vitals';
-import type { MonitorPlugin } from '../types';
-import type { MonitorCore } from '../core/MonitorCore';
+import type { MonitorPlugin, PluginContext } from '../types';
 
 /**
  * 指标的计算交给 Google 官方的 web-vitals 库，本插件只决定「什么时候、以什么形式」上报。
@@ -37,12 +36,12 @@ function registerOnce(): void {
 }
 
 // FCP 和 TTFB 一经产生就不再变化，到达即上报；另外三个在页面生命周期里持续变化，
-// 只在页面隐藏或插件销毁时提交最新值。
+// 只在页面隐藏（核心调用 onPageHidden）或插件销毁时提交最新值。
 const FINAL_ON_ARRIVAL = new Set<Metric['name']>(['FCP', 'TTFB']);
 
 export class PerformancePlugin implements MonitorPlugin {
   readonly name = 'PerformancePlugin';
-  private core?: MonitorCore;
+  private context?: PluginContext;
   // 每个指标实例（metric.id）已经上报过的值。值变化后会以同一个 id 再报一次，服务端按 id 覆盖。
   private readonly reported = new Map<string, number>();
   private readonly pending = new Map<Metric['name'], Metric>();
@@ -50,29 +49,23 @@ export class PerformancePlugin implements MonitorPlugin {
     if (FINAL_ON_ARRIVAL.has(metric.name)) this.report(metric);
     else this.pending.set(metric.name, metric);
   };
-  private readonly onPageHide = () => this.flushPending();
-  private readonly onVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') this.flushPending();
-  };
 
-  setup(core: MonitorCore): void {
-    if (this.core || typeof window === 'undefined' || typeof document === 'undefined') return;
-    this.core = core;
-    window.addEventListener('pagehide', this.onPageHide);
-    document.addEventListener('visibilitychange', this.onVisibilityChange);
+  setup(context: PluginContext): void {
+    if (this.context || typeof window === 'undefined') return;
+    this.context = context;
     subscribers.add(this.onMetric);
     registerOnce();
     // 晚于首批指标创建的实例（例如 StrictMode 下的第二次挂载）补收已有的值。
     // 放进微任务是因为 setup 期间核心会屏蔽采集；重复的值与之前同 id，服务端覆盖而不是重复计数。
     queueMicrotask(() => {
-      if (!this.core) return;
+      if (!this.context) return;
       for (const metric of latest.values()) this.onMetric(metric);
     });
   }
 
   private report(metric: Metric): void {
     if (this.reported.get(metric.id) === metric.value) return;
-    const eventId = this.core?.captureEvent('performance', {
+    const eventId = this.context?.captureEvent('performance', {
       metric: metric.name,
       value: Number(metric.value.toFixed(metric.name === 'CLS' ? 4 : 1)),
       rating: metric.rating,
@@ -83,19 +76,19 @@ export class PerformancePlugin implements MonitorPlugin {
     if (eventId) this.reported.set(metric.id, metric.value);
   }
 
-  private flushPending(): void {
+  /**
+   * 页面进入后台或即将卸载：提交 LCP/CLS/INP 的最新值。由核心在传输层的退出发送之前调用；
+   * 插件自己监听 pagehide 的话，监听器可能排在传输层之后，提交的值就赶不上这次发送。
+   */
+  onPageHidden(): void {
     for (const metric of this.pending.values()) this.report(metric);
     this.pending.clear();
   }
 
   teardown(): void {
-    this.flushPending();
+    this.onPageHidden();
     subscribers.delete(this.onMetric);
-    if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.onPageHide);
-    if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this.onVisibilityChange);
-    }
     this.reported.clear();
-    this.core = undefined;
+    this.context = undefined;
   }
 }

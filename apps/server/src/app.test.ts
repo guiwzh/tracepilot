@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -258,6 +258,57 @@ describe('telemetry ingestion', () => {
     expect(projects.json().items[0]).toMatchObject({ issueCount: 0, eventCount: 1 });
   });
 
+  it('counts only issue events and the users who hit them in the overview', async () => {
+    // 回归：性能样本曾一并计入「24 小时事件数」和「受影响用户」，
+    // 于是每个只上报过一次指标的访客都被算作受影响。
+    const sample = (id: string, user: string): MonitorEvent => ({
+      ...event(id, '12345678'),
+      eventType: 'performance',
+      user: { id: user },
+      payload: { metric: 'LCP', value: 1800, rating: 'good' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [
+          { ...event('broken-checkout', '90000001'), user: { id: 'hit-by-error' } },
+          sample('visit-one', 'healthy-visitor-1'),
+          sample('visit-two', 'healthy-visitor-2'),
+        ],
+      },
+    });
+
+    const overview = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/demo-project/overview',
+    });
+    expect(overview.json()).toMatchObject({ events24h: 1, affectedUsers24h: 1 });
+    expect(
+      overview
+        .json()
+        .trend.reduce((sum: number, point: { errors: number }) => sum + point.errors, 0),
+    ).toBe(1);
+  });
+
+  it('lets cross-origin SDKs read Retry-After', async () => {
+    // 不在 CORS 默认可读的响应头里；不显式暴露，SDK 就无法照服务端要求的时间退避。
+    const response = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: 'https://shop.test' },
+    });
+    expect(response.headers['access-control-expose-headers']).toBe('retry-after');
+  });
+
+  it('no longer serves the playground-only failure endpoint', async () => {
+    // 演示用的故障接口已移到 Playground 的开发服务器里，生产服务不再暴露它。
+    const response = await app.inject({ method: 'GET', url: '/api/v1/playground/fail' });
+    expect(response.statusCode).toBe(404);
+  });
+
   it('overwrites a Web Vital reported again under the same metric id', async () => {
     // web-vitals 在页面生命周期里会以同一个 id 报出更大的 LCP/CLS/INP；按 id 覆盖，
     // 一次访问只贡献一个样本，否则多个中间值会把 p75 拉偏。
@@ -374,5 +425,62 @@ describe('telemetry ingestion', () => {
       payload: {},
     });
     expect(second.json()).toMatchObject({ id: first.json().id, cached: true });
+  });
+});
+
+describe('source map failures', () => {
+  function uploadMap(content: string) {
+    const boundary = '----tracepilot-test';
+    const payload =
+      `--${boundary}\r\nContent-Disposition: form-data; name="minifiedFile"\r\n\r\napp.aabbccdd.js\r\n` +
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="app.js.map"\r\n` +
+      `Content-Type: application/json\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+    return app.inject({
+      method: 'POST',
+      url: '/api/v1/releases/demo-release-2-4-1/source-maps',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+  }
+
+  function ingest(id: string) {
+    return app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [event(id, '70000001')] },
+    });
+  }
+
+  it('refuses an unparseable map without letting it break later ingestion', async () => {
+    // 回归：这样的 map 曾先被登记下来。之后该版本每个带堆栈的错误批次都返回 500，
+    // SDK 把整批当作可重试的失败放回队首，后面的事件全部卡在它身后。
+    const upload = await uploadMap(
+      JSON.stringify({ version: 3, mappings: 'AAAA', sources: 'not-an-array' }),
+    );
+    expect(upload.statusCode).toBe(400);
+    const maps = await app.inject({
+      method: 'GET',
+      url: '/api/v1/releases/demo-release-2-4-1/source-maps',
+    });
+    expect(maps.json().items).toEqual([]);
+    expect((await ingest('after-bad-map')).statusCode).toBe(202);
+  });
+
+  it('keeps accepting telemetry when a registered map file has been removed', async () => {
+    const valid = JSON.stringify({
+      version: 3,
+      file: 'app.aabbccdd.js',
+      sources: ['src/cart.ts'],
+      names: [],
+      mappings: 'AAAA',
+    });
+    expect((await uploadMap(valid)).statusCode).toBe(201);
+    for (const file of await readdir(join(directory, 'maps'))) {
+      await unlink(join(directory, 'maps', file));
+    }
+
+    const response = await ingest('after-missing-map');
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ accepted: 1 });
   });
 });

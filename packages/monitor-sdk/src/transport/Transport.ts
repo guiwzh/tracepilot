@@ -1,9 +1,6 @@
-import {
-  DEFAULT_BATCH_SIZE,
-  DEFAULT_FLUSH_INTERVAL,
-  DEFAULT_MAX_QUEUE_SIZE,
-  type MonitorEvent,
-} from '@trace-pilot/shared';
+import type { MonitorEvent } from '@trace-pilot/shared';
+import { clampOption } from '../core/options';
+import type { DeliveryStats } from '../types';
 
 /**
  * 传输层只负责排队、批量、重试和页面退出发送，不理解具体事件语义。
@@ -23,6 +20,9 @@ import {
  *
  * 投递语义是「至少一次」：同一事件可能被 beacon 和在途请求各发一次，
  * 由服务端按 eventId 幂等去重，客户端不追求恰好一次。
+ *
+ * 服务端不可达时，自动发送按指数退避并加随机抖动，服务端给出 Retry-After 时照做：
+ * 否则故障期间每个打开着的页面都按固定节奏持续打过来，恢复那一刻还会一拥而上。
  */
 
 /** keepalive 与 sendBeacon 共享的在途配额是 64 KiB（按请求体字节计），这里取 60 000 留出余量。 */
@@ -35,8 +35,14 @@ const DEFAULT_MAX_BATCH_BYTES = 512_000;
 const DEFAULT_MAX_STORED_BYTES = 256_000;
 /** payload 中超过这个长度的字符串（通常是异常栈）先被截断，再考虑裁剪 breadcrumb。 */
 const MAX_PAYLOAD_STRING = 4_000;
+/** 连续失败时自动发送的最长间隔。 */
+const MAX_BACKOFF_MS = 300_000;
+/** 服务端要求的等待时间上限，防止一个异常的 Retry-After 让 SDK 长时间停摆。 */
+const MAX_RETRY_AFTER_MS = 600_000;
+/** 退出时持久化副本的键前缀；完整的键再带上接入键和本页实例的编号。 */
+const STORAGE_PREFIX = 'tracepilot:pending:';
 
-type PendingStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+type PendingStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
 
 interface TransportOptions {
   endpoint: string;
@@ -67,21 +73,15 @@ interface QueuedEvent {
   bytes: number;
 }
 
-type SendOutcome = 'delivered' | 'rejected' | 'failed';
-
-export interface TransportStats {
-  pending: number;
-  dropped: {
-    /** 队列已满时到达的新事件。 */
-    queueFull: number;
-    /** 裁剪后仍超过单事件上限的事件。 */
-    oversize: number;
-    /** 服务端明确拒收（4xx）的批次，重试也不会成功，直接丢弃以免堵住队列。 */
-    rejected: number;
-    /** 服务端持续不可达、失败批次放回队列后超出上限而被裁掉的事件。 */
-    overflow: number;
-  };
+interface SendResult {
+  outcome: 'delivered' | 'rejected' | 'failed';
+  /** 最后一次响应的状态码；没有拿到响应（离线、连接被拒）时为 null。 */
+  status: number | null;
+  /** 服务端通过 Retry-After 要求的等待时间。 */
+  retryAfterMs: number | null;
 }
+
+export type TransportStats = DeliveryStats;
 
 function boundedInteger(
   value: number | undefined,
@@ -91,6 +91,18 @@ function boundedInteger(
 ): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.floor(value)));
+}
+
+/**
+ * 解析 Retry-After：秒数或 HTTP 日期。跨域响应里要读到它，服务端必须在
+ * Access-Control-Expose-Headers 里列出它（它不在 CORS 默认可读的响应头里）。
+ */
+function retryAfterMs(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  const milliseconds = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now();
+  if (!Number.isFinite(milliseconds)) return null;
+  return Math.max(0, Math.min(MAX_RETRY_AFTER_MS, milliseconds));
 }
 
 /** 不分配内存地计算 UTF-8 字节数；浏览器配额按字节计，而 string.length 是 UTF-16 码元数。 */
@@ -135,8 +147,17 @@ export class Transport {
   // 本页曾把事件持久化过，队列排空后要删除那份副本，避免下次加载重复补发。
   private persisted = false;
   private started = false;
+  private delivered = 0;
+  private lastFailure: DeliveryStats['lastFailure'] = null;
+  // 连续失败的批次数，决定退避时长；任何一批送达后清零。
+  private consecutiveFailures = 0;
+  // 自动发送（定时器、攒够一批）不早于这个时间；只约束自动发送，调用方显式 flush() 不受影响。
+  private backoffUntil = 0;
+  // 服务端通过 Retry-After 要求的等待：显式 flush() 也要遵守。
+  private retryAfterUntil = 0;
   private readonly fetchImpl?: typeof fetch;
   private readonly storageKey: string;
+  private readonly storageKeyPrefix: string;
   private readonly envelopeOverhead: number;
   private readonly onPageHide = () => void this.flush(true);
   private readonly onVisibilityChange = () => {
@@ -149,10 +170,10 @@ export class Transport {
   constructor(options: TransportInit) {
     this.options = {
       ...options,
-      batchSize: boundedInteger(options.batchSize, DEFAULT_BATCH_SIZE, 1, 100),
-      flushInterval: boundedInteger(options.flushInterval, DEFAULT_FLUSH_INTERVAL, 100, 86_400_000),
-      maxRetries: boundedInteger(options.maxRetries, 2, 0, 10),
-      maxQueueSize: boundedInteger(options.maxQueueSize, DEFAULT_MAX_QUEUE_SIZE, 10, 10_000),
+      batchSize: clampOption('batchSize', options.batchSize),
+      flushInterval: clampOption('flushInterval', options.flushInterval),
+      maxRetries: clampOption('maxRetries', options.maxRetries),
+      maxQueueSize: clampOption('maxQueueSize', options.maxQueueSize),
       maxEventBytes: boundedInteger(
         options.maxEventBytes,
         DEFAULT_MAX_EVENT_BYTES,
@@ -175,7 +196,10 @@ export class Transport {
         : typeof fetch === 'function'
           ? fetch.bind(globalThis)
           : undefined);
-    this.storageKey = `tracepilot:pending:${options.dsnKey}`;
+    // 同一个应用开着多个标签页时它们共用 localStorage：键里带上本页实例的编号，
+    // 各自写自己的副本。只按接入键存一份时，后退出的标签页会覆盖先退出的，那部分事件就丢了。
+    this.storageKeyPrefix = `${STORAGE_PREFIX}${options.dsnKey}`;
+    this.storageKey = `${this.storageKeyPrefix}:${Math.random().toString(36).slice(2, 10)}`;
     this.envelopeOverhead = utf8Length(this.envelopeBody([]));
   }
 
@@ -183,12 +207,12 @@ export class Transport {
     if (this.started) return;
     this.started = true;
     this.restorePersisted();
-    this.timer = setInterval(() => void this.flush(), this.options.flushInterval);
+    this.timer = setInterval(() => void this.flushAutomatically(), this.options.flushInterval);
     if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
-    if (this.queue.length > 0) void this.flush();
+    if (this.queue.length > 0) void this.flushAutomatically();
   }
 
   enqueue(event: MonitorEvent): void {
@@ -206,7 +230,7 @@ export class Transport {
     }
     this.queue.push(item);
     // fire-and-forget：采集 API 保持同步，不让业务代码等待网络。
-    if (this.queue.length >= this.options.batchSize) void this.flush();
+    if (this.queue.length >= this.options.batchSize) void this.flushAutomatically();
   }
 
   pending(): number {
@@ -220,7 +244,14 @@ export class Transport {
   }
 
   stats(): TransportStats {
-    return { pending: this.queue.length, dropped: { ...this.drops } };
+    const nextAttemptAt = Math.max(this.backoffUntil, this.retryAfterUntil);
+    return {
+      pending: this.queue.length,
+      delivered: this.delivered,
+      dropped: { ...this.drops },
+      lastFailure: this.lastFailure,
+      nextAttemptAt: nextAttemptAt > Date.now() ? nextAttemptAt : null,
+    };
   }
 
   /**
@@ -288,6 +319,10 @@ export class Transport {
       .join(',')}]}`;
   }
 
+  /**
+   * 立即发送队列。调用方显式调用时不受退避约束，但服务端用 Retry-After 要求的等待仍要遵守。
+   * preferBeacon 为 true 时走页面退出路径。
+   */
   async flush(preferBeacon = false): Promise<void> {
     // 退出路径必须先于排空判断：只要有一个普通 flush 在途，
     // 早期实现会直接返回那个 Promise，队列里的事件既不走 beacon 也随页面一起消失。
@@ -295,8 +330,19 @@ export class Transport {
       this.flushOnExit();
       return;
     }
+    if (Date.now() < this.retryAfterUntil) return;
+    return this.startDrain();
+  }
+
+  /** 定时器和「攒够一批」触发的发送：还在退避期内就跳过，等之后的某次触发。 */
+  private flushAutomatically(): void {
+    if (Date.now() < Math.max(this.backoffUntil, this.retryAfterUntil)) return;
+    void this.startDrain();
+  }
+
+  private startDrain(): Promise<void> {
     if (this.draining) return this.draining;
-    if (this.queue.length === 0) return;
+    if (this.queue.length === 0) return Promise.resolve();
     this.draining = this.drain().finally(() => {
       this.draining = undefined;
     });
@@ -314,23 +360,43 @@ export class Transport {
       const batch = this.queue.splice(0, count);
       this.inFlight = batch;
       this.inFlightHandedToBeacon = false;
-      const outcome = await this.send(this.envelopeBody(batch));
+      const result = await this.send(this.envelopeBody(batch));
       const handedToBeacon = this.inFlightHandedToBeacon;
       this.inFlight = undefined;
 
-      if (outcome === 'rejected') {
+      if (result.outcome === 'delivered') {
+        this.delivered += batch.length;
+        this.consecutiveFailures = 0;
+        this.backoffUntil = 0;
+        continue;
+      }
+      this.lastFailure = { at: Date.now(), status: result.status };
+      if (result.outcome === 'rejected') {
         // 不可重试的拒收：丢掉这一批并继续，绝不能让它堵在队首。
         this.drops.rejected += batch.length;
         continue;
       }
-      if (outcome === 'failed') {
-        // 页面退出时这批已经交给了 beacon，再放回队列只会重复发送。
-        if (!handedToBeacon) this.requeue(batch);
-        // 服务端不可达：留给下一次定时 flush，不在这里空转。
-        return;
-      }
+      // 页面退出时这批已经交给了 beacon，再放回队列只会重复发送。
+      if (!handedToBeacon) this.requeue(batch);
+      // 服务端不可达：进入退避，由之后的自动发送重试，不在这里空转。
+      this.scheduleRetry(result.retryAfterMs);
+      return;
     }
     if (this.persisted) this.clearPersisted();
+  }
+
+  /**
+   * 自动发送的退避：flushInterval × 2^(连续失败次数 − 1)，上限 5 分钟，再乘 0.5～1 的随机系数，
+   * 让同时遇到故障的大量页面错开重试。服务端给了 Retry-After 时，按它和退避中较晚的一个。
+   */
+  private scheduleRetry(retryAfterMs: number | null): void {
+    this.consecutiveFailures += 1;
+    const exponential = Math.min(
+      MAX_BACKOFF_MS,
+      this.options.flushInterval * 2 ** (this.consecutiveFailures - 1),
+    );
+    this.backoffUntil = Date.now() + exponential * (0.5 + Math.random() * 0.5);
+    if (retryAfterMs !== null) this.retryAfterUntil = Date.now() + retryAfterMs;
   }
 
   private requeue(batch: QueuedEvent[]): void {
@@ -343,8 +409,9 @@ export class Transport {
     }
   }
 
-  private async send(body: string): Promise<SendOutcome> {
-    if (!this.fetchImpl) return 'failed';
+  private async send(body: string): Promise<SendResult> {
+    if (!this.fetchImpl) return { outcome: 'failed', status: null, retryAfterMs: null };
+    let status: number | null = null;
     for (let attempt = 0; attempt <= this.options.maxRetries; attempt += 1) {
       try {
         const response = await this.fetchImpl(this.options.endpoint, {
@@ -352,17 +419,24 @@ export class Transport {
           headers: { 'content-type': 'text/plain;charset=UTF-8' },
           body,
         });
-        if (response.ok) return 'delivered';
-        if (!isRetryableStatus(response.status)) return 'rejected';
+        status = response.status;
+        if (response.ok) return { outcome: 'delivered', status, retryAfterMs: null };
+        if (!isRetryableStatus(status)) return { outcome: 'rejected', status, retryAfterMs: null };
+        const retryAfter = retryAfterMs(response.headers.get('retry-after'));
+        // 限流（429）或服务端明确给出了等待时间：马上重试只会再被拒，交给跨周期的退避。
+        if (status === 429 || retryAfter !== null) {
+          return { outcome: 'failed', status, retryAfterMs: retryAfter };
+        }
       } catch {
         // 网络错误：可能是暂时离线，按可重试处理。
+        status = null;
       }
       if (attempt < this.options.maxRetries) {
-        // 100ms、200ms、400ms……指数退避，且次数有硬上限。
+        // 同一轮里的快速重试只为扛过瞬时抖动：100ms、200ms、400ms……次数有硬上限。
         await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
       }
     }
-    return 'failed';
+    return { outcome: 'failed', status, retryAfterMs: null };
   }
 
   /**
@@ -447,19 +521,41 @@ export class Transport {
     }
   }
 
+  /**
+   * 补发之前留下的副本：本接入键下所有标签页的，也包括旧版本不带实例编号的那个键。
+   * 某个副本的主人可能还开着（只是切到了后台），它也会发送自己队列里的同一批事件，
+   * 这种重复由服务端按 eventId 去重。
+   */
   private restorePersisted(): void {
     const storage = this.options.storage;
     if (!storage) return;
-    let events: MonitorEvent[] = [];
+    const events: MonitorEvent[] = [];
     try {
-      const raw = storage.getItem(this.storageKey);
-      if (!raw) return;
-      // 先删再补发：即使这一轮又没发完，退出路径也会把它们重新写回来。
-      storage.removeItem(this.storageKey);
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) events = parsed as MonitorEvent[];
+      // 先收集键再逐个读取：边遍历边删除会让 key(index) 的下标错位。
+      const keys: string[] = [];
+      for (let index = 0; index < storage.length; index += 1) {
+        const key = storage.key(index);
+        if (
+          key !== null &&
+          (key === this.storageKeyPrefix || key.startsWith(`${this.storageKeyPrefix}:`))
+        ) {
+          keys.push(key);
+        }
+      }
+      for (const key of keys) {
+        const raw = storage.getItem(key);
+        // 先删再补发：即使这一轮又没发完，退出路径也会把它们写进本页自己的副本。
+        storage.removeItem(key);
+        if (!raw) continue;
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          if (Array.isArray(parsed)) events.push(...(parsed as MonitorEvent[]));
+        } catch {
+          // 损坏的副本无法补发，删掉即可。
+        }
+      }
     } catch {
-      return;
+      // 存储不可用：放弃补发。
     }
     for (const event of events) {
       if (event && typeof event === 'object' && typeof event.eventId === 'string') {

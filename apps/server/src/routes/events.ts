@@ -36,11 +36,6 @@ export function registerEventRoutes(app: FastifyInstance, database: TraceDatabas
     });
     registerEnvelopeRoute(scope, database);
   });
-
-  app.get('/api/v1/playground/fail', async (_request, reply) => {
-    // 仅供本地 Playground 稳定制造 503，不代理任何真实上游服务。
-    return reply.code(503).send({ error: 'CHECKOUT_UPSTREAM_UNAVAILABLE', retryAfter: 30 });
-  });
 }
 
 function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): void {

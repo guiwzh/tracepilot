@@ -1,34 +1,18 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-/** Playwright 端到端测试跨越真实浏览器、SDK、HTTP Server、SQLite 和 Dashboard。 */
-interface IssueItem {
-  id: string;
-  title: string;
-  eventCount: number;
-}
-
-async function issues(request: APIRequestContext): Promise<IssueItem[]> {
-  const response = await request.get(
-    'http://127.0.0.1:4318/api/v1/projects/demo-project/issues?page=1&pageSize=25',
-  );
-  expect(response.ok()).toBeTruthy();
-  return ((await response.json()) as { items: IssueItem[] }).items;
-}
-
-function warningCount(items: IssueItem[]): number {
-  return items
-    .filter((item) => item.title.includes('warehouseId'))
-    .reduce((total, item) => total + item.eventCount, 0);
-}
+/**
+ * Playwright 端到端测试跨越真实浏览器、SDK、HTTP Server、SQLite 和 Dashboard。
+ * Playground 各场景的采集链路见 playground.spec.ts。
+ */
 
 test('triage view loads seeded telemetry and preserves filters in the URL', async ({ page }) => {
   await page.goto('/projects/demo-project/issues');
   await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
   await expect(
-    page.locator('.summary-metrics article').filter({ hasText: 'Events / 24 h' }),
-  ).toContainText('207');
+    page.locator('.summary-metrics article').filter({ hasText: 'Error events / 24 h' }),
+  ).toContainText('167');
   await expect(page.locator('.issue-row')).toHaveCount(10);
 
   await page.getByLabel('Severity', { exact: true }).selectOption('warning');
@@ -258,16 +242,4 @@ test('source map upload maps a newly ingested browser stack through the API', as
       force: true,
     });
   }
-});
-
-test('playground SDK sends a captured warning through the real ingest API', async ({
-  page,
-  request,
-}) => {
-  const before = warningCount(await issues(request));
-  await page.goto('http://127.0.0.1:4174');
-  await expect(page.getByText('SDK armed')).toBeVisible();
-  await page.getByRole('button', { name: /Captured warning/ }).click();
-  await page.getByRole('button', { name: 'Flush event buffer' }).click();
-  await expect.poll(async () => warningCount(await issues(request))).toBeGreaterThan(before);
 });
