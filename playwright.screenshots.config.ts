@@ -25,6 +25,9 @@ export default defineConfig({
     {
       command: 'pnpm --filter @trace-pilot/server dev',
       url: 'http://127.0.0.1:4318/health',
+      // 即使 apps/server/.env 里配置了模型密钥，测试与截图也固定走离线脚本：
+      // 结果确定、不产生费用。dotenv 不会覆盖已存在的环境变量，空字符串即可生效。
+      env: { MODEL_API_KEY: '' },
       reuseExistingServer: true,
       timeout: 120_000,
     },

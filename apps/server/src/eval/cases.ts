@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 import type { SourceMapFixture } from '../demo/sourceMaps';
 
@@ -74,7 +75,10 @@ const NOW = Date.now();
 
 function event(spec: EventSpec): MonitorEvent {
   const timestamp = NOW - spec.minutesAgo * 60_000;
-  const id = `${spec.caseId}-${String(spec.index).padStart(3, '0')}`;
+  // 事件 id 会出现在工具结果里。用例名（例如 misleading-analytics-404）本身就是答案提示，
+  // 第一次对真实模型评测时，单次调用的报告里直接引用了它；所以 id 只用不透明的哈希前缀。
+  const prefix = createHash('sha256').update(spec.caseId).digest('hex').slice(0, 6);
+  const id = `evt-${prefix}-${String(spec.index).padStart(3, '0')}`;
   const route = spec.route ?? '/checkout';
   return {
     eventId: id,

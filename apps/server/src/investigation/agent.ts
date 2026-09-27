@@ -148,7 +148,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
     { role: 'system', content: INVESTIGATION_SYSTEM_PROMPT },
     { role: 'user', content: investigationRequest(issue) },
   ];
-  // 本次运行里真实发生过的工具调用；引用校验只认这里的记录。
+  // 本次运行里真实发生过的工具调用，按模型可见的编号（T1、T2……）索引；引用校验只认这里的记录。
   const calls = new Map<string, ExecutedCall>();
   let reportAttempts = 0;
   let finalizing = false;
@@ -248,10 +248,13 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
       }
 
       executed += 1;
+      // 编号写进结果正文的第一行：tool_call_id 只在消息元数据里，模型读不到，没法拿来引用。
+      const ref = `T${calls.size + 1}`;
       emit({
         type: 'tool.called',
         step,
         toolCallId: call.id,
+        ref,
         name: call.name,
         args: parseArguments(call.arguments),
       });
@@ -261,7 +264,12 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
         limits.toolTimeoutMs,
       );
       usage.toolCalls += 1;
-      calls.set(call.id, { name: call.name, ok: result.ok, output: result.output });
+      calls.set(ref, {
+        toolCallId: call.id,
+        name: call.name,
+        ok: result.ok,
+        output: result.output,
+      });
       emit({
         type: 'tool.completed',
         step,
@@ -271,7 +279,11 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
         truncated: result.truncated,
         durationMs: Math.round(performance.now() - startedAt),
       });
-      messages.push({ role: 'tool', tool_call_id: call.id, content: result.output });
+      messages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: `ref: ${ref} (${call.name})\n${result.output}`,
+      });
     }
   }
 }

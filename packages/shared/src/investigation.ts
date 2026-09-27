@@ -3,9 +3,13 @@ import { z } from 'zod';
 /**
  * 排障 Agent 的公开契约：模型提交的报告、服务端校验后的报告，以及推给 Dashboard 的事件流。
  *
- * 与单次诊断相比，报告里的每条证据都必须指向一次真实的工具调用（toolCallId），
+ * 与单次诊断相比，报告里的每条证据都必须指向一次真实的工具调用，
  * 并附一段从那次调用结果里逐字摘出的原文（quote）。服务端会逐条核对：
  * 引用不存在的调用、或原文在结果里找不到，都视为模型编造证据。
+ *
+ * 引用用的是写在工具结果正文里的短编号（ref，如 T3），而不是接口层的 tool_call_id：
+ * 后者只存在于消息元数据里，模型读不到。对真实模型的第一次评测里，DeepSeek 因此先引用
+ * 工具名、再编造 id，引用有效率为 0。
  */
 export const investigationSourceSchema = z.enum([
   'issue',
@@ -17,20 +21,22 @@ export const investigationSourceSchema = z.enum([
 ]);
 
 export const submittedEvidenceSchema = z.object({
-  toolCallId: z.string().min(1).max(120),
-  quote: z.string().min(4).max(300),
-  description: z.string().min(1).max(500),
+  /** 工具结果第一行写着的编号，例如 T3。 */
+  resultRef: z.string().min(1).max(20),
+  quote: z.string().min(4).max(400),
+  description: z.string().min(1).max(800),
   source: investigationSourceSchema,
 });
 
 /** 模型通过 submit_report 工具提交的内容；免责声明和校验结果由服务端补上，不交给模型写。 */
 export const submittedReportSchema = z.object({
-  summary: z.string().min(1).max(600),
+  // 上限留得宽：真实模型不遵守 JSON Schema 的 maxLength，卡得太紧只会多一轮被驳回的往返。
+  summary: z.string().min(1).max(1500),
   evidence: z.array(submittedEvidenceSchema).min(1).max(8),
   possibleCauses: z
     .array(
       z.object({
-        cause: z.string().min(1).max(400),
+        cause: z.string().min(1).max(800),
         confidence: z.number().min(0).max(1),
         // 引用 evidence 数组的下标，而不是复述证据文字，UI 才能把原因和证据、工具调用连起来。
         evidenceRefs: z.array(z.number().int().min(0)).min(1).max(8),
@@ -47,7 +53,13 @@ export type SubmittedReport = z.infer<typeof submittedReportSchema>;
 export type InvestigationSource = z.infer<typeof investigationSourceSchema>;
 
 export interface InvestigationReport extends Omit<SubmittedReport, 'evidence'> {
-  evidence: Array<SubmittedReport['evidence'][number] & { verified: boolean }>;
+  evidence: Array<
+    SubmittedReport['evidence'][number] & {
+      /** 服务端根据 ref 找到的真实调用；ref 无效时为 null。界面据此跳回对应的工具结果。 */
+      toolCallId: string | null;
+      verified: boolean;
+    }
+  >;
   verification: {
     /** 模型一共提交了几次报告；被驳回后修正重交也计入。 */
     attempts: number;
@@ -89,6 +101,8 @@ export type InvestigationEvent =
       type: 'tool.called';
       step: number;
       toolCallId: string;
+      /** 写进工具结果正文、供模型引用的短编号。 */
+      ref: string;
       name: string;
       args: Record<string, unknown>;
     }

@@ -159,7 +159,10 @@ test('an investigation streams its steps and ends with verified citations', asyn
   ).toBeVisible();
 
   // 证据能跳回产生它的那次工具调用，并展开当时返回给模型的原始结果。
-  await page.getByRole('button', { name: 'Open the tool result' }).first().click();
+  await page
+    .getByRole('button', { name: /^Open T\d+/ })
+    .first()
+    .click();
   const highlighted = page.locator('.tool-call.is-highlighted');
   await expect(highlighted).toBeVisible();
   await expect(highlighted.locator('details')).toHaveAttribute('open', '');

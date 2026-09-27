@@ -303,7 +303,7 @@ export const TOOL_SPECS: ChatCompletionFunctionTool[] = [
   ...INVESTIGATION_TOOLS.map((tool) => toOpenAITool(tool.name, tool.description, tool.parameters)),
   toOpenAITool(
     SUBMIT_REPORT_TOOL,
-    'Finish the investigation. Every evidence item must cite the toolCallId of a result you received and quote text copied verbatim from it; every cause lists the indexes of the evidence that supports it.',
+    'Finish the investigation. Every evidence item sets resultRef to the ref printed on the first line of a tool result (such as T3) and quotes text copied verbatim from that result; every cause lists the indexes of the evidence that supports it.',
     submittedReportSchema,
   ),
 ];

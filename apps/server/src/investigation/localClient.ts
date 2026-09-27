@@ -10,7 +10,8 @@ import { SUBMIT_REPORT_TOOL } from './tools';
  * 走的是与真实模型完全相同的循环、工具、引用校验和事件流，界面上会明确标注为离线脚本。
  */
 interface ToolOutput {
-  id: string;
+  /** 工具结果第一行的编号（T1、T2……），报告靠它引用。 */
+  ref: string;
   name: string;
   value: Record<string, unknown>;
 }
@@ -25,14 +26,17 @@ function collectResults(messages: ChatMessage[]): ToolOutput[] {
       }
     }
     if (message.role === 'tool' && typeof message.content === 'string') {
+      // 结果正文形如 "ref: T3 (get_event_detail)\n{...}"；被跳过的调用没有这一行。
+      const header = /^ref: (T\d+)[^\n]*\n/.exec(message.content);
+      const body = header ? message.content.slice(header[0].length) : message.content;
       let value: Record<string, unknown> = {};
       try {
-        value = JSON.parse(message.content) as Record<string, unknown>;
+        value = JSON.parse(body) as Record<string, unknown>;
       } catch {
         // 被截断的结果：只记录调用发生过。
       }
       results.push({
-        id: message.tool_call_id,
+        ref: header?.[1] ?? '',
         name: names.get(message.tool_call_id) ?? '',
         value,
       });
@@ -74,7 +78,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const stackRef =
     detail && errorText
       ? add({
-          toolCallId: detail.id,
+          resultRef: detail.ref,
           quote: errorText.slice(0, 160),
           description: 'The latest sample failed with this error.',
           source: 'stack',
@@ -88,7 +92,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
     const code = errorLine?.split('| ').slice(1).join('| ').trim();
     if (code) {
       sourceRef = add({
-        toolCallId: source.id,
+        resultRef: source.ref,
         quote: code.slice(0, 160),
         description: `The top frame resolves to ${String(source.value.frame)}.`,
         source: 'source',
@@ -103,7 +107,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
     : [];
   const networkRef = failed[0]
     ? add({
-        toolCallId: detail!.id,
+        resultRef: detail!.ref,
         quote: failed[0].replace(/^[-+]\d+\.\ds\s+/, '').slice(0, 160),
         description: 'A request failed before the error was raised.',
         source: 'network',
@@ -116,7 +120,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const click = [...timeline].reverse().find((line) => line.includes(' click '));
   const clickRef = click
     ? add({
-        toolCallId: detail!.id,
+        resultRef: detail!.ref,
         quote: click.replace(/^[-+]\d+\.\ds\s+click\s+/, '').slice(0, 160),
         description: 'The last user action before the error.',
         source: 'breadcrumb',
@@ -126,7 +130,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const releaseSummary = typeof releases?.value.summary === 'string' ? releases.value.summary : '';
   const releaseRef = releaseSummary
     ? add({
-        toolCallId: releases!.id,
+        resultRef: releases!.ref,
         quote: releaseSummary.slice(0, 180),
         description: 'How the issue is distributed across releases.',
         source: 'release',
@@ -176,7 +180,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   if (evidence.length === 0) {
     // 连一次成功的工具调用都没有时，报告只能引用概览本身。
     evidence.push({
-      toolCallId: overview?.id ?? results[0]?.id ?? 'none',
+      resultRef: overview?.ref ?? results[0]?.ref ?? 'none',
       quote: title.slice(0, 160) || 'issue',
       description: 'The issue title.',
       source: 'issue',

@@ -13,6 +13,8 @@ import type {
  */
 export interface ToolCallView {
   id: string;
+  /** 模型引用这次调用时用的编号，例如 T3。 */
+  ref: string;
   name: string;
   args: Record<string, unknown>;
   status: 'running' | 'ok' | 'error';
@@ -98,7 +100,13 @@ function apply(
           ...step,
           toolCalls: [
             ...step.toolCalls,
-            { id: event.toolCallId, name: event.name, args: event.args, status: 'running' },
+            {
+              id: event.toolCallId,
+              ref: event.ref,
+              name: event.name,
+              args: event.args,
+              status: 'running',
+            },
           ],
         })),
       };

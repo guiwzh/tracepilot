@@ -95,11 +95,16 @@ const turn = (toolCalls: ModelTurn['toolCalls'], text = ''): ModelTurn => ({
   usage,
 });
 
-function toolOutput(request: ModelRequest, toolCallId: string): string {
+/** 模型看到的工具结果正文：第一行是 "ref: T1 (tool_name)"，之后是 JSON。 */
+function toolContent(request: ModelRequest, toolCallId: string): string {
   const message = request.messages.find(
     (item) => item.role === 'tool' && item.tool_call_id === toolCallId,
   );
   return String(message?.content ?? '');
+}
+
+function toolOutput(request: ModelRequest, toolCallId: string): string {
+  return toolContent(request, toolCallId).replace(/^ref: T\d+[^\n]*\n/, '');
 }
 
 describe('investigation agent', () => {
@@ -148,7 +153,8 @@ describe('investigation agent', () => {
           {
             id: 'call_submit_1',
             name: 'submit_report',
-            arguments: JSON.stringify(report('call_invented', 'the cart was empty')),
+            // 引用了一个不存在的编号，就像模型编造 tool_call_id 那样。
+            arguments: JSON.stringify(report('T99', 'the cart was empty')),
           },
         ]),
       (request) => {
@@ -160,7 +166,7 @@ describe('investigation agent', () => {
           {
             id: 'call_submit_2',
             name: 'submit_report',
-            arguments: JSON.stringify(report('call_overview', output.issue.title.slice(0, 40))),
+            arguments: JSON.stringify(report('T1', output.issue.title.slice(0, 40))),
           },
         ]);
       },
@@ -172,7 +178,9 @@ describe('investigation agent', () => {
     expect(finished.status).toBe('completed');
     expect(finished.report?.verification).toMatchObject({ attempts: 2, allVerified: true });
     // 驳回理由作为 submit_report 的工具结果回到模型手里。
-    expect(toolOutput(requests[2]!, 'call_submit_1')).toContain('was never called');
+    expect(toolContent(requests[2]!, 'call_submit_1')).toContain('does not match any tool result');
+    // 模型能读到的编号写在结果正文的第一行，而不是只存在于消息元数据里的 tool_call_id。
+    expect(toolContent(requests[1]!, 'call_overview')).toMatch(/^ref: T1 \(get_issue_overview\)\n/);
     const stream = await readStream(run.id, 0);
     expect(stream.some((record) => record.event.type === 'report.rejected')).toBe(true);
   });
@@ -187,9 +195,7 @@ describe('investigation agent', () => {
             {
               id: `call_submit_${index}`,
               name: 'submit_report',
-              arguments: JSON.stringify(
-                report('call_overview', 'database connection pool exhausted'),
-              ),
+              arguments: JSON.stringify(report('T1', 'database connection pool exhausted')),
             },
           ]),
       ),
@@ -221,7 +227,7 @@ describe('investigation agent', () => {
           {
             id: 'call_submit',
             name: 'submit_report',
-            arguments: JSON.stringify(report(id, output.issue.title.slice(0, 30))),
+            arguments: JSON.stringify(report('T1', output.issue.title.slice(0, 30))),
           },
         ]);
       },
@@ -307,10 +313,10 @@ describe('investigation agent', () => {
   });
 });
 
-function report(toolCallId: string, quote: string) {
+function report(resultRef: string, quote: string) {
   return {
     summary: 'The cart summary was missing when the total was calculated.',
-    evidence: [{ toolCallId, quote, description: 'Issue title.', source: 'issue' }],
+    evidence: [{ resultRef, quote, description: 'Issue title.', source: 'issue' }],
     possibleCauses: [{ cause: 'A missing guard.', confidence: 0.6, evidenceRefs: [0] }],
     investigationSteps: ['Check the mapped frame.'],
     suggestions: ['Guard the optional field.'],

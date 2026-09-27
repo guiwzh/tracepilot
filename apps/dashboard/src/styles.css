@@ -2354,6 +2354,15 @@ pre {
     400 8px 'DM Mono',
     monospace;
 }
+.tool-ref {
+  padding: 2px 5px;
+  color: var(--teal);
+  background: #edf1f0;
+  border-radius: 3px;
+  font:
+    500 8px 'DM Mono',
+    monospace;
+}
 .tool-status {
   display: grid;
   place-items: center;

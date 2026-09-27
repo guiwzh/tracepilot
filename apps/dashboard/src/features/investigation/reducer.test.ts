@@ -18,6 +18,7 @@ const stream: InvestigationStreamEvent[] = [
     type: 'tool.called',
     step: 1,
     toolCallId: 'call_1',
+    ref: 'T1',
     name: 'get_issue_overview',
     args: {},
   }),
@@ -47,6 +48,7 @@ describe('investigationReducer', () => {
         toolCalls: [
           {
             id: 'call_1',
+            ref: 'T1',
             name: 'get_issue_overview',
             args: {},
             status: 'ok',

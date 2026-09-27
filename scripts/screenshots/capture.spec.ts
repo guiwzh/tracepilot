@@ -58,12 +58,17 @@ test('capture the investigation walkthrough', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Evidence cited' })).toBeVisible({
     timeout: 15_000,
   });
-  await page.getByRole('button', { name: 'Open the tool result' }).nth(1).click();
+  await page
+    .getByRole('button', { name: /^Open T\d+/ })
+    .nth(1)
+    .click();
   await page.waitForTimeout(400);
-  // 整页截图前回到顶部，否则吸顶的侧栏会被拍在页面中间。
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(200);
-  await page.screenshot({ path: resolve(outputDir, '04-investigation.png'), fullPage: true });
+  // 只拍调查面板本身：整页截图时，高度为一屏的吸顶侧栏会在长页面中间断掉；
+  // 截长元素时 Playwright 会滚动拼接，吸顶的顶栏也要先取消吸顶，否则会被拼进画面中间。
+  await page.addStyleTag({ content: '.topbar { position: static !important; }' });
+  await page.locator('.investigation').screenshot({
+    path: resolve(outputDir, '04-investigation.png'),
+  });
 });
 
 test('capture the performance view', async ({ page }) => {

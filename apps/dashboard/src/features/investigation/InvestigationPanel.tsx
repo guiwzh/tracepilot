@@ -35,7 +35,13 @@ const TOOL_LABELS: Record<string, string> = {
 
 function prettyOutput(output: string): string {
   try {
-    return JSON.stringify(JSON.parse(output), null, 2);
+    // 多行字符串（源码片段、异常栈）拆成逐行数组显示，否则换行符会以 \n 挤在一行里。
+    return JSON.stringify(
+      JSON.parse(output),
+      (_key, value: unknown) =>
+        typeof value === 'string' && value.includes('\n') ? value.split('\n') : value,
+      2,
+    );
   } catch {
     return output;
   }
@@ -122,6 +128,7 @@ function ToolCallCard({
             <AlertTriangle size={13} />
           )}
         </span>
+        <span className="tool-ref">{call.ref}</span>
         <strong>{TOOL_LABELS[call.name] ?? call.name}</strong>
         <code>
           {call.name}({argumentSummary(call.args)})
@@ -234,17 +241,22 @@ function ReportView({
       <section className="evidence-citations">
         <h3>Evidence cited</h3>
         {report.evidence.map((item, index) => (
-          <article key={`${item.toolCallId}-${index}`} id={`evidence-${index}`}>
+          <article key={`${item.resultRef}-${index}`} id={`evidence-${index}`}>
             <span>E{index + 1}</span>
             <div>
               <small>
-                {item.source} · {item.verified ? 'quote verified' : 'quote not found'}
+                {item.source} · cites {item.resultRef} ·{' '}
+                {item.verified ? 'quote verified' : 'quote not found'}
               </small>
               <p>{item.description}</p>
               <blockquote className={item.verified ? '' : 'is-unverified'}>{item.quote}</blockquote>
-              <button className="link-button" onClick={() => onJump(item.toolCallId)}>
-                <Wrench size={11} /> Open the tool result
-              </button>
+              {item.toolCallId ? (
+                <button className="link-button" onClick={() => onJump(item.toolCallId!)}>
+                  <Wrench size={11} /> Open {item.resultRef}
+                </button>
+              ) : (
+                <span className="form-error">Cited result does not exist</span>
+              )}
             </div>
           </article>
         ))}
