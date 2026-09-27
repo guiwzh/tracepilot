@@ -70,7 +70,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const add = (item: SubmittedReport['evidence'][number]) => evidence.push(item) - 1;
 
   const title = String((overview?.value.issue as { title?: string } | undefined)?.title ?? '');
-  const errorText = typeof detail?.value.error === 'string' ? detail.value.error : '';
+  const errorText = typeof detail?.value.message === 'string' ? detail.value.message : '';
   const stackRef =
     detail && errorText
       ? add({
@@ -90,7 +90,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
       sourceRef = add({
         toolCallId: source.id,
         quote: code.slice(0, 160),
-        description: `The top frame resolves to ${String(source.value.location)}.`,
+        description: `The top frame resolves to ${String(source.value.frame)}.`,
         source: 'source',
       });
     }
@@ -184,13 +184,15 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   }
   missing.push('A correlated backend trace or request id for the failing session.');
 
+  const ranked = causes
+    .filter((cause) => cause.evidenceRefs.length > 0)
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, 4);
+  const frame = typeof source?.value.frame === 'string' ? ` at ${source.value.frame}` : '';
   return {
-    summary: `${title || 'This issue'}: the leading explanation below is an evidence-bound hypothesis from a scripted offline investigation.`,
+    summary: `Most likely${frame}: ${ranked[0]?.cause ?? 'the cause could not be narrowed down.'}`,
     evidence,
-    possibleCauses: causes
-      .filter((cause) => cause.evidenceRefs.length > 0)
-      .sort((left, right) => right.confidence - left.confidence)
-      .slice(0, 4),
+    possibleCauses: ranked,
     investigationSteps: [
       'Open the mapped top frame and check which field the code assumes is present.',
       'Compare the failing samples by release before narrowing the cause.',

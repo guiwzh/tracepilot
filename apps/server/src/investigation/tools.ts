@@ -165,7 +165,8 @@ const getEventDetail = defineTool({
       page: event.pageUrl,
       browser: browserName(event.context.device.userAgent),
       userAgent: event.context.device.userAgent,
-      error: event.message,
+      // 不叫 error：工具失败时的结果形如 { error, message }，同名字段会让两者难以区分。
+      message: event.message,
       stack: (event.originalStack ?? event.stack ?? '').split('\n').slice(0, 12).join('\n') || null,
       stackMapped: Boolean(event.originalStack),
       timeline: event.breadcrumbs
@@ -205,7 +206,8 @@ const getSourceContext = defineTool({
     if (!result.ok) return unavailable(result.reason);
     return {
       available: true,
-      location: result.location,
+      // 键名刻意不用 location：脱敏会把 url/location 这类键的值当成 URL 处理，路径会被改写。
+      frame: result.location,
       function: result.functionName,
       snippet: result.snippet,
     };

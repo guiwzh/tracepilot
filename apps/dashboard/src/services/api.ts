@@ -1,5 +1,5 @@
 import type {
-  DiagnosisRecord,
+  InvestigationRun,
   IssueDetail,
   IssueListResponse,
   PerformanceOverview,
@@ -28,10 +28,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers:
-      // 浏览器会为 FormData 自动生成带 boundary 的 Content-Type，手动设置反而会破坏上传。
-      init?.body instanceof FormData
-        ? init.headers
-        : { 'content-type': 'application/json', ...init?.headers },
+      // 浏览器会为 FormData 自动生成带 boundary 的 Content-Type，手动设置反而会破坏上传；
+      // 没有请求体时也不声明 JSON，否则服务端会把空请求体当成非法 JSON 拒绝。
+      init?.body === undefined || init.body instanceof FormData
+        ? init?.headers
+        : { 'content-type': 'application/json', ...init.headers },
   });
   if (!response.ok) {
     // 错误响应不一定是 JSON（例如代理错误页），因此解析失败时回退为空对象。
@@ -82,11 +83,13 @@ export const api = {
       body: form,
     });
   },
-  diagnoses: (issueId: string) =>
-    request<{ items: DiagnosisRecord[] }>(`/api/v1/issues/${issueId}/diagnoses`),
-  diagnose: (issueId: string, force = false) =>
-    request<DiagnosisRecord>(`/api/v1/issues/${issueId}/diagnoses`, {
-      method: 'POST',
-      body: JSON.stringify({ force }),
-    }),
+  investigations: (issueId: string) =>
+    request<{ items: InvestigationRun[] }>(`/api/v1/issues/${issueId}/investigations`),
+  startInvestigation: (issueId: string) =>
+    request<InvestigationRun>(`/api/v1/issues/${issueId}/investigations`, { method: 'POST' }),
+  cancelInvestigation: (runId: string) =>
+    request<{ status: string }>(`/api/v1/investigations/${runId}/cancel`, { method: 'POST' }),
+  // EventSource 自己发请求，不经过 request()；首次连接用 after 指定起点，重连由浏览器带 Last-Event-ID。
+  investigationEventsUrl: (runId: string, after = 0) =>
+    `${API_URL}/api/v1/investigations/${runId}/events?after=${after}`,
 };

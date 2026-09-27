@@ -142,22 +142,51 @@ test('long issue titles do not overflow a mobile viewport', async ({ page }) => 
   expect(widths.body).toBeLessThanOrEqual(widths.viewport);
 });
 
-test('diagnosis is generated from stored evidence without blocking issue data', async ({
+test('an investigation streams its steps and ends with verified citations', async ({ page }) => {
+  await page.goto('/projects/demo-project/issues?search=total');
+  await page.locator('.issue-row').filter({ hasText: 'Cannot read properties' }).first().click();
+  await page.getByRole('button', { name: 'investigation' }).click();
+  await page.getByRole('button', { name: 'Start investigation' }).click();
+
+  // 没有配置模型密钥时走离线脚本，界面必须明确说明它不是模型推理。
+  await expect(page.getByText(/Offline demo/)).toBeVisible();
+  await expect(page.locator('.tool-call.is-ok')).toHaveCount(5, { timeout: 15_000 });
+  await expect(page.getByRole('heading', { name: 'Evidence cited' })).toBeVisible();
+  await expect(page.locator('.verification-badge.is-ok')).toContainText('citations verified');
+  // 源码证据来自种子 Source Map 内联的源码，而不是压缩后的栈。
+  await expect(
+    page.locator('.investigation-report blockquote').filter({ hasText: 'cart.summary.total' }),
+  ).toBeVisible();
+
+  // 证据能跳回产生它的那次工具调用，并展开当时返回给模型的原始结果。
+  await page.getByRole('button', { name: 'Open the tool result' }).first().click();
+  const highlighted = page.locator('.tool-call.is-highlighted');
+  await expect(highlighted).toBeVisible();
+  await expect(highlighted.locator('details')).toHaveAttribute('open', '');
+});
+
+test('reloading mid-investigation resumes the same run without duplicating steps', async ({
   page,
 }) => {
   await page.goto('/projects/demo-project/issues');
-  await page.locator('.issue-row').first().click();
-  await page.getByRole('button', { name: 'diagnosis' }).click();
-  await page.getByRole('button', { name: 'Generate diagnosis' }).click();
-  await expect(page.getByRole('heading', { name: 'Evidence cited' })).toBeVisible();
-  await expect(page.getByText('local-evidence-engine')).toBeVisible();
-  await expect(page.getByText(/read-only hypothesis/i)).toBeVisible();
+  await page.locator('.issue-row').filter({ hasText: '503' }).click();
+  await page.getByRole('button', { name: 'investigation' }).click();
+  await page.getByRole('button', { name: 'Start investigation' }).click();
+  await expect(page.locator('.tool-call').first()).toBeVisible();
 
-  const regeneration = page.waitForRequest(
-    (request) => request.method() === 'POST' && request.url().endsWith('/diagnoses'),
-  );
-  await page.getByRole('button', { name: 'Regenerate' }).click();
-  expect((await regeneration).postDataJSON()).toMatchObject({ force: true });
+  // 调查在服务端继续进行；刷新后从事件日志回放，再接上实时推送。
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Evidence cited' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const stepLabels = await page.locator('.step-index').allTextContents();
+  expect(new Set(stepLabels).size).toBe(stepLabels.length);
+  const toolCallIds = await page
+    .locator('.tool-call')
+    .evaluateAll((items) => items.map((item) => item.id));
+  expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
+  // 网络失败没有异常栈，Agent 不会去读源码：概览、样本、事件详情、版本对比共 4 次调用。
+  expect(toolCallIds).toHaveLength(4);
 });
 
 test('source map upload maps a newly ingested browser stack through the API', async ({

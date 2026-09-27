@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
-  Bot,
   Check,
   ChevronRight,
   CircleDot,
@@ -11,24 +10,23 @@ import {
   ExternalLink,
   GitCommitHorizontal,
   Globe2,
-  Lightbulb,
   MousePointer2,
   Network,
-  RefreshCw,
   Route,
   ShieldAlert,
   Sparkles,
   UserRound,
 } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import type { Breadcrumb, DiagnosisRecord } from '@trace-pilot/shared';
+import type { Breadcrumb } from '@trace-pilot/shared';
 import { Chart, type ChartOption } from '../components/Chart';
 import { ErrorState, LoadingState } from '../components/States';
+import { InvestigationPanel } from '../features/investigation/InvestigationPanel';
 import { IssueStatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
 
-const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'diagnosis'] as const;
+const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'investigation'] as const;
 type Tab = (typeof tabs)[number];
 
 function DistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
@@ -134,143 +132,6 @@ function StackBlock({
   );
 }
 
-function DiagnosisPanel({ issueId }: { issueId: string }) {
-  const queryClient = useQueryClient();
-  // 历史查询和“生成诊断”写操作分开建模；生成成功后再失效历史缓存。
-  const records = useQuery({
-    queryKey: ['diagnoses', issueId],
-    queryFn: () => api.diagnoses(issueId),
-  });
-  const diagnose = useMutation({
-    mutationFn: (force: boolean) => api.diagnose(issueId, force),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['diagnoses', issueId] }),
-  });
-  // 当前操作结果优先显示；没有新结果时展示服务端返回的最近一条历史记录。
-  const record: DiagnosisRecord | undefined = diagnose.data ?? records.data?.items[0];
-
-  if (records.isLoading) return <LoadingState label="Loading diagnosis history" />;
-  if (records.error) return <ErrorState message={records.error.message} />;
-  if (!record) {
-    return (
-      <div className="diagnosis-empty">
-        <span className="ai-orbit">
-          <Bot />
-        </span>
-        <p className="page-eyebrow">Evidence is ready</p>
-        <h2>Generate a bounded diagnosis</h2>
-        <p>
-          The model receives the issue, recent events, failure breadcrumbs, release context, and
-          mapped stack—after a second privacy pass.
-        </p>
-        <button
-          className="button button-signal"
-          onClick={() => diagnose.mutate(false)}
-          disabled={diagnose.isPending}
-        >
-          {diagnose.isPending ? <RefreshCw className="spin" size={15} /> : <Sparkles size={15} />}{' '}
-          {diagnose.isPending ? 'Examining evidence…' : 'Generate diagnosis'}
-        </button>
-        {diagnose.error && <span className="form-error">{diagnose.error.message}</span>}
-      </div>
-    );
-  }
-
-  const result = record.result;
-  return (
-    <div className="diagnosis-report">
-      <header className="diagnosis-header">
-        <div>
-          <span className="ai-orbit small">
-            <Bot />
-          </span>
-          <div>
-            <p className="page-eyebrow">Diagnosis / {record.promptVersion}</p>
-            <h2>{result.summary}</h2>
-          </div>
-        </div>
-        <button
-          className="button button-quiet"
-          onClick={() => diagnose.mutate(true)}
-          disabled={diagnose.isPending}
-        >
-          <RefreshCw size={14} /> Regenerate
-        </button>
-      </header>
-      <div className="diagnosis-meta">
-        <span>
-          Model <strong>{record.model}</strong>
-        </span>
-        <span>
-          Latency <strong>{record.latencyMs} ms</strong>
-        </span>
-        <span>
-          Tokens <strong>{record.inputTokens + record.outputTokens}</strong>
-        </span>
-        <span>{record.cached ? 'Cache hit' : relativeTime(record.createdAt)}</span>
-      </div>
-      <section className="evidence-citations">
-        <h3>Evidence cited</h3>
-        {result.evidence.map((item, index) => (
-          <article key={`${item.description}-${index}`}>
-            <span>{String(index + 1).padStart(2, '0')}</span>
-            <div>
-              <small>{item.source}</small>
-              <p>{item.description}</p>
-            </div>
-          </article>
-        ))}
-      </section>
-      <section className="cause-grid">
-        {result.possibleCauses.map((item) => (
-          <article key={item.cause}>
-            <header>
-              <span>{Math.round(item.confidence * 100)}%</span>
-              <div className="confidence-bar">
-                <i style={{ width: `${item.confidence * 100}%` }} />
-              </div>
-            </header>
-            <h3>{item.cause}</h3>
-            <ul>
-              {item.supportingEvidence.map((evidence) => (
-                <li key={evidence}>{evidence}</li>
-              ))}
-            </ul>
-          </article>
-        ))}
-      </section>
-      <div className="diagnosis-columns">
-        <section>
-          <h3>
-            <CircleDot size={15} /> Investigation steps
-          </h3>
-          <ol>
-            {result.investigationSteps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        </section>
-        <section>
-          <h3>
-            <Lightbulb size={15} /> Suggested changes
-          </h3>
-          <ul>
-            {result.suggestions.map((suggestion) => (
-              <li key={suggestion}>{suggestion}</li>
-            ))}
-          </ul>
-        </section>
-      </div>
-      {result.missingInformation.length > 0 && (
-        <aside className="missing-info">
-          <strong>Evidence still missing</strong>
-          <span>{result.missingInformation.join(' · ')}</span>
-        </aside>
-      )}
-      <p className="diagnosis-disclaimer">{result.disclaimer}</p>
-    </div>
-  );
-}
-
 export function IssueDetailPage() {
   const { projectId = '', issueId = '' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -350,7 +211,7 @@ export function IssueDetailPage() {
             className={activeTab === tab ? 'active' : ''}
             onClick={() => setSearchParams({ tab })}
           >
-            {tab === 'diagnosis' && <Sparkles size={13} />}
+            {tab === 'investigation' && <Sparkles size={13} />}
             {tab}
           </button>
         ))}
@@ -545,7 +406,7 @@ export function IssueDetailPage() {
           )}
         </section>
       )}
-      {activeTab === 'diagnosis' && <DiagnosisPanel issueId={issueId} />}
+      {activeTab === 'investigation' && <InvestigationPanel issueId={issueId} />}
     </main>
   );
 }
