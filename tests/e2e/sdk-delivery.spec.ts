@@ -24,7 +24,21 @@ const API = 'http://127.0.0.1:4318';
 let harnessServer: Server;
 let harnessUrl = '';
 
+/**
+ * 这组测试写入一个独立的临时项目：其他 E2E 用例断言的是种子项目里确定的计数，
+ * 往 demo-project 里多写几十条事件就会让它们全部失败。
+ */
+const project = { id: '', dsnKey: '' };
+
 test.beforeAll(async () => {
+  const created = await fetch(`${API}/api/v1/projects`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: `SDK delivery ${Date.now()}` }),
+  });
+  expect(created.status).toBe(201);
+  Object.assign(project, (await created.json()) as { id: string; dsnKey: string });
+
   const bundle = await esbuild.build({
     stdin: {
       contents: `import { createMonitor } from '@trace-pilot/monitor-sdk';
@@ -67,19 +81,19 @@ async function openHarness(page: Page): Promise<void> {
 
 async function matchingIssues(request: APIRequestContext, search: string): Promise<number> {
   const response = await request.get(
-    `${API}/api/v1/projects/demo-project/issues?pageSize=100&search=${search}`,
+    `${API}/api/v1/projects/${project.id}/issues?pageSize=100&search=${search}`,
   );
   expect(response.ok()).toBeTruthy();
   return ((await response.json()) as { total: number }).total;
 }
 
-const monitorOptions = {
+const monitorOptions = () => ({
   dsn: `${API}/api/v1/envelopes`,
-  dsnKey: 'demo-dsn-key',
-  projectId: 'demo-project',
-  release: '2.4.1',
+  dsnKey: project.dsnKey,
+  projectId: project.id,
+  release: '1.0.0',
   environment: 'production',
-};
+});
 
 test('an error storm carrying full breadcrumb trails reaches the server with default settings', async ({
   page,
@@ -108,7 +122,7 @@ test('an error storm carrying full breadcrumb trails reaches the server with def
         flush(): Promise<void>;
       };
     },
-    { api: API, id, options: monitorOptions },
+    { api: API, id, options: monitorOptions() },
   );
 
   await expect.poll(() => matchingIssues(request, id), { timeout: 10_000 }).toBe(10);
@@ -131,7 +145,7 @@ test('events still queued at page exit reach a cross-origin server', async ({ pa
       // 只有一条事件，达不到批量阈值，也等不到定时发送：它只能靠退出路径送达。
       monitor.captureMessage(`${id} queued at exit`, 'warning');
     },
-    { id, options: monitorOptions },
+    { id, options: monitorOptions() },
   );
 
   // 离开页面触发 pagehide，SDK 只能在这一刻用 sendBeacon 把队列交给浏览器。
