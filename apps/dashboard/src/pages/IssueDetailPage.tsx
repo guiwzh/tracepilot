@@ -141,9 +141,11 @@ export function IssueDetailPage() {
   ) as Tab;
   const queryClient = useQueryClient();
   const issue = useQuery({ queryKey: ['issue', issueId], queryFn: () => api.issue(issueId) });
+  // 最近 100 个事件（各带完整上下文和 breadcrumb）只有 Events 标签用得到，切到它时才请求。
   const events = useQuery({
     queryKey: ['issue-events', issueId],
     queryFn: () => api.issueEvents(issueId),
+    enabled: activeTab === 'events',
   });
   const update = useMutation({
     mutationFn: (status: string) => api.updateIssue(issueId, status),
