@@ -13,6 +13,13 @@ describe('issue fingerprint normalization', () => {
     expect(first).toBe(second);
   });
 
+  it('collapses Vite-style base64 build hashes but keeps plain words', () => {
+    const frame = (file: string) =>
+      normalizeMessage(`at submit (https://cdn.test/assets/${file}:1:18234)`);
+    expect(frame('index-C8pSMNq9.js')).toBe(frame('index-DcAjpfYV.js'));
+    expect(normalizeMessage('app-checkout.js')).toBe('app-checkout.js');
+  });
+
   it('keeps a readable title while replacing volatile identifiers', () => {
     expect(
       normalizeDisplayTitle('Order 39843992 failed for 550e8400-e29b-41d4-a716-446655440000'),
