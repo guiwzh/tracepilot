@@ -25,7 +25,8 @@ flowchart LR
 - `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件。
 - `apps/server`：数据接入、聚合、查询、私有 Source Map、排障 Agent 与评测集。
 - `apps/dashboard`：面向调查人员的用户界面。
-- `apps/playground`：用于验证完整遥测链路的可控场景。
+- `apps/playground`：用于验证完整遥测链路的可控场景；`tests/e2e/playground.spec.ts` 逐个点击这些场景，
+  它们同时是 SDK 各插件在真实浏览器里的回归测试。
 
 ## 运行原则
 
