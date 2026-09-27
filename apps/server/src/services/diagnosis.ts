@@ -123,7 +123,7 @@ export function buildDiagnosisContext(
       performance.cls = Number(metric.value);
   }
   if (Object.keys(performance).length > 0) context.performance = performance;
-  // 第三道脱敏：SDK 的 beforeSend 钩子（由接入方配置）、服务端入库时各有一道，
+  // 第三道脱敏：SDK 发出之前（默认规则加上接入方的 beforeSend）、服务端入库时各有一道，
   // 这里再过一遍，防止规则更新前入库的历史数据把令牌等敏感值带给外部模型。
   return redactSensitive(context);
 }
@@ -438,7 +438,7 @@ export function getDiagnosis(database: TraceDatabase, diagnosisId: string): Diag
 
 /**
  * 为一个 Issue 生成（或从缓存取回）诊断。Issue 不存在时返回 null，路由据此回 404。
- * force = true 时忽略缓存重新生成，对应界面上的「重新生成」。
+ * force = true 时忽略缓存重新生成（接口参数；工作台已改用排障 Agent，不再调用这组接口）。
  */
 export async function diagnoseIssue(
   database: TraceDatabase,

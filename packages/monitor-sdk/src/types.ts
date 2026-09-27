@@ -27,7 +27,10 @@ export interface MonitorOptions {
   maxRetries?: number;
   /** 待发送队列可保留的事件上限；服务端不可达时超出部分会被丢弃以保护宿主页面内存。 */
   maxQueueSize?: number;
-  /** 同类信号的短窗口去重时间，单位毫秒：同一个错误、同一个资源、同一个接口的同一种失败只报第一次。 */
+  /**
+   * 同类信号的短窗口去重时间，单位毫秒：同一个错误、同一个资源、同一个接口的同一种失败在窗口内只报第一次。
+   * 窗口从上一次上报算起，一直在发生的问题每个窗口至少报一次。
+   */
   dedupeWindow?: number;
   /**
    * 页面退出时浏览器只允许约 64 KiB 的 beacon 在途数据，发不完的事件默认写入 localStorage，
@@ -99,7 +102,7 @@ export interface DeliveryStats {
     queueFull: number;
     /** 裁剪后仍超过单事件上限的事件。 */
     oversize: number;
-    /** 服务端明确拒收（4xx）的批次，重试也不会成功，直接丢弃以免堵住队列。 */
+    /** 服务端明确拒收（408、429 以外的 4xx）的批次，重试也不会成功，直接丢弃以免堵住队列。 */
     rejected: number;
     /** 服务端持续不可达、失败批次放回队列后超出上限而被裁掉的事件。 */
     overflow: number;

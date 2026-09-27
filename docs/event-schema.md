@@ -35,8 +35,9 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
   opaque 响应只记成 breadcrumb，作为之后错误的上下文。
 - `performance`：Web Vitals 样本，**不附带 breadcrumb**——它们不属于任何 Issue 的证据链。
 
-同一签名的 `error`、`resource`、`network` 事件在短窗口（默认 5 秒）内只发送第一条；资源与请求的签名
-去掉查询参数并把数字归一，只差编号的一批资源或接口视为同一处。
+同一签名的 `error`、`resource`、`network` 事件在短窗口（默认 5 秒）内只发送第一条。窗口从上一次发送算起，
+一直在发生的问题每个窗口至少发送一次。资源与请求的签名去掉查询参数并把数字归一，只差编号的一批资源或接口
+视为同一处。
 
 ## 传输约定
 
@@ -61,9 +62,18 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 ## 服务端处理
 
 - `eventId` 是幂等键：已存在的事件计入 `duplicates` 并跳过。
+- **时间**：`timestamp` 和 breadcrumb 的时间来自用户设备的时钟。服务端收到的时间与 `sentAt` 相差超过
+  1 分钟时，认为设备时钟不准，把事件和它的 breadcrumb 平移同样的量；平移后仍在未来的事件按收到的时间
+  记录。补发的旧事件（`sentAt` 是补发时间）不受影响。
 - Web Vitals 事件带 `payload.metricId`（来自 web-vitals 的 `metric.id`）。同一指标实例再次上报时按
   `metricId` **覆盖**而不是追加，以采集时间为准，迟到的旧值不会覆盖新值；响应里计入 `metricUpdates`。
 - 整个信封在一个事务里写入；格式错误的信封整体拒绝（400），DSN 与项目不匹配返回 403。
-- 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）。
+- 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）；
+  `stack` 与 `componentStack` 只删帧里的查询参数，保留行列号。
+- **聚合**：错误按「类型 + 归一化后的消息 + 栈顶帧」的指纹归入 Issue，资源加载失败按地址，失败的请求按
+  「方法 + 地址 + 状态码」；地址都去掉查询参数、把业务 ID 归一。已解决的 Issue 收到发生时间晚于解决时间的
+  新事件时重新打开为未解决；已忽略的保持忽略。
+- 带堆栈的新事件在入库之后按所在 Release 的 Source Map 还原，结果存为 `originalStack`；
+  map 缺失、损坏或还原失败只会少这一项，不影响 202。
 
 响应示例：`{ "accepted": 9, "duplicates": 1, "metricUpdates": 0, "issueIds": ["..."] }`（HTTP 202）。

@@ -263,7 +263,7 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
 /**
  * 只给 2.4.1 上传 Source Map，2.3.9 故意不传：调查时既能看到还原后的源码，
  * 也能遇到「该版本缺少 map」这种真实会发生的证据缺口。
- * 上传走正式的 saveSourceMap，会顺带回填该 Release 已有事件的原始堆栈。
+ * 上传走正式的 saveSourceMap，会顺带回填该 Release 里引用了这个文件的已有事件的原始堆栈。
  */
 export async function seedDemoSourceMaps(
   database: TraceDatabase,

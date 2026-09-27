@@ -8,7 +8,7 @@ export const DEFAULT_BATCH_SIZE = 10;
 export const DEFAULT_FLUSH_INTERVAL = 5_000;
 /** 一批发送失败后，在同一轮里最多再快速重试几次（间隔 100 ms、200 ms……）。 */
 export const DEFAULT_MAX_RETRIES = 2;
-/** 同一个错误在这个时间窗口（毫秒）内重复出现，只上报第一次。 */
+/** 同一个错误、资源或失败请求在这个时间窗口（毫秒）内重复出现，只上报第一次；窗口从上一次上报算起。 */
 export const DEFAULT_DEDUPE_WINDOW = 5_000;
 // 传输队列的默认上限（条数）。错误事件的大小主要取决于携带的 breadcrumb，通常在 1～10 KB，
 // 1000 条约为几 MB 的驻留内存，足以扛过一次短暂的服务端不可用，又不至于在错误风暴中拖垮宿主页面。

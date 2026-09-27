@@ -20,7 +20,7 @@ test('capture the investigation walkthrough', async ({ page }) => {
   await page.goto('/projects/demo-project/issues');
   await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();
   await expect(page.locator('.issue-row').first()).toBeVisible();
-  // 等待 Sparkline 的 canvas 画完，否则截图会拍到空白图表。
+  // 等概览趋势图（ECharts，canvas）的入场动画结束，否则会拍到画了一半的图表；Sparkline 是 SVG，不用等。
   await page.waitForTimeout(600);
   await page.screenshot({ path: resolve(outputDir, '01-issues.png') });
 
@@ -82,7 +82,7 @@ test('capture the performance view', async ({ page }) => {
 });
 
 test('capture the incident playground', async ({ page }) => {
-  // 7. 演练场：可控地制造 runtime / Promise / 资源 / Fetch / XHR / 路由信号。
+  // 7. 演练场：可控地制造运行时错误、Promise、资源、请求、路由、React 渲染错误等 11 种信号。
   await page.goto('http://127.0.0.1:4174/');
   await expect(page.locator('body')).toBeVisible();
   await page.waitForTimeout(500);

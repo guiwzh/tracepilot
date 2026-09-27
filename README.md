@@ -41,7 +41,7 @@ pnpm install && pnpm seed && pnpm dev
 **方案**　普通发送去掉 keepalive；退出时按 60 KB 切块交给 beacon，浏览器拒收的部分写进
 localStorage 下次加载补发；两条路径都改用 `text/plain`（CORS 安全列表类型，不触发预检），服务端
 只在接入路由的封装作用域里把它解析为 JSON。顺带补上：按字节切批、超大事件先截断长字符串再从最旧
-一端丢 breadcrumb、4xx 拒收直接丢弃不再堵队、退出时把在途批次一并交给 beacon。投递语义是「至少
+一端丢 breadcrumb、除 408 / 429 以外的 4xx 拒收直接丢弃不再堵队、退出时把在途批次一并交给 beacon。投递语义是「至少
 一次」，重复由服务端按 `eventId` 幂等去重。
 
 **结果**　`tests/e2e/sdk-delivery.spec.ts` 用 SDK 默认配置、真实 Chrome、真实跨域服务端验证：
@@ -184,24 +184,29 @@ pnpm evaluate:agent
 
 这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库，**不代表生产容量**：
 
-| 指标                                     |                 结果 | 复现命令                   |
-| ---------------------------------------- | -------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             |  22,963 / 7,441 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip | 32,070 / 10,605 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals                          |      2,939 字节 gzip | `pnpm measure:sdk`         |
-| `createMonitor()` + `start()` P50 / P95¹ |      30 / 160–170 µs | `pnpm measure:sdk-runtime` |
-| 单次 `captureException` P50 / P95¹       |        25 / 39–55 µs | `pnpm measure:sdk-runtime` |
-| 20 轮 start/destroy 后新增监听器         |                 0 个 | `pnpm measure:sdk-runtime` |
-| 10 事件接入批次 P50 / P95                |    1.13 ms / 1.57 ms | `pnpm benchmark`           |
-| 单 Issue 累积 1 万事件时接入 P50         |              1.10 ms | `pnpm benchmark`           |
-| Issue 列表查询 P50 / P95                 |    0.72 ms / 0.78 ms | `pnpm benchmark`           |
-| 图表轮询更新 P50（重建 → 复用）          |       2.34 → 1.25 ms | `pnpm measure:chart`       |
-| 300 次更新新建 canvas（重建 → 复用）     |         1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |           124 项通过 | `pnpm verify`              |
-| 浏览器闭环测试                           |       18 / 18 passed | `pnpm test:e2e`            |
+| 指标                                     |                    结果 | 复现命令                   |
+| ---------------------------------------- | ----------------------: | -------------------------- |
+| SDK 发布产物 minified / gzip             |     22,656 / 7,321 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |    32,085 / 10,596 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals                          |         2,929 字节 gzip | `pnpm measure:sdk`         |
+| `createMonitor()` + `start()` P50 / P95¹ |         30 / 160–170 µs | `pnpm measure:sdk-runtime` |
+| 单次 `captureException` P50 / P95¹       |           25 / 39–55 µs | `pnpm measure:sdk-runtime` |
+| 20 轮 start/destroy 后新增监听器         |                    0 个 | `pnpm measure:sdk-runtime` |
+| 10 事件接入批次 P50 / P95                |       1.13 ms / 1.57 ms | `pnpm benchmark`           |
+| 单 Issue 累积 1 万事件时接入 P50         |                 1.10 ms | `pnpm benchmark`           |
+| Issue 列表查询 P50 / P95                 |       0.72 ms / 0.78 ms | `pnpm benchmark`           |
+| 带堆栈的 10 事件批次（30 万条映射）P50²  | 3.8 ms（修订前 232 ms） | `pnpm benchmark`           |
+| 重新上传 map 并回填 2,000 个事件²        |   0.15 s（修订前 44 s） | `pnpm benchmark`           |
+| 图表轮询更新 P50（重建 → 复用）          |          2.34 → 1.25 ms | `pnpm measure:chart`       |
+| 300 次更新新建 canvas（重建 → 复用）     |            1,500 → 0 个 | `pnpm measure:chart`       |
+| 单元 / 集成测试                          |              157 项通过 | `pnpm verify`              |
+| 浏览器闭环测试                           |          18 / 18 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-28 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
 同一台机器上修订前后的对照（采集约多 15 µs，是 SDK 端脱敏的代价）见性能报告。
+
+² 2026-09-28 服务端修订后在另一台、慢约 3 倍的机器上测得，括号里是同一台机器上修订前的代码。
+这台机器上的其余服务端数字：接入快约 10%，列表查询持平，见性能报告。
 
 体积同时报告两个口径：发布产物本身，以及业务应用把 SDK 打进自己包后实际付出的字节，两者会背离。
 运行时开销在真实浏览器里测量，另带两项与机器快慢无关的硬断言：监听器不随轮数增长，`fetch`、
@@ -254,13 +259,15 @@ flowchart LR
   请求只记 Breadcrumb）、点击/路由 Breadcrumb、Web Vitals（官方 `web-vitals` 计算）、React 错误边界
   （`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
 - **可靠传输**：按会话采样、短窗口去重（错误、资源、失败请求）、按条数与字节批量上报、有限重试、
-  连续失败时指数退避并遵守 `Retry-After`、4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
+  连续失败时指数退避并遵守 `Retry-After`、拒收的 4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
   发不完的按标签页持久化补发、`beforeSend`、完整 teardown。
 - **Fastify 接入服务**：共享 Zod Schema、DSN 校验、事件幂等、Web Vitals 按 metric id 覆盖、二次脱敏、
-  SQLite 事务、动态 ID 归一化与 SHA-256 指纹聚合。
+  按 `sentAt` 校正设备时钟、SQLite 事务、动态 ID 归一化与 SHA-256 指纹聚合、已解决 Issue 再次发生时
+  重新打开、按编号迁移升级表结构。
 - **调查工作台**：项目、筛选/分页 Issue、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
   证据链、网络、事件、性能、Release，以及实时调查时间线。
-- **Source Map**：私有上传、Release 隔离、压缩堆栈还原、读取内联源码片段、缺失地图降级。
+- **Source Map**：私有上传（落盘前完整校验每条映射）、Release 隔离、压缩堆栈还原（解析结果跨请求缓存）、
+  读取内联源码片段、map 缺失或损坏时降级为压缩堆栈，接入照常返回 202。
 - **排障 Agent**：5 个只读工具、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
   SSE 续传、取消、并发闸门、离线脚本引擎。
 - **评测与质量**：12 个标注事故的诊断评测、单元/接口/E2E、真实浏览器送达回归、基准、体积预算。
@@ -340,7 +347,7 @@ pnpm verify               # lint + typecheck + 单元/集成 + build + 体积预
 pnpm test:e2e             # 真实浏览器闭环测试（含 SDK 送达回归与调查续传）
 pnpm evaluate:agent       # 诊断评测：规则 / 单次调用 / Agent
 pnpm screenshots          # 从运行中的应用重新生成 README 截图
-pnpm benchmark            # 本地 SQLite API 基准与写入放大分段
+pnpm benchmark            # 本地 SQLite API 基准、写入放大分段、大型 Source Map 下的接入与回填
 pnpm measure:sdk          # SDK 产物体积与真实接入成本，含预算断言
 pnpm measure:sdk-runtime  # 真实浏览器里的运行时开销与泄漏回归
 pnpm measure:chart        # 图表更新策略的对照测量
@@ -372,8 +379,10 @@ pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场
 - 排障 Agent 没有 Shell、文件、Git、浏览器或任何写入工具；源码片段会发给模型服务商，可关闭。
 - **当前是本地单用户 MVP**：没有身份认证、租户隔离、生产限流和数据保留策略。管理类接口在本地是开放的，
   部署到公网前必须先处理。
-- Issue 列表为每个 Issue 单独查询趋势桶（N+1），性能查询会把窗口内样本全部读入内存；SQLite 单写者
-  模型掩盖了并发计数的竞态，换 PostgreSQL 需要原子更新。当前数据规模下都不构成问题，但都是明确的扩展限制。
+- Issue 列表为每个 Issue 单独查询趋势桶（语句只编译一次；SQLite 在进程内执行，这比合并成一条查询更快，
+  换成网络数据库要改成一条查询），性能查询会把窗口内样本全部读入内存；Source Map 的解析结果常驻服务进程
+  内存（按 map 原始大小计上限 32 MB，约合 150 MB 解析后内存）；SQLite 单写者模型掩盖了并发计数的竞态，
+  换 PostgreSQL 需要原子更新。当前数据规模下都不构成问题，但都是明确的扩展限制。
 
 ## 目录
 

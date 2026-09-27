@@ -8,8 +8,8 @@ import type { DeliveryStats } from '../types';
  * 两条发送路径受的约束完全不同：
  *
  * - 普通发送：不带 keepalive 的 fetch。keepalive 请求的请求体共享浏览器 64 KiB 的在途配额，
- *   超出直接以 TypeError 失败。早期实现给所有请求都加了 keepalive，一批 10 个带完整
- *   breadcrumb 的错误事件约 180 KB，于是每次发送都失败，失败批次又被放回队首，
+ *   超出直接以 TypeError 失败。早期实现给所有请求都加了 keepalive，一个带 50 条网络 breadcrumb
+ *   的错误约 16 KB，一批 10 个约 165 KB，于是每次发送都失败，失败批次又被放回队首，
  *   后面的事件全部卡死在它身后。
  * - 退出发送：页面正在卸载，只能用 sendBeacon（或 keepalive fetch），它们受同一个 64 KiB
  *   配额约束。所以退出路径按字节切块，浏览器拒收的部分写进 localStorage，下次加载时补发。
