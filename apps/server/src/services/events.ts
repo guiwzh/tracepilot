@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
+  redactPayload,
   redactSensitive,
   stripUrlQuery,
   type EventEnvelope,
@@ -9,6 +10,7 @@ import {
 import type { TraceDatabase } from '../db/client';
 import { events, issues, releases } from '../db/schema';
 import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
+import type { StoredStack } from './sourcemaps';
 
 /** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
 export interface IngestResult {
@@ -22,6 +24,15 @@ export interface IngestResult {
   issueIds: string[];
 }
 
+export interface IngestOutcome {
+  result: IngestResult;
+  /**
+   * 本批新写入、带堆栈的事件，入库之后交给 Source Map 还原。重复送达的事件不在其中：
+   * 它们第一次入库时已经还原过，曾经每次重试都要把整批再还原一遍。
+   */
+  stacks: StoredStack[];
+}
+
 /**
  * web-vitals 为每个页面加载中的每个指标分配唯一 id；LCP/CLS/INP 的值在页面生命周期里会增长，
  * SDK 会以同一个 id 再报一次。按 id 覆盖而不是追加，否则同一次访问的多个中间值会把 p75 拉偏。
@@ -32,6 +43,15 @@ function metricInstanceId(event: MonitorEvent): string | null {
   return typeof metricId === 'string' && metricId.length > 0 && metricId.length <= 200
     ? metricId
     : null;
+}
+
+/**
+ * 入库前的脱敏。堆栈字段不能套用通用的文本规则：它会把 "app.js?v=3:1:420)" 从问号起整段删掉，
+ * 存下来的堆栈丢了行列号，上传 map 后的回填和排障 Agent 查看源码都无从还原。
+ */
+function redactEvent(event: MonitorEvent): MonitorEvent {
+  const { payload, ...rest } = event;
+  return { ...redactSensitive(rest), payload: redactPayload(payload) };
 }
 
 function eventContext(event: MonitorEvent) {
@@ -183,7 +203,7 @@ function updateIssueCounters(
  * 声明了别的项目，前 6 个事件的写入也会被撤回，数据库里不会留下半个信封。
  * 事务还让一批写入只需落盘一次，比逐条提交快得多。
  */
-export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope): IngestResult {
+export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope): IngestOutcome {
   // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
   const project = database.sqlite
     .prepare('SELECT id FROM projects WHERE dsn_key = ?')
@@ -194,6 +214,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
   let duplicates = 0;
   let metricUpdates = 0;
   const issueIds = new Set<string>();
+  const stacks: StoredStack[] = [];
 
   // transaction() 把回调包装成一个事务函数：调用时先 BEGIN，回调正常结束则 COMMIT（提交生效），
   // 回调里任何地方抛错则 ROLLBACK（全部撤销），错误继续向外抛给路由处理。
@@ -211,11 +232,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
         if (rawEvent.timestamp >= existing.created_at) {
           database.sqlite
             .prepare('UPDATE events SET context_json = ?, created_at = ? WHERE id = ?')
-            .run(
-              JSON.stringify(eventContext(redactSensitive(rawEvent))),
-              rawEvent.timestamp,
-              rowId,
-            );
+            .run(JSON.stringify(eventContext(redactEvent(rawEvent))), rawEvent.timestamp, rowId);
         }
         metricUpdates += 1;
         continue;
@@ -226,9 +243,9 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
         continue;
       }
 
-      // 即使 SDK 已运行 beforeSend，Server 仍把客户端数据视为不可信并二次脱敏：
+      // SDK 虽然已经脱敏过，Server 仍把客户端数据视为不可信并再做一遍：
       // 遮蔽 token、password 等字段，去掉 URL 里的查询参数。
-      const event = redactSensitive(rawEvent);
+      const event = redactEvent(rawEvent);
       const releaseId = ensureRelease(database, event);
       const issueId = upsertIssue(database, event);
       const message = eventTitle(event);
@@ -259,10 +276,11 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
         updateIssueCounters(database, issueId, firstSeenForUser);
         issueIds.add(issueId);
       }
+      if (stack) stacks.push({ eventId: rowId, releaseId, stack });
       accepted += 1;
     }
   });
   // 真正执行事务。计数变量在回调里被累加，回调抛错时它们已经无关紧要（错误会一路抛出）。
   ingest();
-  return { accepted, duplicates, metricUpdates, issueIds: [...issueIds] };
+  return { result: { accepted, duplicates, metricUpdates, issueIds: [...issueIds] }, stacks };
 }

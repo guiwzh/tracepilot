@@ -1,7 +1,7 @@
 /**
  * 脱敏：遮蔽令牌、密码等敏感字段，删除 URL 里的查询参数。
- * SDK 默认不脱敏，接入方可以在 beforeSend 钩子里自行清理；服务端把客户端数据视为不可信，
- * 入库时和发给模型前都会调用这里的函数。
+ * 同一套规则用在三处：SDK 在事件离开页面之前，服务端入库时（把客户端数据视为不可信，再做一遍），
+ * 以及发给模型之前。
  */
 const SENSITIVE_KEY = /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
 const URL_VALUE_KEY =
@@ -56,4 +56,39 @@ export function redactSensitive<T>(value: T, depth = 0): T {
     return result as T;
   }
   return value;
+}
+
+/** 以 :行:列 结尾的一行是栈帧（V8 的 "at fn (url:1:2)"，Firefox / Safari 的 "fn@url:1:2"）。 */
+const FRAME_LOCATION = /:\d+:\d+\)?\s*$/;
+/** 栈帧里夹在文件名和 :行:列 之间的查询参数或片段，例如 app.js?v=3:1:420 里的 ?v=3。 */
+const FRAME_QUERY = /[?#][^\s()]*?(?=:\d+:\d+)/g;
+
+/**
+ * 脱敏一段堆栈。不能直接套用通用的文本规则：它会把 "app.js?v=3:1:420)" 从问号起整段删掉，
+ * 行列号一起丢失，服务端就再也无法用 Source Map 还原这一帧。
+ * 所以栈帧只删查询参数、保留行列号；其余行（第一行的错误消息等）按普通文本处理。
+ */
+export function redactStack(stack: string): string {
+  return stack
+    .split('\n')
+    .map((line) =>
+      FRAME_LOCATION.test(line) ? line.replace(FRAME_QUERY, '') : redactSensitive(line),
+    )
+    .join('\n');
+}
+
+/** 形状像堆栈、要按栈帧规则处理的字段。componentStack 来自 React 的错误回调。 */
+const STACK_KEYS = ['stack', 'componentStack'] as const;
+
+/** 脱敏一个事件 payload：堆栈字段按 redactStack 处理，其余字段按通用规则。 */
+export function redactPayload<T extends Record<string, unknown>>(payload: T): T {
+  const rest: Record<string, unknown> = { ...payload };
+  for (const key of STACK_KEYS) delete rest[key];
+  const result = redactSensitive(rest);
+  for (const key of STACK_KEYS) {
+    if (!(key in payload)) continue;
+    const value = payload[key];
+    result[key] = typeof value === 'string' ? redactStack(value) : redactSensitive(value);
+  }
+  return result as T;
 }

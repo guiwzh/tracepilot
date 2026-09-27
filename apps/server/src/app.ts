@@ -17,6 +17,7 @@ import { registerProjectRoutes } from './routes/projects';
 import { registerDiagnosisRoutes } from './routes/diagnosis';
 import { registerInvestigationRoutes } from './routes/investigations';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
+import { clearSourceMapCache } from './services/sourcemaps';
 
 /** buildApp 的参数；测试通过它注入临时数据库配置和模型替身。 */
 export interface BuildAppOptions {
@@ -144,10 +145,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   // app.close() 时执行：测试结束、index.ts 收到 SIGTERM / SIGINT（部署停止、tsx watch 重启、Ctrl+C）
-  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，再关闭 SQLite 文件句柄。
+  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，再关闭 SQLite 文件句柄，
+  // 最后释放缓存的 Source Map 解析结果（它们在 WebAssembly 内存里，垃圾回收管不到）。
   app.addHook('onClose', async () => {
     await investigations.shutdown();
     database.close();
+    clearSourceMapCache();
   });
   return app;
 }

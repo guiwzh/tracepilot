@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { envelopeSchema, redactSensitive } from '@trace-pilot/shared';
+import { envelopeSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { ingestEnvelope } from '../services/events';
-import { symbolicateStack } from '../services/sourcemaps';
+import { symbolicateEvents } from '../services/sourcemaps';
 
 function invalidJson(): Error {
   return Object.assign(new Error('The telemetry envelope is not valid JSON.'), { statusCode: 400 });
@@ -50,23 +50,11 @@ function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): v
       });
     }
     try {
-      const result = ingestEnvelope(database, parsed.data);
-      // 先完成事务入库，再逐个做源码还原（读 map 文件是异步的）。
-      // 还原失败或找不到 map 都只是少了原始栈，不影响事件已经被接收。
-      for (const event of parsed.data.events) {
-        const stack = typeof event.payload.stack === 'string' ? event.payload.stack : undefined;
-        if (!stack) continue;
-        const release = database.sqlite
-          .prepare('SELECT id FROM releases WHERE project_id = ? AND version = ?')
-          .get(event.projectId, event.release) as { id: string } | undefined;
-        if (!release) continue;
-        const originalStack = await symbolicateStack(database, release.id, stack);
-        if (originalStack) {
-          database.sqlite
-            .prepare('UPDATE events SET original_stack = ? WHERE id = ?')
-            .run(redactSensitive(originalStack), event.eventId);
-        }
-      }
+      const { result, stacks } = ingestEnvelope(database, parsed.data);
+      // 先完成事务入库，再对新写入的事件做源码还原（读 map 文件是异步的）。
+      // 还原失败或找不到 map 都只是少了原始栈：symbolicateEvents 不会抛错，事件已经被接收。
+      const { failed } = await symbolicateEvents(database, stacks);
+      if (failed > 0) request.log.warn({ failed }, 'source map symbolication failed');
       // 202 表示服务端已经接收并处理该遥测批次，不要求浏览器等待后续调查动作。
       return reply.code(202).send(result);
     } catch (error) {

@@ -1,5 +1,6 @@
 import {
   MAX_BREADCRUMBS,
+  redactPayload,
   redactSensitive,
   type Breadcrumb,
   type MonitorEvent,
@@ -26,7 +27,6 @@ import {
 } from './helpers';
 import { dedupeSignature, isIgnoredError } from './noise';
 import { resolveOptions } from './options';
-import { redactPayload } from './privacy';
 
 export class MonitorCore implements MonitorClient {
   readonly options: Readonly<ResolvedMonitorOptions>;

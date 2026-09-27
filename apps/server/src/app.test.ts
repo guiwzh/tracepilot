@@ -1,10 +1,12 @@
-import { mkdtemp, readdir, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
 import { buildApp } from './app';
 import type { ServerConfig } from './config';
+import { clearSourceMapCache } from './services/sourcemaps';
 
 // Fastify app.inject 测试真实路由和 SQLite 行为，同时避免监听网络端口。
 let directory: string;
@@ -443,13 +445,32 @@ describe('source map failures', () => {
     });
   }
 
-  function ingest(id: string) {
+  function ingest(id: string, stack?: string) {
+    const payload = event(id, '70000001');
+    if (stack) payload.payload.stack = stack;
     return app.inject({
       method: 'POST',
       url: '/api/v1/envelopes',
-      payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [event(id, '70000001')] },
+      payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [payload] },
     });
   }
+
+  async function originalStackOf(eventId: string): Promise<string | null | undefined> {
+    const issueId = (
+      await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/issues' })
+    ).json().items[0].id;
+    const events = await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}/events` });
+    return events.json().items.find((item: { id: string }) => item.id === eventId)?.originalStack;
+  }
+
+  const VALID_MAP = JSON.stringify({
+    version: 3,
+    file: 'app.aabbccdd.js',
+    sources: ['src/cart.ts'],
+    names: [],
+    // 压缩文件第 1 行第 1 列 → src/cart.ts 第 1 行第 1 列。
+    mappings: 'AAAA',
+  });
 
   it('refuses an unparseable map without letting it break later ingestion', async () => {
     // 回归：这样的 map 曾先被登记下来。之后该版本每个带堆栈的错误批次都返回 500，
@@ -466,21 +487,65 @@ describe('source map failures', () => {
     expect((await ingest('after-bad-map')).statusCode).toBe(202);
   });
 
+  it('refuses a map whose mappings cannot be decoded', async () => {
+    // 回归：mappings 要到第一次查询才解码。这份 map 曾以 201 通过上传，之后该版本每一次
+    // 带堆栈的接入都返回 500，SDK 的重试也一直是 500。
+    const upload = await uploadMap(
+      JSON.stringify({ version: 3, sources: ['src/cart.ts'], names: [], mappings: 'AAAA;!!!!' }),
+    );
+    expect(upload.statusCode).toBe(400);
+    expect((await ingest('after-undecodable-map')).statusCode).toBe(202);
+  });
+
   it('keeps accepting telemetry when a registered map file has been removed', async () => {
-    const valid = JSON.stringify({
-      version: 3,
-      file: 'app.aabbccdd.js',
-      sources: ['src/cart.ts'],
-      names: [],
-      mappings: 'AAAA',
-    });
-    expect((await uploadMap(valid)).statusCode).toBe(201);
+    expect((await uploadMap(VALID_MAP)).statusCode).toBe(201);
     for (const file of await readdir(join(directory, 'maps'))) {
       await unlink(join(directory, 'maps', file));
     }
+    // 解析结果只在内存里；清空缓存相当于服务重启之后。
+    clearSourceMapCache();
 
     const response = await ingest('after-missing-map');
     expect(response.statusCode).toBe(202);
     expect(response.json()).toMatchObject({ accepted: 1 });
+  });
+
+  it('keeps accepting telemetry when a stored map turns out to be corrupt', async () => {
+    // 完整校验之前存下的 map，或者磁盘上被改坏的文件，都可能在查询时才暴露问题。
+    expect((await uploadMap(VALID_MAP)).statusCode).toBe(201);
+    for (const file of await readdir(join(directory, 'maps'))) {
+      await writeFile(join(directory, 'maps', file), VALID_MAP.replace('AAAA', 'AAAA;!!!!'));
+    }
+    clearSourceMapCache();
+
+    const first = await ingest('with-corrupt-map');
+    expect(first.statusCode).toBe(202);
+    // SDK 的重试也不会再撞上 500：同一批按重复送达处理。
+    const retry = await ingest('with-corrupt-map');
+    expect(retry.statusCode).toBe(202);
+    expect(retry.json()).toMatchObject({ accepted: 0, duplicates: 1 });
+  });
+
+  it('keeps the position of a stack frame whose URL carried a query string', async () => {
+    // 回归：服务端脱敏曾把 "app.js?v=3:1:1)" 从问号起整段删掉，存下的堆栈没了行列号，
+    // 之后上传 map 也无法回填。
+    const stack = 'TypeError: x\n    at submit (https://shop.test/assets/app.aabbccdd.js?v=3:1:1)';
+    expect((await ingest('query-frame', stack)).statusCode).toBe(202);
+    expect((await uploadMap(VALID_MAP)).statusCode).toBe(201);
+    expect(await originalStackOf('query-frame')).toContain('src/cart.ts:1:1');
+  });
+
+  it('does not symbolicate a retried batch again', async () => {
+    expect((await uploadMap(VALID_MAP)).statusCode).toBe(201);
+    const stack = 'TypeError: x\n    at submit (https://shop.test/assets/app.aabbccdd.js:1:1)';
+    expect((await ingest('retried', stack)).statusCode).toBe(202);
+    expect(await originalStackOf('retried')).toContain('src/cart.ts:1:1');
+
+    // 清掉还原结果后重发同一批：重复送达的事件入库时已经还原过，不再重算。
+    const sqlite = new Database(join(directory, 'test.db'));
+    sqlite.prepare('UPDATE events SET original_stack = NULL').run();
+    sqlite.close();
+    expect((await ingest('retried', stack)).json()).toMatchObject({ duplicates: 1 });
+    expect(await originalStackOf('retried')).toBeNull();
   });
 });
