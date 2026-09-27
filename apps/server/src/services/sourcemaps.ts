@@ -238,6 +238,9 @@ interface OriginalPosition {
 }
 
 function originalPosition(consumer: SourceMapConsumer, frame: StackFrame): OriginalPosition | null {
+  // 第 0 行的帧（eval 出来的代码等会产生）source-map 会直接抛错。这不是 map 损坏，只是这一帧映射不到；
+  // 让它抛出去，缓存会把整份 map 当成损坏，之后所有事件都不再还原。
+  if (frame.lineNumber < 1) return null;
   // 浏览器列号从 1 开始，source-map 库列号从 0 开始；读写时各转换一次。
   const original = consumer.originalPositionFor({
     line: frame.lineNumber,

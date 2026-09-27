@@ -68,6 +68,24 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
+  it('reports an error that keeps recurring once per window instead of only once', () => {
+    // 回归：被挡下的重复曾刷新窗口，每 3 秒一次的错误只在第一次上报，之后再也不上报。
+    vi.useFakeTimers();
+    try {
+      const monitor = core({ dedupeWindow: 5_000 });
+      monitor.start();
+      const reported: number[] = [];
+      for (let second = 0; second <= 12; second += 3) {
+        vi.setSystemTime(Date.UTC(2026, 8, 28, 12, 0, second));
+        if (monitor.captureException(new Error('polling failed'))) reported.push(second);
+      }
+      expect(reported).toEqual([0, 6, 12]);
+      monitor.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('supports cancellation and sanitization through beforeSend', () => {
     const monitor = core({
       beforeSend: (event) =>

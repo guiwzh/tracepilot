@@ -209,6 +209,22 @@ describe('source map symbolication', () => {
     );
   });
 
+  it('skips a frame on line 0 without giving up on the map', async () => {
+    // 回归：source-map 对第 0 行直接抛错，缓存曾因此把整份 map 当成损坏，之后所有事件都不再还原。
+    await upload('app.js', appMap('src/cart.ts', 12));
+    const stack = [
+      'Error: from eval',
+      '    at eval (https://shop.test/assets/app.js:0:1)',
+      '    at submit (https://shop.test/assets/app.js:1:10)',
+    ].join('\n');
+    const mapped = await symbolicateStack(database, 'demo-release-2-4-1', stack);
+    expect(mapped).toContain('at eval (https://shop.test/assets/app.js:0:1)');
+    expect(mapped).toContain('src/cart.ts:12:5');
+    expect(await symbolicateStack(database, 'demo-release-2-4-1', APP_STACK)).toContain(
+      'src/cart.ts:12:5',
+    );
+  });
+
   it('backfills only the events whose stack references the uploaded file', async () => {
     storeEvent('app-event', APP_STACK);
     storeEvent('vendor-event', 'Error: x\n    at v (https://shop.test/assets/vendor.js:1:1)');

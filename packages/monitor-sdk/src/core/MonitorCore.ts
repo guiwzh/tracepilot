@@ -177,17 +177,23 @@ export class MonitorCore implements MonitorClient {
     }
   }
 
+  /**
+   * 窗口从上一次「上报」算起，而不是上一次「出现」：被挡下的重复不刷新时间。
+   * 曾经每次出现都刷新，一个每隔几秒就触发一次的错误只在第一次被上报，之后永远被当作重复，
+   * 服务端看到的 Issue 像是早就不再发生。现在它按窗口节流，每个窗口至少上报一次。
+   */
   private isDuplicate(eventType: MonitorEvent['eventType'], payload: CapturePayload): boolean {
     const signature = dedupeSignature(eventType, payload);
     if (signature === null) return false;
     const now = Date.now();
-    const last = this.recentSignals.get(signature);
+    const lastReported = this.recentSignals.get(signature);
+    if (lastReported !== undefined && now - lastReported < this.options.dedupeWindow) return true;
     this.recentSignals.set(signature, now);
     // 顺便淘汰过期签名，避免长时间打开的页面让 Map 无限增长。
     for (const [key, timestamp] of this.recentSignals) {
       if (now - timestamp > this.options.dedupeWindow * 2) this.recentSignals.delete(key);
     }
-    return last !== undefined && now - last < this.options.dedupeWindow;
+    return false;
   }
 
   /**
