@@ -64,11 +64,25 @@ export function topStackFrame(stack?: string): string {
   return normalizeMessage(line ?? stack.split('\n')[0] ?? 'no-stack');
 }
 
+/**
+ * 参与指纹的「消息」。失败的请求没有错误消息，按「方法 + 地址 + 状态码」区分：同一个地址上的
+ * GET 404、POST 503 和连不上服务器是不同的问题，与 Issue 标题（POST /api/cart → 503）口径一致。
+ * 曾经只用地址，三者被并成一个 Issue：标题随最新一条变化，级别停留在第一条的 warning，
+ * 503 故障藏在一个「警告」里。
+ */
+function fingerprintMessage(event: MonitorEvent): string {
+  const payload = event.payload;
+  if (event.eventType === 'network') {
+    return `${String(payload.method ?? 'GET').toUpperCase()} ${String(payload.url ?? 'request')} ${String(payload.status ?? 'failed')}`;
+  }
+  return String(payload.message ?? payload.url ?? payload.metric ?? 'unknown');
+}
+
 /** 事件的指纹 = SHA-256(错误类型 | 消息 | 栈顶帧)，三部分都先归一化。 */
 export function eventFingerprint(event: MonitorEvent): string {
   const payload = event.payload;
   const kind = String(payload.name ?? payload.errorType ?? event.eventType);
-  const message = String(payload.message ?? payload.url ?? payload.metric ?? 'unknown');
+  const message = fingerprintMessage(event);
   const stack = typeof payload.stack === 'string' ? payload.stack : undefined;
   // 存哈希而不是拼接后的原文：长度固定（64 个十六进制字符），适合作为唯一键和索引。
   return createHash('sha256')

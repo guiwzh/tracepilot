@@ -347,6 +347,28 @@ describe('telemetry ingestion', () => {
     ).toBe(1);
   });
 
+  it('keeps the overview trend in step with its totals for events from a fast clock', async () => {
+    // 事件时间可以比服务端时钟快一点（容差以内不校正）。这样的事件曾落进第 25 个小时桶：
+    // 计入了 24 小时事件数，却不出现在趋势图里。
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [event('slightly-ahead', '30000001', Date.now() + 30_000)],
+      },
+    });
+    const overview = (
+      await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/overview' })
+    ).json();
+    const trendTotal = overview.trend.reduce(
+      (sum: number, point: { errors: number }) => sum + point.errors,
+      0,
+    );
+    expect({ events: overview.events24h, trend: trendTotal }).toEqual({ events: 1, trend: 1 });
+  });
+
   it('lets cross-origin SDKs read Retry-After', async () => {
     // 不在 CORS 默认可读的响应头里；不显式暴露，SDK 就无法照服务端要求的时间退避。
     const response = await app.inject({

@@ -31,6 +31,51 @@ export interface IngestOutcome {
   stacks: StoredStack[];
 }
 
+/** 接入被拒绝的原因。路由据此返回 403；其余错误按服务端问题处理。 */
+export class IngestError extends Error {
+  constructor(
+    /** INVALID_DSN：DSN Key 不存在；PROJECT_DSN_MISMATCH：事件声明的项目与 Key 不符。 */
+    readonly code: 'INVALID_DSN' | 'PROJECT_DSN_MISMATCH',
+  ) {
+    super(code);
+  }
+}
+
+/**
+ * 设备时钟与服务端相差超过这个值，才认为设备时钟不准。SDK 每次发送时写入 sentAt，它与服务端
+ * 收到的时间正常只差网络耗时和几百毫秒的快速重试，远小于一分钟。
+ */
+const CLOCK_TOLERANCE_MS = 60_000;
+
+/**
+ * 按 sentAt 估计设备时钟的偏差：服务端收到的时间减去设备声称的发送时间。
+ * 偏差在容差以内按 0 处理，不去挪动时钟正常的设备上报的时间。
+ */
+function clockOffset(sentAt: number, receivedAt: number): number {
+  const offset = receivedAt - sentAt;
+  return Math.abs(offset) > CLOCK_TOLERANCE_MS ? offset : 0;
+}
+
+/**
+ * 把事件时间换算到服务端时钟。事件时间和 breadcrumb 时间都来自用户设备的时钟，而设备时钟可能
+ * 差出几小时甚至几年（手动改过时间、长期没有联网校时）。不校正的话，一台时钟快一年的设备上报的
+ * 错误会以明年的时间排在 Issue 列表最前面，概览的 24 小时统计也对不上趋势图。
+ *
+ * 平移之后仍然在未来、或不是正数（事件时间与同一信封的 sentAt 自相矛盾），以收到的时间为准。
+ * breadcrumb 跟着平移同样的量，它们与错误之间的相对时间保持不变。
+ */
+function toServerClock(event: MonitorEvent, offset: number, receivedAt: number): MonitorEvent {
+  let timestamp = event.timestamp + offset;
+  if (timestamp <= 0 || timestamp > receivedAt + CLOCK_TOLERANCE_MS) timestamp = receivedAt;
+  const shift = timestamp - event.timestamp;
+  if (shift === 0) return event;
+  return {
+    ...event,
+    timestamp,
+    breadcrumbs: event.breadcrumbs.map((item) => ({ ...item, timestamp: item.timestamp + shift })),
+  };
+}
+
 /**
  * web-vitals 为每个页面加载中的每个指标分配唯一 id；LCP/CLS/INP 的值在页面生命周期里会增长，
  * SDK 会以同一个 id 再报一次。按 id 覆盖而不是追加，否则同一次访问的多个中间值会把 p75 拉偏。
@@ -181,7 +226,7 @@ function updateIssueCounters(
 /**
  * 接入一个信封（SDK 一次上报的一批事件）。对每个事件依次：
  *
- *   1. 确认它属于 DSN Key 对应的项目；
+ *   1. 确认它属于 DSN Key 对应的项目，把事件时间换算到服务端时钟；
  *   2. 幂等检查：同一个 id 已经存过就跳过（Web Vitals 例外：按指标 id 覆盖为更新的值）；
  *   3. 脱敏，关联或创建 Release，按指纹归入 Issue；
  *   4. 写入事件，更新 Issue 的事件数和影响用户数。
@@ -193,12 +238,17 @@ function updateIssueCounters(
  * 声明了别的项目，前 6 个事件的写入也会被撤回，数据库里不会留下半个信封。
  * 事务还让一批写入只需落盘一次，比逐条提交快得多。
  */
-export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope): IngestOutcome {
+export function ingestEnvelope(
+  database: TraceDatabase,
+  envelope: EventEnvelope,
+  receivedAt = Date.now(),
+): IngestOutcome {
   // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
   const project = database.sqlite
     .prepare('SELECT id FROM projects WHERE dsn_key = ?')
     .get(envelope.dsnKey) as { id: string } | undefined;
-  if (!project) throw new Error('INVALID_DSN');
+  if (!project) throw new IngestError('INVALID_DSN');
+  const offset = clockOffset(envelope.sentAt, receivedAt);
 
   let accepted = 0;
   let duplicates = 0;
@@ -209,8 +259,9 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
   // transaction() 把回调包装成一个事务函数：调用时先 BEGIN，回调正常结束则 COMMIT（提交生效），
   // 回调里任何地方抛错则 ROLLBACK（全部撤销），错误继续向外抛给路由处理。
   const ingest = database.sqlite.transaction(() => {
-    for (const rawEvent of envelope.events) {
-      if (rawEvent.projectId !== project.id) throw new Error('PROJECT_DSN_MISMATCH');
+    for (const reported of envelope.events) {
+      if (reported.projectId !== project.id) throw new IngestError('PROJECT_DSN_MISMATCH');
+      const rawEvent = toServerClock(reported, offset, receivedAt);
       const metricId = metricInstanceId(rawEvent);
       // 指标样本的行 id 由 metricId 派生，普通事件沿用 SDK 生成的 eventId。
       const rowId = metricId ? `metric:${project.id}:${metricId}` : rawEvent.eventId;

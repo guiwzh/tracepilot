@@ -339,9 +339,11 @@ export function getProjectOverview(database: TraceDatabase, projectId: string): 
         (SELECT COUNT(*) FROM releases WHERE project_id = ?) releases`,
     )
     .get(projectId, projectId, since, projectId, since, projectId) as Row;
+  // 第 24 小时的桶只有「恰好此刻」的事件才会落进去（事件时间可以比服务端时钟最多快一分钟），
+  // 并入最后一个桶，否则它们计入了总数却不出现在趋势图里。
   const buckets = database.sqlite
     .prepare(
-      `SELECT CAST((e.created_at - ?) / 3600000 AS INTEGER) bucket,
+      `SELECT MIN(23, CAST((e.created_at - ?) / 3600000 AS INTEGER)) bucket,
         COUNT(*) errors,
         COUNT(DISTINCT e.user_id) users
        FROM events e JOIN issues i ON i.id = e.issue_id

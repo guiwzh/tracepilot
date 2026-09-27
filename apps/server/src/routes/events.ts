@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { envelopeSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
-import { ingestEnvelope } from '../services/events';
+import { IngestError, ingestEnvelope } from '../services/events';
 import { symbolicateEvents } from '../services/sourcemaps';
 
 function invalidJson(): Error {
@@ -58,12 +58,11 @@ function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): v
       // 202 表示服务端已经接收并处理该遥测批次，不要求浏览器等待后续调查动作。
       return reply.code(202).send(result);
     } catch (error) {
-      // ingestEnvelope 用错误消息表达业务错误码：DSN Key 不存在，或事件声明的项目与 Key 不符。
+      // DSN Key 不存在，或事件声明的项目与 Key 不符：凭据问题，返回 403，SDK 不会重试。
       // 其余错误继续抛出，交给 app.ts 的统一错误处理返回 500。
-      const code = error instanceof Error ? error.message : 'INGEST_FAILED';
-      if (code === 'INVALID_DSN' || code === 'PROJECT_DSN_MISMATCH') {
+      if (error instanceof IngestError) {
         return reply.code(403).send({
-          error: code,
+          error: error.code,
           message: 'The DSN is not authorized for the event project.',
         });
       }
