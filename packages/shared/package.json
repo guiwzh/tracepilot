@@ -9,15 +9,20 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
       "development": "./src/index.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "scripts": {
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
-    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "dev": "tsdown --watch",
+    "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run"
   },
@@ -25,7 +30,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "tsup": "^8.5.1",
-    "vitest": "^3.2.7"
+    "tsdown": "^0.23.0",
+    "vitest": "^5.0.2"
   }
 }
