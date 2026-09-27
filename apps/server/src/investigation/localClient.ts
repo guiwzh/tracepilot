@@ -8,7 +8,12 @@ import { SUBMIT_REPORT_TOOL } from './tools';
  * 它不是模型推理：按固定顺序调用同一批真实工具（概览 → 样本 → 事件详情 + 版本对比 → 源码），
  * 再用规则从工具结果里摘出原文组装报告。它的用途是离线演示和 E2E 测试——
  * 走的是与真实模型完全相同的循环、工具、引用校验和事件流，界面上会明确标注为离线脚本。
+ *
+ * 它和真实模型一样是「无状态」的：每次 complete() 都只看传进来的 messages，
+ * 从里面找出已经调过哪些工具、拿到了什么结果，再决定下一步。
  */
+
+/** 从对话历史里还原出的一条工具结果。 */
 interface ToolOutput {
   /** 工具结果第一行的编号（T1、T2……），报告靠它引用。 */
   ref: string;
@@ -16,6 +21,10 @@ interface ToolOutput {
   value: Record<string, unknown>;
 }
 
+/**
+ * 从对话历史里收集所有工具结果。tool 消息里只有 tool_call_id，工具名要从前面
+ * assistant 消息的 tool_calls 里按 id 查回来。
+ */
 function collectResults(messages: ChatMessage[]): ToolOutput[] {
   const names = new Map<string, string>();
   const results: ToolOutput[] = [];
@@ -45,6 +54,7 @@ function collectResults(messages: ChatMessage[]): ToolOutput[] {
   return results;
 }
 
+/** 可被取消的等待：到点 resolve；signal 触发时立即以 AbortError reject。 */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -60,8 +70,13 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+// 离线脚本没有真实 token，按「约 4 个字符 1 个 token」粗估，让用量显示和预算逻辑照常工作。
 const estimateTokens = (value: unknown) => Math.ceil(JSON.stringify(value).length / 4);
 
+/**
+ * 用规则把工具结果组装成报告：每条证据的 quote 都直接截取自工具结果原文，
+ * 所以能通过和真实模型相同的引用校验。原因按错误文本里的关键词套用模板。
+ */
 export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const find = (name: string) =>
     results.find((result) => result.name === name && !result.value.error);
@@ -71,6 +86,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const releases = find('compare_releases');
 
   const evidence: SubmittedReport['evidence'] = [];
+  // push 返回新长度，减 1 就是刚加入的证据下标，原因用它引用证据；-1 表示没有这条证据。
   const add = (item: SubmittedReport['evidence'][number]) => evidence.push(item) - 1;
 
   const title = String((overview?.value.issue as { title?: string } | undefined)?.title ?? '');
@@ -188,6 +204,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   }
   missing.push('A correlated backend trace or request id for the failing session.');
 
+  // 只保留有证据支撑的原因，按置信度从高到低，最多 4 条。
   const ranked = causes
     .filter((cause) => cause.evidenceRefs.length > 0)
     .sort((left, right) => right.confidence - left.confidence)
@@ -210,6 +227,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   };
 }
 
+/** 离线脚本客户端：实现与真实模型相同的 ModelClient 接口。 */
 export class LocalScriptedClient implements ModelClient {
   readonly engine = 'local' as const;
   readonly model = 'local-scripted-investigator';
@@ -231,8 +249,10 @@ export class LocalScriptedClient implements ModelClient {
     const samples = results.find((result) => result.name === 'list_event_samples')?.value
       .samples as Array<{ eventId: string; stackMapped: boolean }> | undefined;
     const detail = results.find((result) => result.name === 'get_event_detail');
+    // 收尾阶段（循环强制只能调 submit_report）直接交报告。
     const forcedSubmit = request.toolChoice !== 'auto';
 
+    // 固定剧本：看还缺哪一步就做哪一步，全部做完就提交报告。
     if (!forcedSubmit && !has('get_issue_overview')) {
       narration = 'Starting with the issue overview and the most recent samples.';
       toolCalls = [call('get_issue_overview', {}), call('list_event_samples', { limit: 5 })];

@@ -10,9 +10,12 @@ import { ingestEnvelope } from './services/events';
 import { saveSourceMap } from './services/sourcemaps';
 
 /**
- * 种子脚本通过正式 ingestEnvelope 写入虚构事件，而不是直接伪造最终 Issue，
+ * 演示数据脚本（pnpm seed）：清空并重建 demo-project 的虚构数据，外加两份 Source Map。
+ *
+ * 通过正式的 ingestEnvelope 写入虚构事件，而不是直接往 issues 表插最终结果，
  * 因此演示数据也会经过指纹、脱敏、聚合和计数的真实生产代码。
  */
+
 const browsers = [
   'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/132.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/131.0 Safari/537.36 Edg/131.0',
@@ -98,7 +101,7 @@ function baseEvent(
 export function seedDemoData(database: TraceDatabase): { events: number } {
   ensureDemoProject(database);
   // 删除 releases 会级联清掉 source_maps 表行，但磁盘上的 .map 文件不会跟着消失。
-  // 先取出待删记录的路径，重建后逐个删除，避免反复 seed 在私有目录里堆积孤儿文件。
+  // 先取出待删记录的路径，删完表数据后逐个删除文件，避免反复 seed 在私有目录里堆积孤儿文件。
   const orphanedMaps = database.sqlite
     .prepare(
       `SELECT map_path FROM source_maps
@@ -107,6 +110,7 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
     .all() as Array<{ map_path: string }>;
 
   // 只重建内置 demo-project，用户自行创建的其他项目不会被删除。
+  // 删除 issues 时，外键 ON DELETE CASCADE 会一并删掉它的调查记录。
   database.sqlite.exec(`
     DELETE FROM diagnoses WHERE issue_id IN (SELECT id FROM issues WHERE project_id = 'demo-project');
     DELETE FROM events WHERE issue_id IN (SELECT id FROM issues WHERE project_id = 'demo-project')

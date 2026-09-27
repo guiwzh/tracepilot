@@ -6,7 +6,14 @@ import { buildApp } from './app';
 import type { ServerConfig } from './config';
 import { percentile } from './lib/json';
 
-// 基准全部运行在临时目录，结束后删除，避免污染开发数据库或把本机结果误当生产容量。
+/**
+ * 接入性能基准：pnpm benchmark
+ *
+ * 分 1000 批、每批 10 条上报 1 万个错误事件，统计每批接入耗时的 P50 / P95，
+ * 再测 Issue 列表查询的耗时。结果只反映本机 + SQLite 的量级，不代表生产容量。
+ */
+
+// 基准全部运行在临时目录，结束后删除，避免污染开发数据库。
 const directory = await mkdtemp(join(tmpdir(), 'tracepilot-benchmark-'));
 const config: ServerConfig = {
   host: '127.0.0.1',
@@ -17,6 +24,7 @@ const config: ServerConfig = {
   localAgentStepDelayMs: 0,
   agentSourceContext: true,
 };
+// 不配置模型密钥、关闭日志：只测接入和查询本身。
 const app = await buildApp({ config, logger: false });
 
 /**

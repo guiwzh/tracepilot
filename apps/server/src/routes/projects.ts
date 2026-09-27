@@ -10,6 +10,10 @@ import {
   listReleases,
 } from '../services/queries';
 
+/**
+ * 项目与 Release 接口：列出和创建项目、项目概览与性能指标、列出和创建 Release。
+ * 这些是管理类接口，当前没有鉴权（本地单用户 MVP），部署到公网前必须先加上。
+ */
 function paramId(params: unknown): string {
   // Fastify 未配置泛型时 params 是 unknown；在路由边界集中做安全字符串转换。
   return String((params as { projectId?: string }).projectId ?? '');
@@ -37,6 +41,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
     database.sqlite
       .prepare('INSERT INTO projects (id, name, dsn_key, created_at) VALUES (?, ?, ?, ?)')
       .run(project.id, project.name, project.dsnKey, project.createdAt);
+    // 201 Created：告诉调用方新资源已创建，响应体就是它。
     return reply.code(201).send(project);
   });
 

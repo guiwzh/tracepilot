@@ -8,8 +8,11 @@ import {
 } from 'drizzle-orm/sqlite-core';
 
 /**
- * Drizzle Schema 为 TypeScript 写入提供列名和类型推导。
- * 当前表的实际创建由 client.ts 中的幂等 DDL 完成，两处结构变更必须保持同步。
+ * 同一套表结构的 TypeScript 描述，供 Drizzle 使用：写 db.insert(events).values({...}) 时，
+ * 列名拼错或类型不对会在编译期报错，而手写 SQL 字符串做不到这一点。
+ *
+ * 注意它只「描述」表，不负责建表：实际建表由 client.ts 里的 SQL 完成。
+ * 改表结构时两处都要改，否则类型和真实的表会对不上。各表的含义见 client.ts 顶部的说明。
  */
 export const projects = sqliteTable('projects', {
   id: text('id').primaryKey(),
@@ -45,7 +48,7 @@ export const issues = sqliteTable(
     level: text('level', { enum: ['error', 'warning', 'info'] }).notNull(),
     firstSeenAt: integer('first_seen_at').notNull(),
     lastSeenAt: integer('last_seen_at').notNull(),
-    eventCount: integer('event_count').notNull().default(1),
+    eventCount: integer('event_count').notNull().default(0),
     userCount: integer('user_count').notNull().default(0),
   },
   (table) => [

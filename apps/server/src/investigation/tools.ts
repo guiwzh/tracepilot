@@ -7,7 +7,11 @@ import { getIssue, listIssueEvents, mapEvent } from '../services/queries';
 import { sourceContext } from '../services/sourcemaps';
 
 /**
- * 排障 Agent 能用的全部工具。设计上的三条约束：
+ * 排障 Agent 能用的全部工具。每个工具 = 名字 + 给模型看的说明 + 参数的 Zod Schema + 执行函数。
+ * 说明和参数 Schema 会转成 JSON Schema 发给模型（TOOL_SPECS），模型据此决定调用哪个、传什么参数；
+ * 执行函数只在服务端运行（runTool），模型永远拿不到数据库本身。
+ *
+ * 设计上的三条约束：
  *
  * 1. 只读。没有任何工具能改数据、改代码或访问外部系统，模型被注入了也造不成写操作。
  * 2. 作用域绑定。工具只能看到本次调查的 Issue 及其所在项目；参数里的 eventId 也会校验归属，
@@ -15,6 +19,8 @@ import { sourceContext } from '../services/sourcemaps';
  * 3. 输出可引用。关键事实用可读的句子表达（例如 "-3.1s network POST … → 503"），
  *    模型提交报告时要从这里逐字摘出原文，服务端再核对原文确实存在。
  */
+
+/** 工具执行时的上下文：由服务端在调查开始时确定，模型无法修改。 */
 export interface ToolContext {
   database: TraceDatabase;
   issueId: string;
@@ -23,6 +29,7 @@ export interface ToolContext {
   allowSourceContext: boolean;
 }
 
+/** 工具里预期内的失败（例如事件不存在）。code 和 message 会原样回给模型，让它换个参数重试。 */
 export class ToolError extends Error {
   constructor(
     readonly code: string,
@@ -39,6 +46,8 @@ interface ToolDefinition<Parameters extends z.ZodTypeAny> {
   execute(args: z.infer<Parameters>, context: ToolContext): unknown;
 }
 
+// 原样返回参数的「恒等函数」，作用只在类型层面：让 TypeScript 根据 parameters 的 Schema
+// 推导出 execute 的参数类型，写工具时 args 就有完整的类型提示。
 function defineTool<Parameters extends z.ZodTypeAny>(definition: ToolDefinition<Parameters>) {
   return definition;
 }
@@ -46,6 +55,8 @@ function defineTool<Parameters extends z.ZodTypeAny>(definition: ToolDefinition<
 /** 单个工具结果的上限。超出时截断并标记，避免一次调用吃掉整个上下文窗口。 */
 export const MAX_TOOL_OUTPUT_CHARS = 6_000;
 
+// 以下是把数据库原始值整理成「模型易读文本」的小工具：
+// 毫秒时间戳 → ISO 时间字符串；User-Agent → 浏览器名；数量 → 百分比；时间差 → "-3.1s"。
 function iso(timestamp: number | null | undefined): string | null {
   return typeof timestamp === 'number' && Number.isFinite(timestamp)
     ? new Date(timestamp).toISOString()
@@ -79,6 +90,7 @@ function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
   return `${offset} ${item.type} ${item.message}`;
 }
 
+/** 按 id 取事件，并用 issue_id 条件保证它属于本次调查的 Issue（作用域绑定）。 */
 function findEvent(context: ToolContext, eventId: string) {
   const row = context.database.sqlite
     .prepare('SELECT * FROM events WHERE id = ? AND issue_id = ?')
@@ -92,6 +104,7 @@ function findEvent(context: ToolContext, eventId: string) {
   return mapEvent(row);
 }
 
+/** 拿不到源码时的原因说明，让模型把它写进 missingInformation，而不是自己猜测源码。 */
 const SOURCE_UNAVAILABLE: Record<string, string> = {
   NO_STACK: 'This event has no stack trace.',
   NO_FRAME: 'The stack has no frame at that index.',
@@ -220,6 +233,9 @@ const compareReleases = defineTool({
     "How this issue is spread across the project's releases, oldest first: its event count, its share of each release's errors, when it first appeared, and whether source maps exist.",
   parameters: z.object({}),
   execute: (_args, context) => {
+    // 每个版本一行（GROUP BY r.id）。SUM(CASE WHEN 条件 THEN 1 ELSE 0 END) 是「按条件计数」：
+    // issue_events 数本 Issue 的事件，error_events 数该版本所有归入 Issue 的错误事件。
+    // LEFT JOIN 让没有任何事件的版本也出现在结果里（计数为 NULL，下面按 0 处理）。
     const rows = context.database.sqlite
       .prepare(
         `SELECT r.version, r.created_at,
@@ -270,6 +286,7 @@ const compareReleases = defineTool({
   },
 });
 
+/** 收集证据用的 5 个只读工具。 */
 export const INVESTIGATION_TOOLS = [
   getIssueOverview,
   listEventSamples,
@@ -278,6 +295,10 @@ export const INVESTIGATION_TOOLS = [
   compareReleases,
 ];
 
+/**
+ * 第 6 个工具 submit_report 没有执行函数：模型「调用」它就是提交最终报告，
+ * 参数就是报告内容。用工具参数而不是自由文本交报告，服务端才能按 Schema 校验。
+ */
 export const SUBMIT_REPORT_TOOL = 'submit_report';
 
 function toOpenAITool(
@@ -299,6 +320,7 @@ function toOpenAITool(
   };
 }
 
+/** 发给模型的工具清单（OpenAI tools 格式）：5 个取证工具 + submit_report。 */
 export const TOOL_SPECS: ChatCompletionFunctionTool[] = [
   ...INVESTIGATION_TOOLS.map((tool) => toOpenAITool(tool.name, tool.description, tool.parameters)),
   toOpenAITool(
@@ -308,13 +330,16 @@ export const TOOL_SPECS: ChatCompletionFunctionTool[] = [
   ),
 ];
 
+/** 收尾阶段只提供 submit_report。 */
 export const SUBMIT_ONLY_TOOL_SPECS = TOOL_SPECS.filter(
   (tool) => tool.function.name === SUBMIT_REPORT_TOOL,
 );
 
 export interface ToolResult {
   ok: boolean;
+  /** 发给模型的结果正文（JSON 字符串）。失败时形如 {"error":"…","message":"…"}。 */
   output: string;
+  /** 结果超过 MAX_TOOL_OUTPUT_CHARS 被截断时为 true。 */
   truncated: boolean;
 }
 

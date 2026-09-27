@@ -16,8 +16,10 @@ import type { EvalCase } from './cases';
  * - single：一次模型调用 + 结构化输出，即升级前的诊断方式；
  * - agent：只读工具调用循环。
  */
+
 export type EngineName = 'rules' | 'single' | 'agent';
 
+/** 三种引擎的输出统一成这个形状，评分代码不需要关心结果来自哪个引擎。 */
 export interface EngineOutput {
   summary: string;
   causes: Array<{ cause: string; confidence: number }>;
@@ -37,6 +39,10 @@ export interface PreparedCase {
   eventCount: number;
 }
 
+/**
+ * 为一个用例建一个独立的 SQLite 文件，走正式的接入和 Source Map 上传代码写入数据，
+ * 再找出目标 Issue。每个用例一个库，用例之间互不干扰。
+ */
 export async function prepareCase(evalCase: EvalCase, directory: string): Promise<PreparedCase> {
   const database = createDatabase(join(directory, `${evalCase.id}.db`));
   const now = Date.now();
@@ -80,6 +86,7 @@ export async function prepareCase(evalCase: EvalCase, directory: string): Promis
   return { database, issueId: issue.id, issueTitle: issue.title, eventCount: issue.event_count };
 }
 
+/** 用指定引擎诊断一个已准备好的用例。 */
 export async function runEngine(
   engine: EngineName,
   prepared: PreparedCase,

@@ -3,7 +3,8 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { ProjectsPage } from './pages/ProjectsPage';
 
-// 路由级 lazy import 会把较大的调查页面拆成独立 chunk，首页无需一次下载全部代码。
+// 除首页（项目列表）外，各页面按路由懒加载、各自拆成独立 chunk。
+// 最大的是 Issue 详情页（含调查面板），首页不必一次下载全部代码。
 const IssuesPage = lazy(() =>
   import('./pages/IssuesPage').then((module) => ({ default: module.IssuesPage })),
 );

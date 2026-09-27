@@ -15,9 +15,17 @@ import { parseJson } from '../lib/json';
 import { getIssue, listIssueEvents } from './queries';
 
 /**
- * 诊断服务只接收经过裁剪和脱敏的证据快照，不把数据库、文件系统或命令工具交给模型。
- * 外部模型不可用时使用确定性的本地引擎，监控主链路不受影响。
+ * 单次诊断：把一个 Issue 的证据整理成一份 JSON，一次模型调用换回一份结构化报告，按证据内容缓存。
+ * （工作台已改用多步的排障 Agent，见 investigation/；这里保留为 API 和评测里的对照组。）
+ *
+ * 流程：buildDiagnosisContext 取证据并裁剪、脱敏 → 算证据哈希查缓存 → 未命中则 callModel
+ * → 用共享 Zod Schema 校验返回值 → 写入 diagnoses 表。
+ *
+ * 模型只看到这份证据快照，拿不到数据库、文件系统或任何命令工具。没有配置模型密钥时
+ * 走确定性的本地规则引擎（localDiagnosis），接口照常可用，界面会标注来源。
  */
+
+/** 发给模型的证据快照。各项都有数量上限，控制 token 用量。 */
 interface DiagnosisContext {
   issue: {
     title: string;
@@ -39,6 +47,7 @@ interface DiagnosisContext {
   performance?: { lcp?: number; inp?: number; cls?: number };
 }
 
+/** 一次诊断生成的结果，外加用于记账的模型名和 token 数。 */
 interface ModelResult {
   result: DiagnosisResult;
   model: string;
@@ -61,6 +70,7 @@ function failedRequests(event: StoredEvent): Array<Record<string, unknown>> {
     }));
 }
 
+/** 从数据库组装某个 Issue 的证据快照；Issue 不存在时返回 null。 */
 export function buildDiagnosisContext(
   database: TraceDatabase,
   issueId: string,
@@ -92,6 +102,7 @@ export function buildDiagnosisContext(
       failedRequests: failedRequests(event),
     })),
   };
+  // 附上同一项目最近的性能指标：json_extract 从 JSON 文本列里取出指定路径的值。
   const metrics = database.sqlite
     .prepare(
       `SELECT json_extract(context_json, '$.payload.metric') metric,
@@ -112,10 +123,12 @@ export function buildDiagnosisContext(
       performance.cls = Number(metric.value);
   }
   if (Object.keys(performance).length > 0) context.performance = performance;
-  // 这是入库脱敏之后的第三道防线，防止历史脏数据进入外部模型。
+  // 第三道脱敏：SDK 的 beforeSend 钩子（由接入方配置）、服务端入库时各有一道，
+  // 这里再过一遍，防止规则更新前入库的历史数据把令牌等敏感值带给外部模型。
   return redactSensitive(context);
 }
 
+/** 本地规则引擎用：从证据快照里挑出最有代表性的几条，写成证据列表。 */
 function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['evidence'] {
   // 本地引擎也生成带 source 枚举的引用，使 UI 和外部模型输出使用同一契约。
   const evidence: DiagnosisResult['evidence'] = [];
@@ -158,8 +171,12 @@ function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['eviden
   return evidence.slice(0, 6);
 }
 
+/**
+ * 本地规则引擎：按 Issue 标题的关键词分成网络失败、资源加载失败、运行时错误三类，
+ * 套用对应的原因模板。同样的输入永远得到同样的输出，用于离线演示和测试，
+ * 结果里的 model 字段是 local-evidence-engine，不冒充大模型推理。
+ */
 function localDiagnosis(context: DiagnosisContext): DiagnosisResult {
-  // 这是可重复的规则型降级结果，用于离线演示和契约测试，不伪装成大模型推理。
   const lower = context.issue.title.toLowerCase();
   const evidence = evidenceFromContext(context);
   let causes: DiagnosisResult['possibleCauses'];
@@ -250,6 +267,8 @@ function localDiagnosis(context: DiagnosisContext): DiagnosisResult {
   };
 }
 
+// 系统提示词：规定模型的角色和底线（只依据给定证据、不编造、不声称做过验证）。
+// 改动提示词时要同步提升 shared 里的 PROMPT_VERSION，旧缓存才会失效。
 const SYSTEM_PROMPT = `You diagnose frontend production incidents using only the supplied JSON evidence.
 Return one JSON object matching the requested schema. Every cause must cite supplied evidence and include a confidence from 0 to 1.
 Never invent a file, function, request, release, or verification. Put unknowns in missingInformation.
@@ -260,6 +279,8 @@ function userPrompt(context: DiagnosisContext): string {
 }
 
 /**
+ * 「结构化输出」指要求模型按给定的 JSON Schema 返回，而不是自由文本，服务端才能直接解析和校验。
+ *
  * OpenAI 兼容端点对结构化输出的支持并不一致，而且不一定按直觉分布：
  * 实测 DeepSeek 支持 Responses API 的 `text.format` 严格 json_schema，
  * 却拒绝 `chat/completions` 的 `json_schema`（400 "This response_format type is unavailable now"）。
@@ -276,6 +297,7 @@ type ModelTransport = 'responses' | 'chat.completions';
 // 能力探测结果按 (baseURL, model) 缓存在进程内，避免每次诊断都为不支持的端点白付一次往返。
 const transportCache = new Map<string, ModelTransport>();
 
+/** 判断模型接口的报错是不是「这个端点不支持这种请求」，只有这种情况才值得换一条通道重试。 */
 function indicatesUnsupportedEndpoint(error: unknown): boolean {
   const status = (error as { status?: number }).status;
   // 404：端点根本不存在。400：端点在，但不接受这种结构化输出请求。
@@ -287,6 +309,7 @@ function indicatesUnsupportedEndpoint(error: unknown): boolean {
   );
 }
 
+/** 通道 1：Responses API，由服务商按 Zod 生成的 JSON Schema 约束输出形状。 */
 async function viaResponses(
   client: OpenAI,
   config: ServerConfig,
@@ -311,6 +334,7 @@ async function viaResponses(
   };
 }
 
+/** 通道 2：chat/completions + json_object，服务商只保证返回合法 JSON，形状全靠我们校验。 */
 async function viaChatCompletions(
   client: OpenAI,
   config: ServerConfig,
@@ -333,7 +357,8 @@ async function viaChatCompletions(
   });
   const text = response.choices[0]?.message?.content;
   if (!text) throw new Error('MODEL_EMPTY_OR_REFUSED_RESPONSE');
-  // JSON.parse 与 Zod 校验都可能抛错，最终都会被路由隔离成 502，不影响已存储证据。
+  // JSON.parse 与 Zod 校验都可能抛错，路由层（routes/diagnosis.ts）会把它们转成 502，
+  // 已入库的 Issue 证据不受影响。
   return {
     result: diagnosisResultSchema.parse(JSON.parse(text)),
     model: config.modelName,
@@ -343,6 +368,7 @@ async function viaChatCompletions(
   };
 }
 
+/** 选择诊断引擎：没有密钥用本地规则引擎，否则调用外部模型并按端点能力选择通道。 */
 async function callModel(config: ServerConfig, context: DiagnosisContext): Promise<ModelResult> {
   if (!config.modelApiKey || !config.modelApiUrl) {
     const result = diagnosisResultSchema.parse(localDiagnosis(context));
@@ -350,10 +376,12 @@ async function callModel(config: ServerConfig, context: DiagnosisContext): Promi
       result,
       model: 'local-evidence-engine',
       transport: 'local',
+      // 本地引擎没有真实 token，按「约 4 个字符 1 个 token」粗估，让用量统计口径一致。
       inputTokens: Math.ceil(JSON.stringify(context).length / 4),
       outputTokens: Math.ceil(JSON.stringify(result).length / 4),
     };
   }
+  // 用户可能把完整接口地址填进 MODEL_API_URL，去掉末尾的具体路径，SDK 只需要基础地址。
   const baseURL = config.modelApiUrl.replace(/\/(?:chat\/completions|responses)\/?$/, '');
   const client = new OpenAI({
     apiKey: config.modelApiKey,
@@ -378,6 +406,7 @@ async function callModel(config: ServerConfig, context: DiagnosisContext): Promi
   return viaChatCompletions(client, config, context);
 }
 
+/** 数据库行（下划线列名、JSON 文本）→ 接口返回的 DiagnosisRecord（驼峰字段、对象）。 */
 function mapDiagnosis(row: Record<string, unknown>, cached = false): DiagnosisRecord {
   return {
     id: String(row.id),
@@ -407,6 +436,10 @@ export function getDiagnosis(database: TraceDatabase, diagnosisId: string): Diag
   return row ? mapDiagnosis(row) : null;
 }
 
+/**
+ * 为一个 Issue 生成（或从缓存取回）诊断。Issue 不存在时返回 null，路由据此回 404。
+ * force = true 时忽略缓存重新生成，对应界面上的「重新生成」。
+ */
 export async function diagnoseIssue(
   database: TraceDatabase,
   config: ServerConfig,
@@ -415,7 +448,8 @@ export async function diagnoseIssue(
 ): Promise<DiagnosisRecord | null> {
   const context = buildDiagnosisContext(database, issueId);
   if (!context) return null;
-  // 缓存键包含 Prompt 版本和完整证据；任一证据变化都会自然失效。
+  // 缓存键：对「提示词版本 + 完整证据」算 SHA-256 哈希。证据或提示词任何一处变化，
+  // 哈希就不同，旧缓存自然不再命中，不需要手动清理。
   const inputHash = createHash('sha256')
     .update(`${PROMPT_VERSION}|${JSON.stringify(context)}`)
     .digest('hex');
@@ -425,6 +459,7 @@ export async function diagnoseIssue(
   // force 只跳过读取缓存，数据库仍通过唯一键覆盖同一上下文，避免产生重复行。
   if (existing && !force) return mapDiagnosis(existing, true);
 
+  // performance.now() 是单调时钟，适合测耗时；Date.now() 可能因系统校时而跳变。
   const startedAt = performance.now();
   const generated = await callModel(config, context);
   const latencyMs = Math.round(performance.now() - startedAt);

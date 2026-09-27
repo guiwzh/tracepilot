@@ -68,7 +68,8 @@ test.afterAll(async () => {
   await new Promise((closed) => harnessServer.close(closed));
 });
 
-// 指纹会把 4 位以上数字、UUID 和时间戳归一化成占位符，所以运行标识只用字母，保证能被搜索到。
+// Issue 标题会把 4 位以上数字、UUID 和时间戳替换成占位符（{id} 等），
+// 所以运行标识只用字母，保证能按原文搜索到。
 function runId(prefix: string): string {
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   return `${prefix}${Array.from({ length: 10 }, () => letters[Math.floor(Math.random() * 26)]).join('')}`;

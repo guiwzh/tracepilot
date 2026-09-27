@@ -52,7 +52,7 @@ export class BehaviorPlugin implements MonitorPlugin {
   }
 
   private recordNavigation(mechanism: string): void {
-    // URL 会在 Server 再次脱敏；这里只记录导航机制和当前地址。
+    // 这里原样记录完整地址（可能带查询参数）；SDK 不做脱敏，由接入方的 beforeSend 和服务端入库时处理。
     this.core?.addBreadcrumb({
       type: 'navigation',
       category: 'route',

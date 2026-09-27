@@ -25,7 +25,7 @@ import {
  * 由服务端按 eventId 幂等去重，客户端不追求恰好一次。
  */
 
-/** keepalive 与 sendBeacon 共享的在途配额是 64 KiB，留出余量给请求头之外的开销。 */
+/** keepalive 与 sendBeacon 共享的在途配额是 64 KiB（按请求体字节计），这里取 60 000 留出余量。 */
 const KEEPALIVE_BUDGET_BYTES = 60_000;
 /** 单个事件的上限；保证任何一个事件都能单独放进一次退出发送。 */
 const DEFAULT_MAX_EVENT_BYTES = 32_000;

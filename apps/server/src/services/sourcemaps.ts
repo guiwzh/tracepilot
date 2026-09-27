@@ -6,9 +6,22 @@ import { redactSensitive, type SourceMapRecord } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 
 /**
- * Source Map 仅在 Server 读取：浏览器上传压缩堆栈，Server 用 Release + 文件名
- * 找到私有 map，再把生成代码的行列映射回原始源码。
+ * Source Map 还原：把线上压缩代码的报错位置翻译回源码位置。
+ *
+ * 背景：线上跑的是打包压缩后的 app.3f9a.js，报错堆栈长这样：
+ *   at t (https://cdn.example.com/assets/app.3f9a.js:1:18234)
+ * 行列号指向压缩文件，人看不懂。构建工具（Vite 等）在压缩时可以额外产出 app.3f9a.js.map，
+ * 它的 mappings 字段用 Base64 VLQ 编码记录了「压缩文件第几行第几列 ↔ 源码哪个文件第几行第几列」。
+ *
+ * 流程：
+ * 1. 发布时，CI 把 .map 上传到服务端（routes/sourcemaps.ts → saveSourceMap），按 Release 版本隔离保存。
+ * 2. 浏览器上报压缩堆栈；服务端按「事件的 Release + 堆栈里的文件名」找到对应的 map，
+ *    逐帧换算出源码位置（symbolicateStack），结果存进 events.original_stack。
+ *
+ * .map 往往内联了完整源码（sourcesContent），所以只存在服务端、不部署到 CDN，也不提供下载接口。
  */
+
+/** 从堆栈的一行里解析出的一帧：哪个文件、第几行第几列、哪个函数。 */
 interface StackFrame {
   line: string;
   file: string;
@@ -17,8 +30,10 @@ interface StackFrame {
   functionName?: string;
 }
 
+/** 解析一行堆栈；不是栈帧的行（例如第一行的错误消息）返回 null。 */
 export function parseStackFrame(line: string): StackFrame | null {
-  // 支持常见 V8 “at fn (url:line:column)” 和无函数名 frame。
+  // 匹配 V8（Chrome / Node）格式：「at fn (url:line:column)」和没有函数名的「at url:line:column」。
+  // 分组依次是：1 函数名（可选）、2 文件 URL、3 行号、4 列号。
   const match = line.match(
     /(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/,
   );
@@ -32,8 +47,12 @@ export function parseStackFrame(line: string): StackFrame | null {
   };
 }
 
+/**
+ * 把文件标识统一成文件名（basename），作为查找 map 的键。
+ * 堆栈里是完整 URL（https://cdn.example.com/assets/app.3f9a.js?v=1），上传时填的是 app.3f9a.js，
+ * 两者都归一成 app.3f9a.js 才能对上。文件名里带内容哈希，同一版本内不会重名。
+ */
 export function normalizeMinifiedFile(value: string): string {
-  // 只保留 basename，使完整 CDN URL 与上传表单中的 app.hash.js 可以匹配。
   try {
     return basename(new URL(value).pathname);
   } catch {
@@ -41,6 +60,10 @@ export function normalizeMinifiedFile(value: string): string {
   }
 }
 
+/**
+ * 保存一份上传的 Source Map：校验 → 写入磁盘 → 在数据库登记 → 回填该版本的历史事件。
+ * 同一版本重复上传同名文件时覆盖旧文件，而不是新增一份。
+ */
 export async function saveSourceMap(
   database: TraceDatabase,
   sourceMapDir: string,
@@ -54,24 +77,30 @@ export async function saveSourceMap(
     throw new Error('INVALID_SOURCE_MAP');
   }
   await mkdir(sourceMapDir, { recursive: true });
+  const now = Date.now();
   const normalized = normalizeMinifiedFile(minifiedFile);
   const existing = database.sqlite
     .prepare('SELECT id, map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
     .get(releaseId, normalized) as { id: string; map_path: string } | undefined;
+  // 已上传过就复用原来的 id 和文件路径，新内容直接覆盖旧文件。
   const id = existing?.id ?? randomUUID();
   const mapPath = existing?.map_path ?? join(sourceMapDir, `${id}.map`);
-  // 0600 表示只有当前服务进程用户可读写，降低源码泄露风险。
+  // 文件本体放磁盘，数据库只记路径：数据库行保持小巧，大文件也不必整个读进 SQL。
+  // mode 0o600 是 Unix 文件权限：只有运行服务的系统用户能读写，同机其他用户读不到源码。
   await writeFile(mapPath, content, { mode: 0o600 });
+  // 「upsert」（有则更新、无则插入）：UNIQUE(release_id, minified_file) 冲突时改走 DO UPDATE，
+  // excluded 指这次本想插入的那一行。
   database.sqlite
     .prepare(
       `INSERT INTO source_maps (id, release_id, minified_file, map_path, created_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(release_id, minified_file) DO UPDATE SET map_path = excluded.map_path, created_at = excluded.created_at`,
     )
-    .run(id, releaseId, normalized, mapPath, Date.now());
-  // 上传后回填该 Release 的历史事件，所以不必等待新错误才能看到源码栈。
+    .run(id, releaseId, normalized, mapPath, now);
+  // 回填：常见顺序是「先发版、线上报错、再补传 map」，
+  // 上传后立即把该版本已有的事件都还原一遍，不必等新的错误发生才能看到源码栈。
   await symbolicateReleaseEvents(database, releaseId);
-  return { id, releaseId, minifiedFile: normalized, createdAt: Date.now() };
+  return { id, releaseId, minifiedFile: normalized, createdAt: now };
 }
 
 export function listSourceMaps(database: TraceDatabase, releaseId: string): SourceMapRecord[] {
@@ -93,6 +122,10 @@ export function listSourceMaps(database: TraceDatabase, releaseId: string): Sour
   }));
 }
 
+/**
+ * 把整段压缩堆栈逐帧翻译成源码位置。找不到 map 或映射不到的帧原样保留，
+ * 所以结果可能一部分是源码位置、一部分仍是压缩位置。
+ */
 export async function symbolicateStack(
   database: TraceDatabase,
   releaseId: string,
@@ -103,7 +136,7 @@ export async function symbolicateStack(
   const result: string[] = [];
   /**
    * 同一堆栈常包含同一文件的多个 frame，因此缓存的是 Consumer 而不是 map 的 JSON：
-   * 真正的开销在解析 mappings（VLQ 解码 + WASM 初始化），而不是读文件。
+   * 真正的开销在解析 mappings（VLQ 解码，source-map 库用 WebAssembly 实现），而不是读文件。
    * 早期实现逐帧调用 SourceMapConsumer.with，10 帧堆栈会把同一份 map 重复解析 10 次。
    */
   const consumers = new Map<string, SourceMapConsumer>();
@@ -144,7 +177,8 @@ export async function symbolicateStack(
       }
     }
   } finally {
-    // Consumer 持有 WASM 内存，必须显式释放，否则回填整个 Release 时会持续增长。
+    // Consumer 的数据放在 WebAssembly 内存里，JS 的垃圾回收管不到，必须手动 destroy，
+    // 否则回填整个 Release 时内存会持续增长。finally 保证中途抛错也会释放。
     for (const consumer of consumers.values()) consumer.destroy();
   }
   // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
@@ -223,6 +257,7 @@ export async function sourceContext(
   }
 }
 
+/** 用当前已上传的 map 重新还原某个版本下所有带堆栈的事件，返回成功还原的条数。 */
 export async function symbolicateReleaseEvents(
   database: TraceDatabase,
   releaseId: string,

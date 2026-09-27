@@ -11,9 +11,18 @@ import type { InvestigationStore } from './store';
  *
  * 运行与 HTTP 连接解耦——关掉页面不等于取消，调查继续在服务端完成，重新打开页面时
  * 通过事件流回放接上。只有显式的取消请求才会中止它。
+ *
+ * 「在后台执行」：start() 启动 execute() 后不 await 它就直接返回，HTTP 请求立刻得到 202；
+ * 调查在同一个 Node 进程里继续异步推进（等模型响应时不占用 CPU，不影响处理其他请求）。
+ *
+ * 取消用的是 AbortController，和前端取消 fetch 是同一个 API：controller.abort(reason) 之后，
+ * 所有拿着 controller.signal 的地方（模型请求、Agent 循环）都会收到取消。
  */
+
+/** 每次调查新建一个模型客户端的工厂函数；测试通过它注入替身。 */
 export type ModelClientFactory = () => ModelClient;
 
+/** 配置了密钥就用真实模型，否则用离线脚本。 */
 export function defaultModelClientFactory(config: ServerConfig): ModelClientFactory {
   return () =>
     config.modelApiKey && config.modelApiUrl
@@ -23,19 +32,23 @@ export function defaultModelClientFactory(config: ServerConfig): ModelClientFact
 
 /** 同时进行的调查上限：每次调查都会产生多次计费的模型调用，必须有全局闸门。 */
 const MAX_CONCURRENT_RUNS = 3;
+/** 单次调查的总时限（3 分钟），到点自动中止并记为 TIMEOUT。 */
 const RUN_TIMEOUT_MS = 180_000;
 
+/** start() 的结果，路由据此返回 201 / 200 / 404 / 429。 */
 export type StartResult =
   | { status: 'created' | 'existing'; run: InvestigationRun }
   | { status: 'issue_not_found' }
   | { status: 'busy' };
 
+/** 一个正在进行的调查：用 controller 取消它，用 done 等它彻底结束。 */
 interface ActiveRun {
   controller: AbortController;
   done: Promise<void>;
 }
 
 export class InvestigationService {
+  /** 本进程里正在跑的调查（runId → ActiveRun）。只在内存里，进程重启即清空。 */
   private readonly active = new Map<string, ActiveRun>();
 
   constructor(
@@ -46,6 +59,7 @@ export class InvestigationService {
     private readonly limits: Partial<InvestigationLimits> = {},
   ) {}
 
+  /** 为一个 Issue 发起调查（同步返回，调查本身在后台进行）。 */
   start(issueId: string): StartResult {
     const issue = this.database.sqlite
       .prepare('SELECT id, project_id, title FROM issues WHERE id = ?')
@@ -62,7 +76,9 @@ export class InvestigationService {
     this.store.append(run.id, { type: 'run.started', engine: client.engine, model: client.model });
 
     const controller = new AbortController();
+    // abort 的参数会成为 signal.reason，execute 结束时据此判断是超时、用户取消还是服务关闭。
     const timer = setTimeout(() => controller.abort('timeout'), RUN_TIMEOUT_MS);
+    // 注意这里没有 await：execute 在后台运行，finally 在它结束（无论成败）后清理。
     const done = this.execute(run.id, issue, client, controller.signal).finally(() => {
       clearTimeout(timer);
       this.active.delete(run.id);
@@ -71,6 +87,7 @@ export class InvestigationService {
     return { status: 'created', run };
   }
 
+  /** 取消一个进行中的调查。只是发出取消信号，终止事件由 execute 在收尾时写入。 */
   cancel(runId: string): 'cancelled' | 'not_running' | 'not_found' {
     if (!this.store.getRun(runId)) return 'not_found';
     const active = this.active.get(runId);
@@ -83,9 +100,11 @@ export class InvestigationService {
   async shutdown(): Promise<void> {
     const pending = [...this.active.values()];
     for (const run of pending) run.controller.abort('shutdown');
+    // allSettled：等所有调查都结束，不管各自成功还是失败（Promise.all 遇到第一个失败就会提前返回）。
     await Promise.allSettled(pending.map((run) => run.done));
   }
 
+  /** 跑 Agent 循环，并把任何结局（完成、取消、超时、失败）都落成一个终止事件。 */
   private async execute(
     runId: string,
     issue: { id: string; project_id: string; title: string },
@@ -114,6 +133,7 @@ export class InvestigationService {
         this.store.finish(runId, 'cancelled', { type: 'run.cancelled', usage });
         return;
       }
+      // 把各种失败归类成错误码，写进运行记录并推送给界面。错误详情不外露，只给固定描述。
       const [code, message] = signal.aborted
         ? signal.reason === 'timeout'
           ? ['TIMEOUT', 'The investigation exceeded its time limit.']

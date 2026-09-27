@@ -16,8 +16,18 @@ import type { TraceDatabase } from '../db/client';
 import { parseJson, percentile } from '../lib/json';
 
 /**
- * 查询层把 SQLite 的 snake_case 行映射成 shared 包定义的 camelCase DTO。
- * 复杂聚合保留为参数化 SQL，便于清楚控制分页、JSON 提取和时间桶。
+ * 工作台所有「读」接口背后的查询。
+ *
+ * 数据库的列名是 snake_case（issue_count），接口返回给前端的是 shared 包里定义的 camelCase 对象
+ * （issueCount）。每个查询先用 SQL 取出行，再由 map* 函数转换成前端要的形状（DTO，数据传输对象）。
+ *
+ * 复杂的统计直接写 SQL，比在 JS 里循环计算更快，也更清楚地控制分页、JSON 提取和时间分桶。
+ * 常见写法速查：
+ * - `a JOIN b ON 条件`：把两张表里满足条件的行拼成一行；`LEFT JOIN` 保留左表所有行，右表没有匹配时填 NULL。
+ * - `GROUP BY x` + `COUNT(*)`：按 x 分组后统计每组行数，相当于 JS 里先 groupBy 再取长度。
+ * - `EXISTS (子查询)`：只判断「是否存在至少一行」，找到一行就停，比 COUNT 便宜。
+ * - `json_extract(列, '$.a.b')`：从存成 JSON 文本的列里取字段。
+ * - `LIMIT n OFFSET m`：分页，跳过前 m 行取 n 行。
  */
 type Row = Record<string, unknown>;
 
@@ -66,6 +76,10 @@ function mapEvent(row: Row): StoredEvent {
   };
 }
 
+/**
+ * 项目列表及每个项目的 Issue 数、事件数。SELECT 里的两个括号是「关联子查询」：
+ * 对外层的每个项目 p 各执行一次计数。项目只有个位数，这样写最直白。
+ */
 export function listProjects(database: TraceDatabase): Project[] {
   const rows = database.sqlite
     .prepare(
@@ -86,6 +100,10 @@ export function listProjects(database: TraceDatabase): Project[] {
   }));
 }
 
+/**
+ * 项目的全部 Release 及各自上传了几个 Source Map。用 LEFT JOIN 是为了让还没有上传 map 的版本
+ * 也出现在结果里（计数为 0）；普通 JOIN 会把它们整行丢掉。
+ */
 export function listReleases(database: TraceDatabase, projectId: string): Release[] {
   const rows = database.sqlite
     .prepare(
@@ -119,6 +137,13 @@ export interface IssueFilters {
   to?: number;
 }
 
+/**
+ * Issue 列表：按筛选条件动态拼出 WHERE，分页，并为每行附上最近 6 小时的趋势。
+ *
+ * 动态 SQL 的做法：conditions 收集 SQL 片段，params 按相同顺序收集参数，最后用 AND 连接。
+ * 按版本、浏览器、路由筛选时，条件其实落在 Issue 的「事件」上（一个 Issue 可能跨多个版本），
+ * 所以用 EXISTS 子查询表达「这个 Issue 至少有一个事件满足条件」。
+ */
 export function listIssues(
   database: TraceDatabase,
   projectId: string,
@@ -210,6 +235,9 @@ export function listIssues(
 
   for (const row of rows) {
     // 每个 Issue 生成最近 6 小时的 7 个点，空桶显式补 0，Sparkline 才不会错位。
+    // 分桶方式：(事件时间 - 起点) / 1 小时，取整后就是它落在第几个小时。
+    // 已知限制：这里对每个 Issue 各查一次，一页 N 行就多 N 次查询（所谓 N+1 查询）。
+    // 当前每页最多 100 行、本地 SQLite 单次查询在亚毫秒级，可以接受；数据量变大时应改成一条 GROUP BY 查询。
     const since = Date.now() - 6 * 60 * 60 * 1000;
     const points = database.sqlite
       .prepare(
@@ -227,6 +255,7 @@ export function listIssues(
   return { items: rows.map(mapIssue), total, page: filters.page, pageSize: filters.pageSize };
 }
 
+/** 某个维度（浏览器、路由、版本）上的事件分布，取数量最多的前 8 项，供详情页的环形图使用。 */
 function distribution(
   database: TraceDatabase,
   issueId: string,
@@ -243,6 +272,10 @@ function distribution(
   return rows.map((row) => ({ name: String(row.name ?? 'Unknown'), value: number(row.value) }));
 }
 
+/**
+ * Issue 详情：基本信息 + 最新一条事件（作为「现场」样本）+ 三个维度的分布。
+ * latest_release 用子查询取该 Issue 最近一条事件所在的版本。
+ */
 export function getIssue(database: TraceDatabase, issueId: string): IssueDetail | null {
   const row = database.sqlite
     .prepare(
@@ -286,6 +319,13 @@ export function listIssueEvents(
   return rows.map(mapEvent);
 }
 
+/**
+ * 项目概览：未解决 Issue 数、24 小时事件数与影响用户数、版本数，以及按小时分桶的 24 小时趋势。
+ *
+ * 性能样本和成功请求不属于任何 Issue（issue_id 为 NULL），只能通过所在的 release 找到项目，
+ * 所以用两个 LEFT JOIN 分别关联 issue 和 release，再用 COALESCE（取第一个非 NULL 的值）
+ * 得出事件所属的项目。
+ */
 export function getProjectOverview(database: TraceDatabase, projectId: string): ProjectOverview {
   const since = Date.now() - 24 * 60 * 60 * 1000;
   const stats = database.sqlite
@@ -364,8 +404,12 @@ function routeName(pageUrl: string, route?: string): string {
   }
 }
 
+/**
+ * 取出项目最近 7 天的全部性能样本，在 JS 里分组并计算分位数。
+ * 已知限制：样本全部读进内存。演示数据量下没问题，数据量大时应在数据库里聚合，或改用列式存储。
+ */
 function getPerformanceSamples(database: TraceDatabase, projectId: string): PerformanceSample[] {
-  // MVP 将可变事件上下文存为 JSON；SQLite json_extract/应用层解析可在不扩表时增加指标。
+  // 指标名和数值存在事件上下文的 JSON 里，不需要为每种指标单独加列。
   const rows = database.sqlite
     .prepare(
       `SELECT e.context_json, e.page_url, e.created_at, r.version
@@ -456,13 +500,6 @@ function performanceComparison(
       };
     })
     .sort((left, right) => right.samples - left.samples || left.name.localeCompare(right.name));
-}
-
-export function getPerformanceMetrics(
-  database: TraceDatabase,
-  projectId: string,
-): PerformanceMetric[] {
-  return performanceMetrics(getPerformanceSamples(database, projectId));
 }
 
 export function getPerformanceOverview(

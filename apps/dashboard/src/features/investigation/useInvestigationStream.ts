@@ -33,6 +33,8 @@ const EVENT_TYPES: InvestigationEvent['type'][] = [
   'run.cancelled',
 ];
 
+// 与 shared 的 TERMINAL_INVESTIGATION_EVENTS 相同。不直接引入它：那个模块依赖 zod，
+// 引入任何运行时值都会把 zod 打进前端包（见 packages/shared/src/index.ts 的说明）。
 const TERMINAL = new Set<InvestigationEvent['type']>([
   'run.completed',
   'run.failed',

@@ -4,6 +4,11 @@ import type { ServerConfig } from '../config';
 import type { TraceDatabase } from '../db/client';
 import { diagnoseIssue, getDiagnosis, listDiagnoses } from '../services/diagnosis';
 
+/**
+ * 单次诊断接口：一次模型调用生成诊断报告，按证据内容缓存。
+ * 工作台已经改用排障 Agent（routes/investigations.ts），这组接口保留为 API，并作为评测里的对照组。
+ */
+
 // 即使只有一个布尔字段也使用 Schema，避免字符串 "false" 被当作 true。
 const requestSchema = z.object({ force: z.boolean().optional().default(false) });
 

@@ -3,6 +3,15 @@ import { issueStatusSchema, updateIssueStatusSchema } from '@trace-pilot/shared'
 import type { TraceDatabase } from '../db/client';
 import { getIssue, listIssueEvents, listIssues } from '../services/queries';
 
+/**
+ * Issue 相关接口：列表（筛选、分页）、详情、事件样本、修改处理状态。
+ *
+ * 一个请求的输入来自三处：
+ * - request.params：路径里的变量，例如 /api/v1/issues/:issueId 中的 issueId；
+ * - request.query：问号后的查询参数，例如 ?page=2&status=resolved，值全是字符串；
+ * - request.body：POST / PATCH 的请求体，Fastify 已按 Content-Type 解析成对象。
+ * 三者在运行时都是不可信的 unknown，这里的小函数负责把它们转换成安全的值。
+ */
 function stringParam(params: unknown, key: string): string {
   return String((params as Record<string, unknown>)[key] ?? '');
 }
@@ -53,6 +62,7 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
 
   app.get('/api/v1/issues/:issueId/events', async (request, reply) => {
     const issueId = stringParam(request.params, 'issueId');
+    // 先确认 Issue 存在：不存在时返回 404，而不是一个让人误以为「没有事件」的空列表。
     const issue = database.sqlite.prepare('SELECT 1 FROM issues WHERE id = ?').get(issueId);
     if (!issue)
       return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
@@ -73,6 +83,8 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
     const result = database.sqlite
       .prepare('UPDATE issues SET status = ? WHERE id = ?')
       .run(parsed.data.status, issueId);
+    // run() 返回受影响的行数；0 行说明没有这个 id 的 Issue。一条 UPDATE 同时完成了
+    // 「是否存在」和「修改」，不需要先查一次。
     if (result.changes === 0) {
       return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     }

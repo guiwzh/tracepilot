@@ -1,6 +1,7 @@
 /**
- * 遥测数据会离开业务页面，因此脱敏必须是共享的基础能力。
- * SDK 可以先通过 beforeSend 清理，Server 入库和调用模型前还会再次调用这里的函数。
+ * 脱敏：遮蔽令牌、密码等敏感字段，删除 URL 里的查询参数。
+ * SDK 默认不脱敏，接入方可以在 beforeSend 钩子里自行清理；服务端把客户端数据视为不可信，
+ * 入库时和发给模型前都会调用这里的函数。
  */
 const SENSITIVE_KEY = /authorization|cookie|password|passwd|secret|token|api[-_]?key/i;
 const URL_VALUE_KEY =
@@ -29,7 +30,7 @@ export function stripUrlQueriesInText(value: string): string {
 }
 
 export function redactSensitive<T>(value: T, depth = 0): T {
-  // 限制递归深度既避免恶意超深对象，也防止遥测清理本身拖慢宿主页面。
+  // 限制递归深度：恶意构造的超深嵌套对象可能让递归栈溢出，或拖慢请求处理。
   if (depth > 8) return '[Max depth]' as T;
   if (typeof value === 'string') {
     const cleaned = stripUrlQueriesInText(value)

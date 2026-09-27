@@ -9,8 +9,11 @@ import { listIssues } from './services/queries';
 import { seedDemoData } from './seed';
 
 /**
- * 这是诊断契约冒烟评测：检查结构化输出、证据数量和缓存命中，
- * 不把确定性本地引擎的结果包装成语义质量或模型准确率。
+ * 单次诊断的契约冒烟评测：pnpm evaluate:diagnosis
+ *
+ * 在临时数据库里灌入演示数据，对每个 Issue 用本地规则引擎诊断两次，检查结构化输出是否合法、
+ * 证据数量，以及第二次是否命中缓存。它不衡量诊断的语义质量——那是 eval/ 目录下
+ * 带标注用例的评测（pnpm evaluate:agent）要做的事。
  */
 const directory = await mkdtemp(join(tmpdir(), 'tracepilot-eval-'));
 const database = createDatabase(join(directory, 'eval.db'));

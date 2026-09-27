@@ -23,12 +23,21 @@ import {
 } from './tools';
 
 /**
- * 排障 Agent 的主循环：模型决定调哪些工具 → 执行 → 把结果放回对话 → 再问模型，
- * 直到它调用 submit_report 并通过校验。
+ * 排障 Agent 的主循环。
+ *
+ * 「Agent」在这里的含义：模型不是一次性回答，而是可以反复「调用工具查资料 → 看结果 → 决定下一步」。
+ * 工具由我们提供（tools.ts，全部只读），模型只能「请求」调用；真正执行的是这里的代码。
+ *
+ * 和模型的对话是一个 messages 数组，每一轮都把整个数组发给模型（模型本身不记得上一次请求）：
+ *   system     系统提示词：角色、规则、防注入要求（prompt.ts）
+ *   user       我们说的话：调查任务、收尾指令、纠错提示
+ *   assistant  模型的回复：一段文字，和/或若干个 tool_calls（想调用的工具名 + JSON 参数）
+ *   tool       工具执行结果，用 tool_call_id 对应到上面某个 tool_call
  *
  * 循环刻意手写而不用框架：它只有一百多行，而每个上限、每个失败分支都要能讲清楚。
- * 所有上限都是硬性的——模型不收敛时，由这里而不是模型决定何时停下。
  */
+
+/** 硬性上限。模型不收敛（反复调工具、不交报告）时，由这些数字而不是模型决定何时停下。 */
 export interface InvestigationLimits {
   /** 收集证据阶段最多几轮模型调用；用尽后只允许 submit_report。 */
   maxSteps: number;
@@ -38,6 +47,7 @@ export interface InvestigationLimits {
   maxReportAttempts: number;
   /** 累计输入 token 上限；每轮都会重发整段对话，所以这个数增长得比直觉快。 */
   maxInputTokens: number;
+  /** 单个工具的执行超时；超时的工具返回 TOOL_TIMEOUT 错误，循环继续。 */
   toolTimeoutMs: number;
 }
 
@@ -49,6 +59,7 @@ export const DEFAULT_LIMITS: InvestigationLimits = {
   toolTimeoutMs: 5_000,
 };
 
+/** 调查失败的错误，code 会写进运行记录，并通过 SSE 的 run.failed 事件告诉界面。 */
 export class InvestigationError extends Error {
   constructor(
     readonly code: string,
@@ -59,16 +70,21 @@ export class InvestigationError extends Error {
 }
 
 export interface InvestigateOptions {
+  /** 模型客户端：真实模型（model.ts）或离线脚本（localClient.ts），接口相同。 */
   client: ModelClient;
+  /** 工具执行时需要的数据库连接、Issue 范围等。 */
   context: ToolContext;
   issue: { id: string; title: string };
+  /** 每发生一件事（开始一轮、调用工具、模型输出文字……）就调用一次，由 service.ts 存库并推送给浏览器。 */
   emit(event: InvestigationEvent): void;
+  /** 取消信号：用户点取消、总超时或服务关闭时触发，循环在下一个检查点抛错退出。 */
   signal: AbortSignal;
   /** 由调用方持有并在循环中累加，失败或取消时调用方仍能拿到已消耗的量。 */
   usage: InvestigationUsage;
   limits?: Partial<InvestigationLimits>;
 }
 
+/** 把模型给的工具参数（JSON 字符串）解析成对象，只用于界面展示；解析失败也不抛错。 */
 function parseArguments(raw: string): Record<string, unknown> {
   try {
     const value: unknown = raw.trim() ? JSON.parse(raw) : {};
@@ -80,6 +96,10 @@ function parseArguments(raw: string): Record<string, unknown> {
   }
 }
 
+/**
+ * 给工具执行加超时：Promise.race 让「工具完成」和「计时器到点」赛跑，谁先到用谁的结果。
+ * 超时不会真正中断工具（Promise 无法被外部取消），只是不再等它；finally 清掉计时器。
+ */
 function withTimeout(task: Promise<ToolResult>, timeoutMs: number): Promise<ToolResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<ToolResult>((resolve) => {
@@ -122,6 +142,7 @@ function checkReport(raw: string, calls: ReadonlyMap<string, ExecutedCall>): Rep
   return { report: parsed.data, evidence, problems };
 }
 
+/** 组装最终报告：模型提交的内容 + 服务端整理的证据列表 + 校验结果 + 固定的免责声明。 */
 function finalReport(
   report: SubmittedReport,
   evidence: InvestigationReport['evidence'],
@@ -141,6 +162,16 @@ function finalReport(
   };
 }
 
+/**
+ * 跑一次完整调查，返回通过校验的报告。失败时抛错（InvestigationError、模型调用错误等）；
+ * signal 被触发（取消、超时、服务关闭）时也会抛错，调用方用 signal.aborted 和 signal.reason 区分原因。
+ *
+ * 每一轮（step）：
+ * 1. 检查是否该收尾（轮数或 token 用完）：收尾后只给模型 submit_report 一个工具，并强制它调用。
+ * 2. 把 messages 发给模型，流式拿回文字和 tool_calls。
+ * 3. 逐个处理 tool_calls：submit_report 走校验，通过就结束；其余工具执行后把结果追加进 messages。
+ * 4. 进入下一轮。
+ */
 export async function investigate(options: InvestigateOptions): Promise<InvestigationReport> {
   const { client, context, issue, emit, signal, usage } = options;
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
@@ -154,11 +185,13 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
   let finalizing = false;
 
   for (let step = 1; ; step += 1) {
+    // 已被取消时立即抛出 AbortError，结束整个调查。
     signal.throwIfAborted();
     if (!finalizing && (step > limits.maxSteps || usage.inputTokens >= limits.maxInputTokens)) {
       finalizing = true;
       messages.push({ role: 'user', content: FINALIZE_INSTRUCTION });
     }
+    // 总轮数的硬上限：收集证据的轮数 + 重交报告的机会。
     if (step > limits.maxSteps + limits.maxReportAttempts) {
       throw new InvestigationError(
         'STEP_LIMIT',
@@ -179,6 +212,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
     usage.inputTokens += turn.usage.inputTokens;
     usage.outputTokens += turn.usage.outputTokens;
 
+    // 模型这一轮的回复要原样放回对话历史，下一轮它才知道自己调过哪些工具。
     messages.push({
       role: 'assistant',
       content: turn.text || null,
@@ -193,6 +227,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
         : {}),
     });
 
+    // 模型只回了文字、没调工具：提醒它继续，结论必须通过 submit_report 提交。
     if (turn.toolCalls.length === 0) {
       messages.push({
         role: 'user',
@@ -209,6 +244,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
         reportAttempts += 1;
         const check = checkReport(call.arguments, calls);
         const lastAttempt = reportAttempts >= limits.maxReportAttempts;
+        // 校验全部通过就结束；最后一次机会时，只要形状合法也接受（未通过的引用会被标出）。
         if (check.report && check.evidence && (check.problems.length === 0 || lastAttempt)) {
           return finalReport(check.report, check.evidence, check.problems, reportAttempts);
         }
@@ -218,6 +254,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
             `The report still failed validation after ${reportAttempts} attempts.`,
           );
         }
+        // 驳回：把具体问题作为这次 tool_call 的结果回给模型，让它下一轮修正后重交。
         emit({ type: 'report.rejected', step, problems: check.problems });
         messages.push({
           role: 'tool',

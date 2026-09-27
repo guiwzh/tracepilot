@@ -10,15 +10,15 @@ import type { TraceDatabase } from '../db/client';
 import { events, issues, releases } from '../db/schema';
 import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
 
-/**
- * 接入服务是遥测写入的事务边界：鉴权、幂等、脱敏、Release 关联、
- * Issue 聚合和事件落库要么一起成功，要么整批回滚。
- */
+/** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
 export interface IngestResult {
+  /** 新写入的事件数。 */
   accepted: number;
+  /** 已经收过、被跳过的事件数（重试或重复送达）。 */
   duplicates: number;
-  /** 以同一个 metricId 再次上报、覆盖了旧值的 Web Vitals 样本数。 */
+  /** 以同一个 metricId 再次上报的 Web Vitals 样本数：值更新时覆盖，迟到的旧值被忽略。 */
   metricUpdates: number;
+  /** 这批事件涉及的 Issue。 */
   issueIds: string[];
 }
 
@@ -76,6 +76,7 @@ function eventLevel(event: MonitorEvent): 'error' | 'warning' | 'info' {
   return 'error';
 }
 
+/** 找到事件所属的 Release，没有就创建，返回它的 id。 */
 function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
   // SDK 可能先于人工创建 Release 上线，因此接入时按版本号惰性补建记录。
   const existing = database.sqlite
@@ -90,6 +91,10 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
   return id;
 }
 
+/**
+ * 把事件归到一个 Issue 上：已有相同指纹的 Issue 就更新它，没有就新建（这种「有则更新、无则插入」
+ * 常被叫作 upsert）。成功的网络请求、性能样本不形成 Issue，返回 null。
+ */
 function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | null {
   if (!shouldCreateIssue(event)) return null;
   // 指纹是聚合键；同项目相同指纹复用 Issue，只更新出现时间和最新标题。
@@ -163,6 +168,21 @@ function updateIssueCounters(
     .run(firstSeenForUser ? 1 : 0, issueId);
 }
 
+/**
+ * 接入一个信封（SDK 一次上报的一批事件）。对每个事件依次：
+ *
+ *   1. 确认它属于 DSN Key 对应的项目；
+ *   2. 幂等检查：同一个 id 已经存过就跳过（Web Vitals 例外：按指标 id 覆盖为更新的值）；
+ *   3. 脱敏，关联或创建 Release，按指纹归入 Issue；
+ *   4. 写入事件，更新 Issue 的事件数和影响用户数。
+ *
+ * 「幂等」指同一个请求执行一次和执行多次效果相同。浏览器会重试、beacon 和普通请求可能重复送达，
+ * 所以接入必须幂等，否则同一个错误会被数成好几次。
+ *
+ * 整批写入包在一个事务里：事务中的所有写操作要么全部生效，要么全部撤销。比如一个信封里第 7 个事件
+ * 声明了别的项目，前 6 个事件的写入也会被撤回，数据库里不会留下半个信封。
+ * 事务还让一批写入只需落盘一次，比逐条提交快得多。
+ */
 export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope): IngestResult {
   // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
   const project = database.sqlite
@@ -175,7 +195,8 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
   let metricUpdates = 0;
   const issueIds = new Set<string>();
 
-  // better-sqlite3 transaction 接受同步回调，回调抛错时会自动 ROLLBACK。
+  // transaction() 把回调包装成一个事务函数：调用时先 BEGIN，回调正常结束则 COMMIT（提交生效），
+  // 回调里任何地方抛错则 ROLLBACK（全部撤销），错误继续向外抛给路由处理。
   const ingest = database.sqlite.transaction(() => {
     for (const rawEvent of envelope.events) {
       if (rawEvent.projectId !== project.id) throw new Error('PROJECT_DSN_MISMATCH');
@@ -205,7 +226,8 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
         continue;
       }
 
-      // 即使 SDK 已运行 beforeSend，Server 仍把客户端数据视为不可信并二次脱敏。
+      // 即使 SDK 已运行 beforeSend，Server 仍把客户端数据视为不可信并二次脱敏：
+      // 遮蔽 token、password 等字段，去掉 URL 里的查询参数。
       const event = redactSensitive(rawEvent);
       const releaseId = ensureRelease(database, event);
       const issueId = upsertIssue(database, event);
@@ -240,6 +262,7 @@ export function ingestEnvelope(database: TraceDatabase, envelope: EventEnvelope)
       accepted += 1;
     }
   });
+  // 真正执行事务。计数变量在回调里被累加，回调抛错时它们已经无关紧要（错误会一路抛出）。
   ingest();
   return { accepted, duplicates, metricUpdates, issueIds: [...issueIds] };
 }

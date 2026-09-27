@@ -1,18 +1,21 @@
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 import type { MonitorCore } from './core/MonitorCore';
 
-/** SDK 面向业务应用的公开类型；这些选项最终由 MonitorCore 统一规范化。 */
+// SDK 面向业务应用的公开类型；这些选项最终由 MonitorCore 统一规范化。
+
+/** 当前用户。id 是业务账号 id；未登录时可以只给 anonymousId。服务端据此统计受影响用户数。 */
 export interface MonitorUser {
   id?: string;
   anonymousId?: string;
 }
 
 export interface MonitorOptions {
-  /** Full envelope endpoint, for example http://localhost:4318/api/v1/envelopes. */
+  /** 上报地址（完整的接入接口 URL），例如 http://localhost:4318/api/v1/envelopes。 */
   dsn: string;
-  /** Public ingest key. Defaults to projectId for simple self-hosted setups. */
+  /** 公开的接入键，服务端据此确认事件属于哪个项目。省略时使用 projectId，方便自部署的简单场景。 */
   dsnKey?: string;
   projectId: string;
+  /** 当前构建的版本号，必须与上传 Source Map 时填写的版本一致，服务端才能还原堆栈。 */
   release: string;
   environment: 'development' | 'test' | 'production';
   /** 0 到 1；按会话采样的比例，1 表示全部采集。同一标签页会话内的决定保持一致。 */

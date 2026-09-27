@@ -66,7 +66,7 @@ async function waitForHealth(url, processExit) {
         return;
       }
     } catch {
-      // The listener may not be ready yet.
+      // 服务可能还没开始监听，稍后重试。
     }
   }
   throw new Error('Production server did not become healthy within 5 seconds.');

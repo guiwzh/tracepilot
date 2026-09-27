@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  InvestigationEvent,
-  InvestigationReport,
-  InvestigationRun,
-  InvestigationStatus,
-  InvestigationStreamEvent,
-  InvestigationUsage,
+import {
+  isTerminalInvestigationEvent,
+  type InvestigationEvent,
+  type InvestigationReport,
+  type InvestigationRun,
+  type InvestigationStatus,
+  type InvestigationStreamEvent,
+  type InvestigationUsage,
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { parseJson } from '../lib/json';
@@ -13,17 +14,25 @@ import { parseJson } from '../lib/json';
 /**
  * 调查运行的持久化与分发。
  *
- * 每个事件带一个运行内单调递增的 seq，先写库再通知订阅者：SSE 断线后客户端带着最后收到的
+ * 两张表：investigation_runs 每次调查一行（状态、用量、最终报告）；
+ * investigation_events 是这次调查发生过的每一件事（开始一轮、调用工具、模型输出文字……）。
+ *
+ * 每个事件带一个运行内单调递增的 seq（1、2、3……），先写库再通知订阅者：SSE 断线后客户端带着最后收到的
  * seq 重连，服务端从库里回放之后的事件，页面刷新也能看到完整的调查过程。
+ *
+ * 订阅（subscribe）就是一个简单的发布-订阅：和 Zustand / Redux 的 store.subscribe 一样，
+ * 返回取消订阅的函数。SSE 路由为每个连接的浏览器注册一个 listener。
  *
  * 模型的文本增量是逐 token 到达的，一个 token 一行记录、一条 SSE 消息太浪费。
  * 这里把同一步的连续文本在约 50 ms 内合并成一条再落库；遇到其他类型的事件先冲刷文本，
  * 保证事件顺序不被打乱。
  */
+
 type Listener = (event: InvestigationStreamEvent) => void;
 
 const TEXT_FLUSH_MS = 50;
 
+/** 正在攒批、还没落库的一段文本（每个运行最多一段）。 */
 interface PendingText {
   step: number;
   text: string;
@@ -32,6 +41,7 @@ interface PendingText {
 
 type Row = Record<string, unknown>;
 
+/** 数据库行 → 接口返回的 InvestigationRun。 */
 function mapRun(row: Row): InvestigationRun {
   return {
     id: String(row.id),
@@ -55,6 +65,7 @@ function mapRun(row: Row): InvestigationRun {
 }
 
 export class InvestigationStore {
+  // 三个 Map 都以 runId 为键：每个运行的订阅者、下一个 seq、待合并的文本。
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly nextSeq = new Map<string, number>();
   private readonly pendingText = new Map<string, PendingText>();
@@ -108,6 +119,7 @@ export class InvestigationStore {
     return rows.map(mapRun);
   }
 
+  /** 某个 Issue 正在进行的调查；用于「同一个 Issue 同时只跑一个调查」的判断。 */
   runningRunFor(issueId: string): InvestigationRun | null {
     const row = this.database.sqlite
       .prepare(
@@ -117,6 +129,7 @@ export class InvestigationStore {
     return row ? mapRun(row) : null;
   }
 
+  /** 追加一个事件：文本增量先攒批，其他事件立即写库并推送。 */
   append(runId: string, event: InvestigationEvent): void {
     if (event.type === 'text.delta') {
       const pending = this.pendingText.get(runId);
@@ -136,6 +149,7 @@ export class InvestigationStore {
     this.write(runId, event);
   }
 
+  /** 结束一次运行：更新最终状态、用量和报告，再写入终止事件（completed / failed / cancelled）。 */
   finish(
     runId: string,
     status: Exclude<InvestigationStatus, 'running'>,
@@ -165,6 +179,7 @@ export class InvestigationStore {
     this.append(runId, terminal);
   }
 
+  /** 读取 seq 大于 after 的全部事件，用于断线重连和页面刷新后的回放。 */
   eventsAfter(runId: string, after: number): InvestigationStreamEvent[] {
     const rows = this.database.sqlite
       .prepare(
@@ -196,8 +211,10 @@ export class InvestigationStore {
     this.write(runId, { type: 'text.delta', step: pending.step, text: pending.text });
   }
 
+  /** 分配 seq、写入 investigation_events，再同步通知所有订阅者。 */
   private write(runId: string, event: InvestigationEvent): void {
     let seq = this.nextSeq.get(runId);
+    // 内存里没有计数（例如启动时补写终止事件）就从库里接着最大 seq 往下编。
     if (seq === undefined) {
       const row = this.database.sqlite
         .prepare('SELECT COALESCE(MAX(seq), 0) AS last FROM investigation_events WHERE run_id = ?')
@@ -212,12 +229,7 @@ export class InvestigationStore {
       )
       .run(runId, seq, event.type, JSON.stringify(event), record.at);
     for (const listener of this.listeners.get(runId) ?? []) listener(record);
-    if (
-      event.type === 'run.completed' ||
-      event.type === 'run.failed' ||
-      event.type === 'run.cancelled'
-    ) {
-      this.nextSeq.delete(runId);
-    }
+    // 终止事件之后不会再有新事件，释放计数器。
+    if (isTerminalInvestigationEvent(event)) this.nextSeq.delete(runId);
   }
 }

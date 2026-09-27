@@ -127,8 +127,13 @@ export interface InvestigationStreamEvent {
   event: InvestigationEvent;
 }
 
+/** 终止事件：一次调查以且只以其中之一结束，之后不会再有新事件。 */
 export const TERMINAL_INVESTIGATION_EVENTS = [
   'run.completed',
   'run.failed',
   'run.cancelled',
 ] as const;
+
+export function isTerminalInvestigationEvent(event: InvestigationEvent): boolean {
+  return (TERMINAL_INVESTIGATION_EVENTS as readonly string[]).includes(event.type);
+}

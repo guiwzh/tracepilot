@@ -24,7 +24,8 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  // 泛型 T 只约束调用方看到的类型；真实 JSON 的运行时校验由 Server 的 Zod Schema 负责。
+  // 泛型 T 只是类型断言：响应 JSON 在浏览器端不做运行时校验，形状是否正确依赖服务端
+  // 按 shared 里的类型返回（服务端的 Zod 校验针对的是它收到的请求，而不是这里的响应）。
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers:
