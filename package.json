@@ -5,7 +5,7 @@
   "description": "TracePilot — frontend observability and evidence-grounded AI diagnosis",
   "license": "MIT",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
@@ -32,14 +32,14 @@
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.19.0",
-    "concurrently": "^9.2.4",
+    "concurrently": "^10.0.5",
     "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.12.0",
     "prettier": "^3.9.9",
-    "source-map": "^0.7.6",
+    "source-map": "^0.8.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1"
   }

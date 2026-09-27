@@ -14,14 +14,14 @@ export const breadcrumbSchema = z.object({
   type: z.enum(['navigation', 'click', 'network', 'console', 'error', 'custom']),
   category: z.string().max(80),
   message: z.string().max(1000),
-  timestamp: z.number().finite(),
-  data: z.record(z.unknown()).optional(),
+  timestamp: z.number(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const monitorEventSchema = z.object({
   eventId: z.string().min(1).max(100),
   eventType: eventTypeSchema,
-  timestamp: z.number().finite().positive(),
+  timestamp: z.number().positive(),
   projectId: z.string().min(1).max(100),
   release: z.string().min(1).max(120),
   environment: environmentSchema,
@@ -41,13 +41,13 @@ export const monitorEventSchema = z.object({
       .object({ width: z.number().nonnegative(), height: z.number().nonnegative() })
       .optional(),
   }),
-  payload: z.record(z.unknown()),
+  payload: z.record(z.string(), z.unknown()),
   breadcrumbs: z.array(breadcrumbSchema).max(100),
 });
 
 export const envelopeSchema = z.object({
   dsnKey: z.string().min(1).max(200),
-  sentAt: z.number().finite().positive(),
+  sentAt: z.number().positive(),
   events: z.array(monitorEventSchema).min(1).max(100),
 });
 

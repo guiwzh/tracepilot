@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { createProjectSchema, createReleaseSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import {
@@ -23,7 +24,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
       return reply.code(400).send({
         error: 'INVALID_PROJECT',
         message: 'Project name must contain between 2 and 80 characters.',
-        details: parsed.error.flatten(),
+        details: z.flattenError(parsed.error),
       });
     }
     const project = {
@@ -66,7 +67,7 @@ export function registerProjectRoutes(app: FastifyInstance, database: TraceDatab
       return reply.code(400).send({
         error: 'INVALID_RELEASE',
         message: 'Release version is required.',
-        details: parsed.error.flatten(),
+        details: z.flattenError(parsed.error),
       });
     }
     const exists = database.sqlite.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId);

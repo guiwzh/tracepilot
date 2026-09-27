@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { envelopeSchema, redactSensitive } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { ingestEnvelope } from '../services/events';
@@ -38,7 +39,7 @@ function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): v
       return reply.code(400).send({
         error: 'INVALID_ENVELOPE',
         message: 'The telemetry envelope does not match the public event schema.',
-        details: parsed.error.flatten(),
+        details: z.flattenError(parsed.error),
       });
     }
     try {
