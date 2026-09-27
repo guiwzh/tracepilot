@@ -30,18 +30,27 @@ export default defineConfig({
       env: { MODEL_API_KEY: '' },
       reuseExistingServer: true,
       timeout: 120_000,
+      // pnpm 12 把脚本进程放进独立的进程组，Playwright 默认对进程组发 SIGKILL 时够不到它们：
+      // vite / tsx 会成为孤儿并占着输出管道，测试结束后一直挂住。SIGTERM 能被 pnpm 转发给子进程。
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
     },
     {
       command: 'pnpm --filter @trace-pilot/dashboard dev --host 127.0.0.1',
       url: 'http://127.0.0.1:4173',
       reuseExistingServer: true,
       timeout: 120_000,
+      // pnpm 12 把脚本进程放进独立的进程组，Playwright 默认对进程组发 SIGKILL 时够不到它们：
+      // vite / tsx 会成为孤儿并占着输出管道，测试结束后一直挂住。SIGTERM 能被 pnpm 转发给子进程。
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
     },
     {
       command: 'pnpm --filter @trace-pilot/playground dev --host 127.0.0.1',
       url: 'http://127.0.0.1:4174',
       reuseExistingServer: true,
       timeout: 120_000,
+      // pnpm 12 把脚本进程放进独立的进程组，Playwright 默认对进程组发 SIGKILL 时够不到它们：
+      // vite / tsx 会成为孤儿并占着输出管道，测试结束后一直挂住。SIGTERM 能被 pnpm 转发给子进程。
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
     },
   ],
 });

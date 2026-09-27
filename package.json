@@ -7,7 +7,7 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@12.6.0",
   "scripts": {
     "dev": "concurrently -n shared,sdk,server,dashboard,playground -c blue,magenta,yellow,cyan,green \"pnpm --filter @trace-pilot/shared dev\" \"pnpm --filter @trace-pilot/monitor-sdk dev\" \"pnpm --filter @trace-pilot/server dev\" \"pnpm --filter @trace-pilot/dashboard dev\" \"pnpm --filter @trace-pilot/playground dev\"",
     "build": "pnpm -r --sort run build",

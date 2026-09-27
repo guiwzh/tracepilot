@@ -13,7 +13,7 @@ import * as esbuild from 'esbuild';
  * 1. 产物体积  —— 我们发布的那个文件有多大。
  * 2. 接入成本  —— 业务应用把 SDK 打进自己的包后，实际多付出多少字节。
  *
- * 两者会显著背离：tsup 默认把 workspace 依赖 external 化，所以产物里只留下
+ * 两者会显著背离：库打包工具（tsdown，此前是 tsup）默认把依赖 external 化，所以产物里只留下
  * `import ... from "@trace-pilot/shared"`，而 shared 的 barrel 会连带引入 zod。
  * 只测产物就会漏掉这条依赖链——历史上这里真实少算过约 4.2 倍。
  * 因此接入成本由一次真实打包测得，并额外断言产物中不含 zod 运行时代码。

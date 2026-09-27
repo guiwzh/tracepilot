@@ -11,7 +11,7 @@ Web Vitals，服务端聚合成 Issue、用 Source Map 还原源码；排障时�
 
 ## 5 分钟本地跑通
 
-不需要 Docker，不需要模型密钥。要求 Node.js 22+、pnpm 10+。
+不需要 Docker，不需要模型密钥。要求 Node.js 22.12+、pnpm 12+（`npm i -g pnpm@12`）。
 
 ```bash
 pnpm install && pnpm seed && pnpm dev
@@ -110,7 +110,8 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 
 ### 4. 体积预算测错了对象
 
-**问题**　SDK 发布产物 gzip 4.4 KB，但这个数字只称量了产物本身。tsup 把 workspace 依赖 external 化，
+**问题**　SDK 发布产物 gzip 4.4 KB，但这个数字只称量了产物本身。库打包工具（当时是 tsup，现在是 tsdown）
+默认把依赖 external 化，
 产物里只剩一行 `import`——**称不到这条依赖链**。
 
 **方案**　补一个「真实接入方」探针：用 esbuild 以真实引用 SDK 的应用为解析目录打包一个只调用
@@ -120,7 +121,7 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 `"sideEffects": false`，barrel 把整个 zod 拖进了浏览器包。补上后降到 4,324 字节。
 
 后来改用 `web-vitals` 计算指标时，同样的事又发生了一次：它被 external 化，**产物口径完全看不到它，
-只有接入口径显示出多付的 2,948 字节**。两个口径现在都有预算，超出即 CI 失败。
+只有接入口径显示出多付的约 2.9 KB**。两个口径现在都有预算，超出即 CI 失败。
 
 **限制**　探针基于 esbuild 默认配置，webpack / rspack 的摇树结论可能不同。
 
@@ -185,9 +186,9 @@ pnpm evaluate:agent
 
 | 指标                                     |                结果 | 复现命令                   |
 | ---------------------------------------- | ------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             | 17,415 / 5,676 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip | 25,702 / 8,470 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals                          |     2,948 字节 gzip | `pnpm measure:sdk`         |
+| SDK 发布产物 minified / gzip             | 17,377 / 5,628 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip | 25,629 / 8,425 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals                          |     2,945 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95  |          10 / 30 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95        |          4.5 / 9 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                0 个 | `pnpm measure:sdk-runtime` |
@@ -237,7 +238,7 @@ flowchart LR
 核心原则：模型不可用时监控仍然可用；每条证据必须指向一次真实的工具调用并经服务端核对；遥测文本
 一律视为不可信数据；Source Map 和密钥永不发往浏览器。
 
-技术栈：`React 19 · TypeScript · Fastify 5 · SQLite/Drizzle · pnpm Monorepo · Vite 7 · web-vitals · Playwright`
+技术栈：`React 19 · TypeScript 6 · Fastify 5 · SQLite/Drizzle · Zod 4 · pnpm 12 Monorepo · Vite 8 · tsdown · Vitest 5 · web-vitals · Playwright`
 
 详细设计见 [architecture.md](docs/architecture.md)，关键决策见
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、
