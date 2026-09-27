@@ -94,17 +94,18 @@ Playground 提供以下场景：
 TracePilot 会归一化时间戳、UUID 和动态 ID，再计算指纹。多次触发同一类错误通常会增加同一个
 Issue 的事件数，而不是无限生成标题略有不同的新 Issue。
 
-### 3.3 生成诊断
+### 3.3 发起调查
 
-1. 在 Issue 详情切换到 diagnosis 标签。
-2. 点击 Generate diagnosis。
-3. 阅读 Evidence cited、Possible causes、Investigation steps、Suggested changes 和
-   Evidence still missing。
-4. 再次生成相同上下文的诊断时可能显示 Cache hit。
-5. 只有希望忽略缓存并重新计算时才点击 Regenerate。
+1. 在 Issue 详情切换到 investigation 标签，点击 Start investigation。
+2. 时间线逐步出现：每一步的思路，以及调用了哪个工具、耗时多少。展开 Result returned to the model
+   可以看到当时返回给模型的原始结果。
+3. 调查进行中可以点 Cancel；刷新或关闭页面不会中止调查，重新打开会从事件日志续上。
+4. 结束后阅读报告：每条证据都带逐字引用和核验结果，Open the tool result 可跳回产生它的工具调用；
+   原因卡片上的 E1、E2 指向支撑它的证据。
+5. Run again 会开始一次新的调查，历史运行仍保留。
 
-没有配置外部模型密钥时，平台会使用 local-evidence-engine。这个结果适合离线演示和检查诊断
-契约，不应被误解为外部大模型已经完成了真实推理。
+没有配置外部模型密钥时，调查由确定性的离线脚本驱动（界面显示 Offline demo）：它按固定顺序调用
+同一批真实工具，用规则组装报告，适合离线演示和检查链路，不应被误解为模型推理。
 
 ## 4. Dashboard 操作说明
 
@@ -184,14 +185,14 @@ Compact rows 可在紧凑行和舒适行之间切换。
 
 详情页包含六个标签：
 
-| 标签        | 主要内容                                  | 建议用途                       |
-| ----------- | ----------------------------------------- | ------------------------------ |
-| overview    | 事件数、用户数、Release、最新路由及分布图 | 先判断影响范围和集中区域       |
-| stack       | 原始源码堆栈和浏览器压缩堆栈              | 确认具体文件、函数和行列       |
-| breadcrumbs | 点击、路由、请求和错误的时间顺序          | 重建事故发生前后的操作路径     |
-| network     | 方法、URL、耗时和 HTTP 状态               | 判断是否由接口失败或慢请求引发 |
-| events      | 最近的事件样本、用户、Release、路由和时间 | 检查问题是否跨用户或跨版本     |
-| diagnosis   | 证据引用、可能原因、置信度和调查步骤      | 在人工核验证据后获得辅助建议   |
+| 标签          | 主要内容                                  | 建议用途                       |
+| ------------- | ----------------------------------------- | ------------------------------ |
+| overview      | 事件数、用户数、Release、最新路由及分布图 | 先判断影响范围和集中区域       |
+| stack         | 原始源码堆栈和浏览器压缩堆栈              | 确认具体文件、函数和行列       |
+| breadcrumbs   | 点击、路由、请求和错误的时间顺序          | 重建事故发生前后的操作路径     |
+| network       | 方法、URL、耗时和 HTTP 状态               | 判断是否由接口失败或慢请求引发 |
+| events        | 最近的事件样本、用户、Release、路由和时间 | 检查问题是否跨用户或跨版本     |
+| investigation | Agent 的调查过程与带引用核验的报告        | 在人工核验证据后获得辅助建议   |
 
 Overview 中的 Browser share、Route share 和 Release share 用于判断问题是否集中在特定环境。
 Source location 显示最新样本的源码位置；没有匹配 Source Map 时会明确显示压缩堆栈或无堆栈，
@@ -336,12 +337,13 @@ createMonitor 默认启用：
 
 不要把姓名、邮箱、手机号或订单明文直接作为 user.id。优先使用内部不可逆标识或匿名 ID。
 
-## 7. AI 诊断配置与解读
+## 7. 排障 Agent 配置与解读
 
 ### 7.1 离线模式
 
-未配置 MODEL_API_KEY 时，Server 使用 local-evidence-engine。监控接入、查询、聚合、Source Map
-和 Dashboard 均可正常使用。
+未配置 MODEL_API_KEY 时，调查由离线脚本驱动，单次诊断接口使用 local-evidence-engine。监控接入、
+查询、聚合、Source Map 和 Dashboard 均可正常使用。LOCAL_AGENT_STEP_DELAY_MS 控制离线脚本每步的
+停顿（默认 450 ms），让演示时能看清过程。
 
 ### 7.2 外部模型
 
@@ -353,25 +355,30 @@ cp .env.example apps/server/.env
 
 ```dotenv
 MODEL_API_KEY=你的服务端密钥
-MODEL_API_URL=https://api.openai.com/v1
-MODEL_NAME=gpt-5.6-terra
+MODEL_API_URL=https://api.deepseek.com/v1
+MODEL_NAME=deepseek-chat
+# 可选：禁止把出错行附近的源码发给模型服务商
+AGENT_SOURCE_CONTEXT=false
 ```
+
+任何支持 chat/completions 工具调用的 OpenAI 兼容端点都可以使用。
 
 重新启动 pnpm dev 后生效。通过 pnpm filter 运行时，Server 的工作目录是 apps/server，因此
 不要把该文件只放在仓库根目录。API Key 只由 Server 读取，不要放入 VITE_ 开头的变量，也不要
 写进浏览器应用。
 
-### 7.3 如何解读诊断
+### 7.3 如何解读报告
 
-- Evidence cited 应能回指 stack、breadcrumb、network、performance 或 release 证据。
-- Confidence 表示候选原因相对可信度，不代表已经证明根因。
-- Investigation steps 用于安排下一步验证。
-- Suggested changes 是建议，不会自动修改代码。
-- Evidence still missing 提醒当前结论还缺少什么信息。
-- Model、Latency、Tokens 和 Cache hit 用于追踪诊断成本与来源。
+- 每条证据的引用都经服务端核对：quote verified 表示原文确实出现在对应工具结果里；
+  quote not found 表示模型给出的原文无法核实，应当忽略这条证据。
+- 引用核验只说明「原文存在」，不说明推理正确，结论仍需人工判断。
+- Confidence 表示候选原因的相对可信度，不代表已经证明根因。
+- Evidence still missing 提醒当前结论还缺少什么，例如某个版本没有上传 Source Map。
+- Elapsed、Tool calls、Tokens 用于追踪一次调查的成本。
+- 遥测里的错误消息、按钮文字都可能被终端用户控制；如果报告复述了其中类似指令的文字，应当警惕。
 
-模型失败只影响本次诊断，不会中断事件接入和人工调查。TracePilot 不会执行 Shell、运行测试或
-自动修改业务代码。
+调查失败只影响本次调查，不会中断事件接入和人工调查。Agent 只有只读工具，不会执行 Shell、运行测试
+或修改业务代码。
 
 ## 8. 推荐的日常排障顺序
 
@@ -381,7 +388,7 @@ MODEL_NAME=gpt-5.6-terra
 4. 在 network 检查失败请求和耗时。
 5. 在 stack 确认是否已经映射到正确源码。
 6. 在 events 对比不同用户、路由和 Release 的样本。
-7. 最后生成 diagnosis，并逐条核对其证据引用。
+7. 最后发起 investigation，并逐条核对其证据引用。
 8. 完成修复和验证后，将 Issue 标记为 Resolved；确认无需处理时标记为 Ignored。
 
 这套顺序可以避免先看到模型建议，再反向挑选支持建议的证据。
@@ -413,7 +420,7 @@ INVALID_DSN 表示 dsnKey 不存在；PROJECT_DSN_MISMATCH 表示事件中的 pr
 - .map 必须来自同一次构建，并且是有效的 version 3 Source Map。
 - 选中的事件本身必须包含可解析的堆栈和行列号。
 
-### 诊断显示 local-evidence-engine
+### 调查显示 Offline demo
 
 这是未配置 MODEL_API_KEY 时的预期行为。若需要外部模型，请按第 7.2 节配置服务端环境变量并
 重启服务。
@@ -450,5 +457,6 @@ pnpm seed
 - [事件信封格式](event-schema.md)：SDK 和 Server 的传输契约。
 - [架构说明](architecture.md)：组件边界与数据流。
 - [性能报告](reports/performance.md)：本地性能测量。
-- [诊断评测报告](reports/diagnosis-evaluation.md)：诊断契约与缓存评测。
+- [诊断评测报告](reports/agent-evaluation.md)：规则、单次调用与 Agent 的对比评测。
+- [ADR 0003](decisions/0003-read-only-investigation-agent.md)：排障 Agent 的设计与边界。
 - [浏览器质量审查](reports/browser-audit.md)：Browser MCP 与 Playwright 的交互、响应式和控制台检查。
