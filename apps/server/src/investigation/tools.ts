@@ -3,6 +3,7 @@ import { zodFunction } from 'openai/helpers/zod';
 import type { ChatCompletionFunctionTool } from 'openai/resources/chat/completions';
 import { redactSensitive, submittedReportSchema, type Breadcrumb } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
+import { browserName } from '../lib/userAgent';
 import { getIssue, listIssueEvents, mapEvent } from '../services/queries';
 import { sourceContext } from '../services/sourcemaps';
 
@@ -56,19 +57,11 @@ function defineTool<Parameters extends z.ZodTypeAny>(definition: ToolDefinition<
 export const MAX_TOOL_OUTPUT_CHARS = 6_000;
 
 // 以下是把数据库原始值整理成「模型易读文本」的小工具：
-// 毫秒时间戳 → ISO 时间字符串；User-Agent → 浏览器名；数量 → 百分比；时间差 → "-3.1s"。
+// 毫秒时间戳 → ISO 时间字符串；数量 → 百分比；时间差 → "-3.1s"。User-Agent → 浏览器名用 lib/userAgent.ts。
 function iso(timestamp: number | null | undefined): string | null {
   return typeof timestamp === 'number' && Number.isFinite(timestamp)
     ? new Date(timestamp).toISOString()
     : null;
-}
-
-function browserName(userAgent: string): string {
-  if (userAgent.includes('Edg/')) return 'Edge';
-  if (userAgent.includes('Chrome/')) return 'Chrome';
-  if (userAgent.includes('Firefox/')) return 'Firefox';
-  if (userAgent.includes('Safari/')) return 'Safari';
-  return 'Other';
 }
 
 function shares(items: Array<{ name: string; value: number }>): string {

@@ -14,6 +14,7 @@ import {
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { parseJson, percentile } from '../lib/json';
+import { browserName } from '../lib/userAgent';
 
 /**
  * 工作台所有「读」接口背后的查询。
@@ -48,7 +49,6 @@ function mapIssue(row: Row): Issue {
     eventCount: number(row.event_count),
     userCount: number(row.user_count),
     latestRelease: row.latest_release ? String(row.latest_release) : null,
-    trend: typeof row.trend === 'string' ? parseJson<number[]>(row.trend, []) : undefined,
   };
 }
 
@@ -138,7 +138,7 @@ export interface IssueFilters {
 }
 
 /**
- * Issue 列表：按筛选条件动态拼出 WHERE，分页，并为每行附上最近 6 小时的趋势。
+ * Issue 列表：按筛选条件动态拼出 WHERE，分页，并为每行附上最近 7 小时的趋势。
  *
  * 动态 SQL 的做法：conditions 收集 SQL 片段，params 按相同顺序收集参数，最后用 AND 连接。
  * 按版本、浏览器、路由筛选时，条件其实落在 Issue 的「事件」上（一个 Issue 可能跨多个版本），
@@ -167,25 +167,12 @@ export function listIssues(
     params.push(filters.release);
   }
   if (filters.browser) {
-    const userAgent = "json_extract(eb.context_json, '$.device.userAgent')";
-    if (filters.browser === 'Edge') {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Edg/%')`,
-      );
-    } else if (filters.browser === 'Chrome') {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Chrome/%' AND ${userAgent} NOT LIKE '%Edg/%')`,
-      );
-    } else if (filters.browser === 'Safari') {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE '%Safari/%' AND ${userAgent} NOT LIKE '%Chrome/%')`,
-      );
-    } else {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id AND ${userAgent} LIKE ?)`,
-      );
-      params.push(`%${filters.browser}%`);
-    }
+    // browser_name() 就是详情页浏览器分布用的同一个函数（lib/userAgent.ts），两处的分类不会不一致。
+    conditions.push(
+      `EXISTS (SELECT 1 FROM events eb WHERE eb.issue_id = i.id
+         AND browser_name(json_extract(eb.context_json, '$.device.userAgent')) = ? COLLATE NOCASE)`,
+    );
+    params.push(filters.browser);
   }
   if (filters.route) {
     conditions.push(
@@ -233,26 +220,43 @@ export function listIssues(
     )
     .all(...params, filters.pageSize, offset) as Row[];
 
-  for (const row of rows) {
-    // 每个 Issue 生成最近 6 小时的 7 个点，空桶显式补 0，Sparkline 才不会错位。
-    // 分桶方式：(事件时间 - 起点) / 1 小时，取整后就是它落在第几个小时。
-    // 已知限制：这里对每个 Issue 各查一次，一页 N 行就多 N 次查询（所谓 N+1 查询）。
-    // 当前每页最多 100 行、本地 SQLite 单次查询在亚毫秒级，可以接受；数据量变大时应改成一条 GROUP BY 查询。
-    const since = Date.now() - 6 * 60 * 60 * 1000;
-    const points = database.sqlite
-      .prepare(
-        `SELECT CAST((created_at - ?) / 3600000 AS INTEGER) AS bucket, COUNT(*) AS count
-         FROM events WHERE issue_id = ? AND created_at >= ? GROUP BY bucket`,
-      )
-      .all(since, row.id, since) as Row[];
+  const trends = issueTrends(
+    database,
+    rows.map((row) => String(row.id)),
+  );
+  return {
+    items: rows.map((row) => ({ ...mapIssue(row), trend: trends.get(String(row.id)) })),
+    total,
+    page: filters.page,
+    pageSize: filters.pageSize,
+  };
+}
+
+/**
+ * 列表每一行的 Sparkline：最近 7 小时、每小时一个点，最后一个点是刚过去的这一小时。空桶显式补 0。
+ * 分桶方式：(事件时间 - 起点) / 1 小时，取整后就是它落在第几个小时；比服务端时钟稍快的事件并入最后一个点。
+ * 窗口曾只有 6 小时却分 7 个点，第 7 个点落在「此刻之后」恒为 0，每条 Sparkline 的末端都掉到 0，
+ * 看起来所有问题都在好转。
+ *
+ * 每个 Issue 各查一次，但语句只编译一次。SQLite 在进程内执行，没有网络往返，这种「N+1」的开销
+ * 主要在反复编译同一条语句（曾经每行都重新 prepare）。实测只编译一次比把整页并成一条
+ * GROUP BY issue_id 更快：后者要按 Issue id 字符串排序分组。换成网络数据库时应改成一条查询。
+ */
+function issueTrends(database: TraceDatabase, issueIds: string[]): Map<string, number[]> {
+  const since = Date.now() - 7 * 60 * 60 * 1000;
+  const statement = database.sqlite.prepare(
+    `SELECT MIN(6, CAST((created_at - ?) / 3600000 AS INTEGER)) AS bucket, COUNT(*) AS count
+     FROM events WHERE issue_id = ? AND created_at >= ? GROUP BY bucket`,
+  );
+  const trends = new Map<string, number[]>();
+  for (const issueId of issueIds) {
     const trend = Array.from({ length: 7 }, () => 0);
-    for (const point of points) {
-      const bucket = Math.max(0, Math.min(6, number(point.bucket)));
-      trend[bucket] = number(point.count);
+    for (const point of statement.all(since, issueId, since) as Row[]) {
+      trend[number(point.bucket)] = number(point.count);
     }
-    row.trend = JSON.stringify(trend);
+    trends.set(issueId, trend);
   }
-  return { items: rows.map(mapIssue), total, page: filters.page, pageSize: filters.pageSize };
+  return trends;
 }
 
 /** 某个维度（浏览器、路由、版本）上的事件分布，取数量最多的前 8 项，供详情页的环形图使用。 */
@@ -295,12 +299,7 @@ export function getIssue(database: TraceDatabase, issueId: string): IssueDetail 
     browserDistribution: distribution(
       database,
       issueId,
-      `CASE
-        WHEN json_extract(e.context_json, '$.device.userAgent') LIKE '%Edg/%' THEN 'Edge'
-        WHEN json_extract(e.context_json, '$.device.userAgent') LIKE '%Chrome/%' THEN 'Chrome'
-        WHEN json_extract(e.context_json, '$.device.userAgent') LIKE '%Firefox/%' THEN 'Firefox'
-        WHEN json_extract(e.context_json, '$.device.userAgent') LIKE '%Safari/%' THEN 'Safari'
-        ELSE 'Other' END`,
+      "browser_name(json_extract(e.context_json, '$.device.userAgent'))",
     ),
     routeDistribution: distribution(database, issueId, 'e.page_url'),
     releaseDistribution: distribution(database, issueId, "COALESCE(r.version, 'Unknown')"),
@@ -385,14 +384,6 @@ interface PerformanceSample {
   route: string;
   browser: string;
   createdAt: number;
-}
-
-function browserName(userAgent: string): string {
-  if (userAgent.includes('Edg/')) return 'Edge';
-  if (userAgent.includes('Chrome/')) return 'Chrome';
-  if (userAgent.includes('Firefox/')) return 'Firefox';
-  if (userAgent.includes('Safari/')) return 'Safari';
-  return 'Other';
 }
 
 function routeName(pageUrl: string, route?: string): string {

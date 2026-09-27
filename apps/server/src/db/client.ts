@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
+import { browserName } from '../lib/userAgent';
 import { migrate } from './migrations';
 
 /**
@@ -30,6 +31,11 @@ export function createDatabase(databasePath: string): TraceDatabase {
   sqlite.pragma('foreign_keys = ON');
   // WAL（预写日志）模式：写操作先追加到日志文件，读请求不会被写操作阻塞。
   sqlite.pragma('journal_mode = WAL');
+  // 把 JS 函数注册成 SQL 函数，SQL 里写 browser_name(ua) 就调用它：浏览器分类规则只有 lib/userAgent.ts 一份。
+  // deterministic 告诉 SQLite 同样的输入总得到同样的结果，允许它做相应的优化。
+  sqlite.function('browser_name', { deterministic: true }, (userAgent: unknown) =>
+    browserName(typeof userAgent === 'string' ? userAgent : ''),
+  );
   try {
     migrate(sqlite);
   } catch (error) {

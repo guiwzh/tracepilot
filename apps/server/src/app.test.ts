@@ -369,6 +369,62 @@ describe('telemetry ingestion', () => {
     expect({ events: overview.events24h, trend: trendTotal }).toEqual({ events: 1, trend: 1 });
   });
 
+  it('draws each issue trend over the last seven whole hours', async () => {
+    const minutesAgo = [5, 10, 20, 70, 130, 200];
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: minutesAgo.map((minutes, index) =>
+          event(`trend-${index}`, '40000001', Date.now() - minutes * 60_000),
+        ),
+      },
+    });
+    const list = await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/issues' });
+    // 最后一个点是刚过去的一小时。回归：窗口曾只有 6 小时，第 7 个点落在「此刻之后」，恒为 0。
+    expect(list.json().items[0].trend).toEqual([0, 0, 0, 1, 1, 1, 3]);
+  });
+
+  it('filters by exactly the browsers the issue detail shows', async () => {
+    const agents: Record<string, string> = {
+      Edge: 'Mozilla/5.0 Chrome/130.0 Safari/537.36 Edg/130.0',
+      Chrome: 'Mozilla/5.0 Chrome/130.0 Safari/537.36',
+      Firefox: 'Mozilla/5.0 Gecko/20100101 Firefox/131.0',
+      Safari: 'Mozilla/5.0 (iPhone) CriOS/130.0 Mobile/15E148 Safari/604.1',
+      Other: 'curl/8.9.1',
+    };
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: Object.entries(agents).map(([browser, userAgent]) => ({
+          ...event(`browser-${browser}`, '10000001'),
+          device: { userAgent },
+          payload: { name: 'TypeError', message: `Broken only in ${browser}` },
+        })),
+      },
+    });
+    for (const browser of Object.keys(agents)) {
+      const filtered = await app.inject({
+        method: 'GET',
+        url: `/api/v1/projects/demo-project/issues?browser=${browser.toLowerCase()}`,
+      });
+      // 回归：筛选和分布曾是两套规则，分布里的 Other 按它筛选什么也筛不出来。
+      expect(filtered.json().items.map((issue: { title: string }) => issue.title)).toEqual([
+        `Broken only in ${browser}`,
+      ]);
+      const detail = await app.inject({
+        method: 'GET',
+        url: `/api/v1/issues/${filtered.json().items[0].id}`,
+      });
+      expect(detail.json().browserDistribution).toEqual([{ name: browser, value: 1 }]);
+    }
+  });
+
   it('lets cross-origin SDKs read Retry-After', async () => {
     // 不在 CORS 默认可读的响应头里；不显式暴露，SDK 就无法照服务端要求的时间退避。
     const response = await app.inject({
