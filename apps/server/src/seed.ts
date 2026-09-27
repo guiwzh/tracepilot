@@ -5,7 +5,9 @@ import { resolve } from 'node:path';
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 import { loadConfig } from './config';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from './db/client';
+import { buildSourceMap, DEMO_SOURCE_MAPS } from './demo/sourceMaps';
 import { ingestEnvelope } from './services/events';
+import { saveSourceMap } from './services/sourcemaps';
 
 /**
  * 种子脚本通过正式 ingestEnvelope 写入虚构事件，而不是直接伪造最终 Issue，
@@ -254,13 +256,37 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   return { events: events.length };
 }
 
+/**
+ * 只给 2.4.1 上传 Source Map，2.3.9 故意不传：调查时既能看到还原后的源码，
+ * 也能遇到「该版本缺少 map」这种真实会发生的证据缺口。
+ * 上传走正式的 saveSourceMap，会顺带回填该 Release 已有事件的原始堆栈。
+ */
+export async function seedDemoSourceMaps(
+  database: TraceDatabase,
+  sourceMapDir: string,
+): Promise<number> {
+  for (const fixture of DEMO_SOURCE_MAPS) {
+    await saveSourceMap(
+      database,
+      sourceMapDir,
+      'demo-release-2-4-1',
+      fixture.minifiedFile,
+      Buffer.from(buildSourceMap(fixture)),
+    );
+  }
+  return DEMO_SOURCE_MAPS.length;
+}
+
 // 既允许测试 import seedDemoData，也允许 pnpm seed 直接执行；只有后者进入 CLI 分支。
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const config = loadConfig();
   const database = createDatabase(config.databasePath);
   try {
     const result = seedDemoData(database);
-    process.stdout.write(`Seeded ${result.events} fictional browser events for demo-project.\n`);
+    const maps = await seedDemoSourceMaps(database, config.sourceMapDir);
+    process.stdout.write(
+      `Seeded ${result.events} fictional browser events and ${maps} source maps for demo-project.\n`,
+    );
   } finally {
     database.close();
   }

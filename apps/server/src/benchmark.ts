@@ -14,6 +14,8 @@ const config: ServerConfig = {
   databasePath: join(directory, 'benchmark.db'),
   sourceMapDir: join(directory, 'maps'),
   modelName: 'local-evidence-engine',
+  localAgentStepDelayMs: 0,
+  agentSourceContext: true,
 };
 const app = await buildApp({ config, logger: false });
 

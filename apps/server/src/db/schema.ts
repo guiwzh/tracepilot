@@ -1,4 +1,11 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core';
 
 /**
  * Drizzle Schema 为 TypeScript 写入提供列名和类型推导。
@@ -108,4 +115,42 @@ export const diagnoses = sqliteTable(
     // 同一 Issue + 同一证据上下文只存一份诊断，用于幂等缓存。
     uniqueIndex('diagnoses_issue_input').on(table.issueId, table.inputHash),
   ],
+);
+
+export const investigationRuns = sqliteTable(
+  'investigation_runs',
+  {
+    id: text('id').primaryKey(),
+    issueId: text('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['running', 'completed', 'failed', 'cancelled'],
+    }).notNull(),
+    engine: text('engine', { enum: ['model', 'local'] }).notNull(),
+    model: text('model').notNull(),
+    startedAt: integer('started_at').notNull(),
+    finishedAt: integer('finished_at'),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    steps: integer('steps').notNull().default(0),
+    toolCalls: integer('tool_calls').notNull().default(0),
+    reportJson: text('report_json'),
+    error: text('error'),
+  },
+  (table) => [index('investigation_runs_issue').on(table.issueId, table.startedAt)],
+);
+
+export const investigationEvents = sqliteTable(
+  'investigation_events',
+  {
+    runId: text('run_id')
+      .notNull()
+      .references(() => investigationRuns.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    type: text('type').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.seq] })],
 );

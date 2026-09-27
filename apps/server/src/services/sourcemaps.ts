@@ -17,7 +17,7 @@ interface StackFrame {
   functionName?: string;
 }
 
-function parseStackFrame(line: string): StackFrame | null {
+export function parseStackFrame(line: string): StackFrame | null {
   // 支持常见 V8 “at fn (url:line:column)” 和无函数名 frame。
   const match = line.match(
     /(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/,
@@ -149,6 +149,78 @@ export async function symbolicateStack(
   }
   // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
   return mapped > 0 ? result.join('\n') : null;
+}
+
+export type SourceContextResult =
+  | {
+      ok: true;
+      /** 还原后的位置，形如 src/checkout/total.ts:84:23（列号 1 基）。 */
+      location: string;
+      functionName: string | null;
+      /** 出错行前后若干行源码，出错行以 > 标出。 */
+      snippet: string;
+    }
+  | { ok: false; reason: 'NO_FRAME' | 'NO_SOURCE_MAP' | 'FRAME_NOT_MAPPED' | 'NO_SOURCES_CONTENT' };
+
+/**
+ * 读取某个栈帧对应的原始源码片段，供排障 Agent 查看出错行附近的代码。
+ *
+ * 只有构建时把源码内联进 map（sourcesContent）才能拿到代码；拿不到时如实返回原因，
+ * 让调查把它记为缺失信息，而不是中断。片段会发给模型服务商，所以只取出错行前后几行，
+ * 并且可以通过配置整体关闭。
+ */
+export async function sourceContext(
+  database: TraceDatabase,
+  releaseId: string,
+  stack: string,
+  frameIndex = 0,
+  radius = 5,
+): Promise<SourceContextResult> {
+  const frames = stack
+    .split('\n')
+    .map(parseStackFrame)
+    .filter((frame): frame is StackFrame => frame !== null);
+  const frame = frames[frameIndex];
+  if (!frame) return { ok: false, reason: 'NO_FRAME' };
+  const row = database.sqlite
+    .prepare('SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
+    .get(releaseId, normalizeMinifiedFile(frame.file)) as { map_path: string } | undefined;
+  if (!row) return { ok: false, reason: 'NO_SOURCE_MAP' };
+
+  const rawMap = JSON.parse(await readFile(row.map_path, 'utf8')) as RawSourceMap;
+  const consumer = await new SourceMapConsumer(rawMap);
+  try {
+    // 与 symbolicateStack 相同：浏览器列号 1 基，source-map 库 0 基。
+    const original = consumer.originalPositionFor({
+      line: frame.lineNumber,
+      column: Math.max(0, frame.columnNumber - 1),
+    });
+    if (!original.source || original.line == null || original.column == null) {
+      return { ok: false, reason: 'FRAME_NOT_MAPPED' };
+    }
+    const content = consumer.sourceContentFor(original.source, true);
+    if (!content) return { ok: false, reason: 'NO_SOURCES_CONTENT' };
+    const lines = content.split('\n');
+    const first = Math.max(1, original.line - radius);
+    const last = Math.min(lines.length, original.line + radius);
+    const snippet = lines
+      .slice(first - 1, last)
+      .map((text, offset) => {
+        const lineNumber = first + offset;
+        return `${lineNumber === original.line ? '>' : ' '} ${String(lineNumber).padStart(4)} | ${text}`;
+      })
+      .join('\n');
+    const source = original.source.replace(/[?#].*$/, '');
+    return {
+      ok: true,
+      location: `${source}:${original.line}:${original.column + 1}`,
+      functionName: original.name ?? frame.functionName ?? null,
+      // 源码里偶尔有硬编码的令牌，发给模型前同样过一遍脱敏。
+      snippet: redactSensitive(snippet),
+    };
+  } finally {
+    consumer.destroy();
+  }
 }
 
 export async function symbolicateReleaseEvents(

@@ -20,6 +20,8 @@ const config: ServerConfig = {
   databasePath: join(directory, 'eval.db'),
   sourceMapDir: join(directory, 'maps'),
   modelName: 'local-evidence-engine',
+  localAgentStepDelayMs: 0,
+  agentSourceContext: true,
 };
 
 try {

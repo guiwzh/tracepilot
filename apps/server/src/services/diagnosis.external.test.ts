@@ -143,6 +143,8 @@ async function buildModelApp(modelApiUrl: string) {
     databasePath: join(directory, 'test.db'),
     sourceMapDir: join(directory, 'maps'),
     modelName: 'mock-evidence-model',
+    localAgentStepDelayMs: 0,
+    agentSourceContext: true,
     modelApiKey: 'test-only-key',
     modelApiUrl,
   };

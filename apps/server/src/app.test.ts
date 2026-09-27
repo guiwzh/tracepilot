@@ -39,6 +39,8 @@ beforeEach(async () => {
     databasePath: join(directory, 'test.db'),
     sourceMapDir: join(directory, 'maps'),
     modelName: 'test-model',
+    localAgentStepDelayMs: 0,
+    agentSourceContext: true,
   };
   app = await buildApp({ config, logger: false });
 });

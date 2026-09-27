@@ -4,15 +4,26 @@ import multipart from '@fastify/multipart';
 import { stripUrlQuery } from '@trace-pilot/shared';
 import type { ServerConfig } from './config';
 import { createDatabase, ensureDemoProject } from './db/client';
+import type { InvestigationLimits } from './investigation/agent';
+import {
+  defaultModelClientFactory,
+  InvestigationService,
+  type ModelClientFactory,
+} from './investigation/service';
+import { InvestigationStore } from './investigation/store';
 import { registerEventRoutes } from './routes/events';
 import { registerIssueRoutes } from './routes/issues';
 import { registerProjectRoutes } from './routes/projects';
 import { registerDiagnosisRoutes } from './routes/diagnosis';
+import { registerInvestigationRoutes } from './routes/investigations';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
 
 export interface BuildAppOptions {
   config: ServerConfig;
   logger?: boolean;
+  /** 测试注入的模型替身；默认按配置选择真实模型或离线脚本。 */
+  modelClientFactory?: ModelClientFactory;
+  investigationLimits?: Partial<InvestigationLimits>;
 }
 
 /**
@@ -43,6 +54,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
   const database = createDatabase(options.config.databasePath);
   ensureDemoProject(database);
+  const investigationStore = new InvestigationStore(database);
+  const investigations = new InvestigationService(
+    database,
+    options.config,
+    investigationStore,
+    options.modelClientFactory ?? defaultModelClientFactory(options.config),
+    options.investigationLimits,
+  );
 
   // Fastify 插件必须 await 注册完成后再挂载依赖它们的路由。
   await app.register(cors, { origin: true, methods: ['GET', 'POST', 'PATCH', 'OPTIONS'] });
@@ -60,6 +79,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   registerIssueRoutes(app, database);
   registerSourceMapRoutes(app, database, options.config);
   registerDiagnosisRoutes(app, database, options.config);
+  registerInvestigationRoutes(app, investigations, investigationStore);
 
   app.setErrorHandler((error, request, reply) => {
     // 详细错误只进入服务端日志；500 响应不把堆栈和数据库细节暴露给浏览器。
@@ -76,7 +96,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     });
   });
 
-  // 测试、开发热重载和正常退出都经过 onClose，集中释放 SQLite 文件句柄。
-  app.addHook('onClose', async () => database.close());
+  // 测试、开发热重载和正常退出都经过 onClose：先中止进行中的调查并等它们写完终止事件，
+  // 再释放 SQLite 文件句柄。
+  app.addHook('onClose', async () => {
+    await investigations.shutdown();
+    database.close();
+  });
   return app;
 }

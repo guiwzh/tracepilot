@@ -51,6 +51,21 @@ CREATE TABLE IF NOT EXISTS diagnoses (
   UNIQUE(issue_id, input_hash)
 );
 CREATE INDEX IF NOT EXISTS diagnoses_issue_created ON diagnoses(issue_id, created_at);
+CREATE TABLE IF NOT EXISTS investigation_runs (
+  id TEXT PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  status TEXT NOT NULL, engine TEXT NOT NULL, model TEXT NOT NULL,
+  started_at INTEGER NOT NULL, finished_at INTEGER,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  steps INTEGER NOT NULL DEFAULT 0, tool_calls INTEGER NOT NULL DEFAULT 0,
+  report_json TEXT, error TEXT
+);
+CREATE INDEX IF NOT EXISTS investigation_runs_issue ON investigation_runs(issue_id, started_at);
+-- 每次运行的完整事件流。SSE 断线重连时按 seq 回放，页面刷新后也能看到完整的调查过程。
+CREATE TABLE IF NOT EXISTS investigation_events (
+  run_id TEXT NOT NULL REFERENCES investigation_runs(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);
 `;
 
 export type TraceDatabase = ReturnType<typeof createDatabase>;
