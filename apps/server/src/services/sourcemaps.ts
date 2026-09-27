@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { SourceMapConsumer, type RawSourceMap } from 'source-map';
 import { redactSensitive, redactStack, type SourceMapRecord } from '@trace-pilot/shared';
@@ -132,33 +132,12 @@ async function parseSourceMap(content: Buffer): Promise<SourceMapConsumer> {
 }
 
 /**
- * map 文件的位置由「版本 + 文件名」决定：同一份文件的两次并发上传写的是同一个路径，
- * 最后一次改名生效，不会留下数据库不再引用的孤儿文件。
- */
-function mapFilePath(sourceMapDir: string, releaseId: string, minifiedFile: string): string {
-  const key = createHash('sha256').update(`${releaseId}\0${minifiedFile}`).digest('hex');
-  return join(sourceMapDir, `${key.slice(0, 32)}.map`);
-}
-
-/**
- * 先写到临时文件再改名：rename 在同一文件系统内是原子的，并发读取的一方
- * 要么读到旧的完整文件、要么读到新的完整文件，不会读到写了一半的内容。
- */
-async function writeFileAtomically(path: string, content: Buffer): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    // mode 0o600 是 Unix 文件权限：只有运行服务的系统用户能读写，同机其他用户读不到源码。
-    await writeFile(temporary, content, { mode: 0o600 });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-
-/**
- * 保存一份上传的 Source Map：完整校验 → 原子写入磁盘 → 在数据库登记 → 回填引用了这个文件的历史事件。
- * 同一版本重复上传同名文件时覆盖旧文件，而不是新增一份。
+ * 保存一份上传的 Source Map：完整校验 → 写入磁盘 → 在数据库登记 → 回填引用了这个文件的历史事件。
+ * 同一版本重复上传同名文件时替换原来的那份，而不是新增一份。
+ *
+ * 每次上传都写一个新文件，写完才让登记指向它，再删掉上一份。正在读取的一方要么还在用旧文件、
+ * 要么拿到的已经是完整的新文件，不会读到写了一半的内容；路径从不复用，所以按路径缓存的解析结果
+ * 永远对应同一份内容——别的进程（例如 pnpm seed）重新上传后，服务进程也不会继续用旧的解析结果。
  */
 export async function saveSourceMap(
   database: TraceDatabase,
@@ -170,20 +149,24 @@ export async function saveSourceMap(
   // 校验失败时什么都还没写：文件、数据库和缓存都保持原样。
   const consumer = await parseSourceMap(content);
   const normalized = normalizeMinifiedFile(minifiedFile);
-  const existing = database.sqlite
-    .prepare('SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
-    .get(releaseId, normalized) as { map_path: string } | undefined;
-  // 已上传过就沿用原来的文件路径（包括本规则之前按 id 命名的旧文件），新内容覆盖旧文件。
-  const mapPath = existing?.map_path ?? mapFilePath(sourceMapDir, releaseId, normalized);
+  const mapPath = join(sourceMapDir, `${randomUUID()}.map`);
   const now = Date.now();
   let row: { id: string };
+  let previousPath: string | undefined;
   try {
     await mkdir(sourceMapDir, { recursive: true });
     // 文件本体放磁盘，数据库只记路径：数据库行保持小巧，大文件也不必整个读进 SQL。
-    await writeFileAtomically(mapPath, content);
+    // mode 0o600 是 Unix 文件权限：只有运行服务的系统用户能读写，同机其他用户读不到源码。
+    await writeFile(mapPath, content, { mode: 0o600 });
+    // 查旧路径和改登记在同一段同步代码里完成，两次并发上传也各自拿到准确的「上一份」，不留孤儿文件。
+    previousPath = (
+      database.sqlite
+        .prepare('SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?')
+        .get(releaseId, normalized) as { map_path: string } | undefined
+    )?.map_path;
     // 「upsert」（有则更新、无则插入）：UNIQUE(release_id, minified_file) 冲突时改走 DO UPDATE，
-    // excluded 指这次本想插入的那一行。RETURNING 取回真正留在库里的 id：并发上传时
-    // 后到的一方走的是更新分支，它自己生成的 id 并没有写进去。
+    // excluded 指这次本想插入的那一行。RETURNING 取回真正留在库里的 id：替换时走的是更新分支，
+    // 这里新生成的 id 并没有写进去。
     row = database.sqlite
       .prepare(
         `INSERT INTO source_maps (id, release_id, minified_file, map_path, created_at)
@@ -194,12 +177,15 @@ export async function saveSourceMap(
       .get(randomUUID(), releaseId, normalized, mapPath, now) as { id: string };
   } catch (error) {
     consumer.destroy();
-    // 文件可能已经被新内容覆盖，缓存里的旧解析结果不能再用。
-    consumers.invalidate(mapPath);
+    await rm(mapPath, { force: true });
     throw error;
   }
-  // 校验时已经完整解析过，直接放进缓存替换旧版本，回填不必再解析一遍。
+  // 校验时已经完整解析过，直接放进缓存，回填不必再解析一遍。
   consumers.replace(mapPath, consumer, content.length);
+  if (previousPath && previousPath !== mapPath) {
+    consumers.invalidate(previousPath);
+    await rm(previousPath, { force: true });
+  }
   // 回填：常见顺序是「先发版、线上报错、再补传 map」，上传后立即把该版本已有的事件还原一遍，
   // 不必等新的错误发生才能看到源码栈。
   await symbolicateReleaseEvents(database, releaseId, normalized);

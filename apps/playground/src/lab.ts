@@ -81,5 +81,6 @@ export const monitor = createMonitor({
 });
 monitor.start();
 
-// 开发时修改本文件会触发整页刷新；先销毁旧实例，避免两份插件同时包装全局 API。
+// 现在修改本文件会整页刷新：main.tsx 也引用了它，而入口模块不是热更新边界。万一以后它能被热替换，
+// 旧实例要先销毁，否则两份插件会同时包装全局 API。
 import.meta.hot?.dispose(() => monitor.destroy());

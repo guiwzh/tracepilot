@@ -71,7 +71,7 @@ export class SourceMapCache<T extends Releasable> {
     }
   }
 
-  /** 放入一份刚上传、已经完整校验过的解析结果，替换同一路径的旧条目；回填就不必再解析一遍。 */
+  /** 放入一份刚上传、已经完整校验过的解析结果（同一路径已有条目时替换它），回填就不必再解析一遍。 */
   replace(path: string, value: T, bytes: number): void {
     this.invalidate(path);
     this.entries.set(path, this.entry(Promise.resolve(value), bytes));
@@ -79,7 +79,7 @@ export class SourceMapCache<T extends Releasable> {
     this.trim(path);
   }
 
-  /** 丢弃 path 的条目（文件被覆盖或删除时调用）。正在被借用的，等借用结束再销毁。 */
+  /** 丢弃 path 的条目（文件被替换或删除时调用）。正在被借用的，等借用结束再销毁。 */
   invalidate(path: string): void {
     const entry = this.entries.get(path);
     if (entry) this.evict(path, entry);

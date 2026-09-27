@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, readFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { SourceMapGenerator } from 'source-map';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from '../db/client';
@@ -199,7 +199,11 @@ describe('source map symbolication', () => {
   });
 
   it('serves the new mappings as soon as a map is uploaded again', async () => {
+    const mapPath = () =>
+      (database.sqlite.prepare('SELECT map_path FROM source_maps').get() as { map_path: string })
+        .map_path;
     await upload('app.js', appMap('src/cart.ts', 12));
+    const first = mapPath();
     expect(await symbolicateStack(database, 'demo-release-2-4-1', APP_STACK)).toContain(
       'src/cart.ts:12:5',
     );
@@ -207,6 +211,10 @@ describe('source map symbolication', () => {
     expect(await symbolicateStack(database, 'demo-release-2-4-1', APP_STACK)).toContain(
       'src/total.ts:40:5',
     );
+    // 每次上传写新文件、删掉旧文件：按路径缓存的解析结果永远对应同一份内容，
+    // 别的进程（pnpm seed）替换 map 之后，服务进程的缓存也不会过期而不自知。
+    expect(mapPath()).not.toBe(first);
+    expect(await readdir(join(directory, 'maps'))).toEqual([basename(mapPath())]);
   });
 
   it('skips a frame on line 0 without giving up on the map', async () => {
