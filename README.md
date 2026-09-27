@@ -19,7 +19,6 @@ pnpm install && pnpm seed && pnpm dev
 
 - 调查工作台 [localhost:4173](http://localhost:4173) · 事故演练场 [localhost:4174](http://localhost:4174)
 - 打开任一 Issue 的 **Investigation** 标签开始调查；在演练场制造真实浏览器信号，回到工作台看聚合结果
-- 逐页面操作见[平台使用手册](docs/user-guide.md)，3–5 分钟演示顺序见 [demo-script.md](docs/demo-script.md)
 
 没有 `MODEL_API_KEY` 时，调查由一个**确定性离线脚本**驱动：同一条循环、同一批工具、同一套引用
 校验和事件流，界面上明确标注它不是模型推理。配置密钥见[可选外部模型](#可选外部模型)。
@@ -359,11 +358,10 @@ apps/playground                可控制造浏览器信号
 packages/monitor-sdk           插件化浏览器 SDK
 packages/shared                Zod Schema、类型、隐私工具
 scripts                        体积测量、生产冒烟、README 截图
-docs/reports                   性能与评测的权威基线
+docs/reports                   性能测量与诊断评测的方法、结果和限制
+docs/decisions                 架构决策记录（ADR）
 tests/e2e                      浏览器闭环测试
 ```
-
-真实浏览器检查结果见[浏览器质量审查](docs/reports/browser-audit.md)。
 
 ## 仍然不做
 
