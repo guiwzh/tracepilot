@@ -42,7 +42,7 @@ let uploaded = 0;
 for (const file of await readdir(assets)) {
   if (!file.endsWith('.js.map')) continue;
   const form = new FormData();
-  // 普通字段要排在文件之前：服务端流式解析，读到文件时字段必须已经到达。
+  // minifiedFile 是这份 map 对应的压缩文件名；服务端读完整个请求，字段放在文件前后都可以。
   form.append('minifiedFile', file.replace(/\.map$/, ''));
   form.append('file', new Blob([await readFile(new URL(file, assets))]), file);
   await call(`/api/v1/releases/${release.id}/source-maps`, { method: 'POST', body: form });

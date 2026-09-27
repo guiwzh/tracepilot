@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ServerConfig } from '../config';
 import type { TraceDatabase } from '../db/client';
 import { InvalidSourceMapError, listSourceMaps, saveSourceMap } from '../services/sourcemaps';
@@ -14,13 +14,34 @@ function releaseId(params: unknown): string {
   return String((params as { releaseId?: string }).releaseId ?? '');
 }
 
-function fieldValue(fields: Record<string, unknown>, name: string): string {
-  // @fastify/multipart 将普通字段包装成 part 对象，value 才是表单字符串。
-  const field = fields[name];
-  if (field && typeof field === 'object' && 'value' in field) {
-    return String((field as { value: unknown }).value);
+/** 上传请求里的内容：唯一的文件，以及 minifiedFile 字段。 */
+interface UploadParts {
+  file?: { filename: string; content: Buffer };
+  minifiedFile: string;
+}
+
+/**
+ * 按顺序读完请求里的每一部分，字段和文件的先后不限。
+ *
+ * 曾经用 request.file() 只取第一个文件，再从它身上读已经到达的字段：字段排在文件之后时，
+ * 读到文件的那一刻字段还没解析到，于是返回「请提供 minifiedFile」——而它明明在请求里。
+ * 小文件往往整个请求一次到齐，看不出问题；几 MB 的真实 map 分块到达时必然失败，
+ * 同一条 curl -F file=@… -F minifiedFile=… 命令会随文件大小时好时坏。
+ */
+async function readUpload(request: FastifyRequest): Promise<UploadParts> {
+  const upload: UploadParts = { minifiedFile: '' };
+  // 限制在读取过程中就生效：文件超过 10 MB 会中途报错（413），而不是先把整个文件读进内存再判断。
+  for await (const part of request.parts({
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4 },
+  })) {
+    if (part.type === 'file') {
+      // toBuffer() 把文件读进内存（已被上面的 10 MB 上限约束）；读完才会继续解析后面的部分。
+      upload.file = { filename: part.filename, content: await part.toBuffer() };
+    } else if (part.fieldname === 'minifiedFile') {
+      upload.minifiedFile = String(part.value);
+    }
   }
-  return '';
+  return upload;
 }
 
 export function registerSourceMapRoutes(
@@ -41,37 +62,31 @@ export function registerSourceMapRoutes(
     const release = database.sqlite.prepare('SELECT 1 FROM releases WHERE id = ?').get(id);
     if (!release)
       return reply.code(404).send({ error: 'RELEASE_NOT_FOUND', message: 'Release not found.' });
-    // request.file() 取出请求里的第一个文件。上传是以流的形式到达的，
-    // 这里的限制在读取过程中就生效：超过 10 MB 会中途报错，而不是先把整个文件读进内存再判断。
-    const part = await request.file({
-      limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 4 },
-    });
-    if (!part) {
+    const { file, minifiedFile } = await readUpload(request);
+    if (!file) {
       return reply
         .code(400)
         .send({ error: 'SOURCE_MAP_REQUIRED', message: 'Attach one .map file.' });
     }
-    const minifiedFile = fieldValue(part.fields as Record<string, unknown>, 'minifiedFile');
     if (!minifiedFile) {
       return reply
         .code(400)
         .send({ error: 'MINIFIED_FILE_REQUIRED', message: 'Provide the minified file name.' });
     }
     // 415 Unsupported Media Type：请求格式本身没问题，但上传的文件类型不被接受。
-    if (!part.filename.endsWith('.map')) {
+    if (!file.filename.endsWith('.map')) {
       return reply
         .code(415)
         .send({ error: 'INVALID_SOURCE_MAP_FILE', message: 'Only .map files are accepted.' });
     }
     try {
-      // toBuffer() 把整个文件读进内存（已被上面的 10 MB 上限约束）。
-      // saveSourceMap 还会验证 JSON、version 和 mappings，扩展名检查不是唯一防线。
+      // saveSourceMap 还会验证 JSON、version 和每一条映射，扩展名检查不是唯一防线。
       const record = await saveSourceMap(
         database,
         config.sourceMapDir,
         id,
         minifiedFile,
-        await part.toBuffer(),
+        file.content,
       );
       return reply.code(201).send(record);
     } catch (error) {

@@ -627,6 +627,26 @@ describe('source map failures', () => {
     expect((await ingest('after-undecodable-map')).statusCode).toBe(202);
   });
 
+  it('accepts the minified file name after the file part of a large upload', async () => {
+    // 回归：字段排在文件之后时，读到文件那一刻字段还没解析到，接口回答「请提供 minifiedFile」。
+    // 请求一次到齐的小文件看不出来，所以这里经真实 HTTP 分块上传一份 3 MB 的 map（JSON 允许空白填充）。
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as { port: number };
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([`${VALID_MAP.slice(0, -1)}${' '.repeat(3_000_000)}}`]),
+      'app.aabbccdd.js.map',
+    );
+    form.append('minifiedFile', 'app.aabbccdd.js');
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/v1/releases/demo-release-2-4-1/source-maps`,
+      { method: 'POST', body: form },
+    );
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ minifiedFile: 'app.aabbccdd.js' });
+  });
+
   it('keeps accepting telemetry when a registered map file has been removed', async () => {
     expect((await uploadMap(VALID_MAP)).statusCode).toBe(201);
     for (const file of await readdir(join(directory, 'maps'))) {
