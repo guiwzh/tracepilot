@@ -1,7 +1,12 @@
 # ADR 0002：只读、基于证据的诊断
 
-- 状态：已采纳
+- 状态：已采纳；界面上的诊断流程已由 [ADR 0003](0003-read-only-investigation-agent.md) 取代
 - 日期：2026-08-12
+
+> **现状（2026-09-28）**：工作台不再提供这里描述的单次诊断，改为 ADR 0003 的只读排障 Agent。
+> 单次诊断仍保留为 `POST /api/v1/issues/:issueId/diagnoses` 接口，并作为诊断评测里的对照组。
+> 2026-08-31 起，端点拒绝 Responses API 的结构化输出时会降级到 chat/completions + `json_object`，
+> 两条路径落库前都经过同一个共享 Zod Schema。下文保留决策当时的原文。
 
 ## 决策
 

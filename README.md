@@ -182,20 +182,20 @@ pnpm evaluate:agent
 
 ## 本机实测基线
 
-这些数字来自 2026-09-27 的本地构建与临时数据库，**不代表生产容量**：
+这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库，**不代表生产容量**：
 
 | 指标                                     |                结果 | 复现命令                   |
 | ---------------------------------------- | ------------------: | -------------------------- |
 | SDK 发布产物 minified / gzip             | 17,377 / 5,628 字节 | `pnpm measure:sdk`         |
 | **业务应用实际接入成本** minified / gzip | 25,629 / 8,425 字节 | `pnpm measure:sdk`         |
 | 其中 web-vitals                          |     2,945 字节 gzip | `pnpm measure:sdk`         |
-| `createMonitor()` + `start()` P50 / P95  |          10 / 30 µs | `pnpm measure:sdk-runtime` |
-| 单次 `captureException` P50 / P95        |          4.5 / 9 µs | `pnpm measure:sdk-runtime` |
+| `createMonitor()` + `start()` P50 / P95  |       10 / 50–60 µs | `pnpm measure:sdk-runtime` |
+| 单次 `captureException` P50 / P95        |     4.5 / 9–11.5 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                0 个 | `pnpm measure:sdk-runtime` |
-| 10 事件接入批次 P50 / P95                |   0.93 ms / 1.33 ms | `pnpm benchmark`           |
-| 单 Issue 累积 1 万事件时接入 P50         |             0.91 ms | `pnpm benchmark`           |
+| 10 事件接入批次 P50 / P95                |   1.13 ms / 1.57 ms | `pnpm benchmark`           |
+| 单 Issue 累积 1 万事件时接入 P50         |             1.10 ms | `pnpm benchmark`           |
 | Issue 列表查询 P50 / P95                 |   0.72 ms / 0.78 ms | `pnpm benchmark`           |
-| 图表轮询更新 P50（重建 → 复用）          |      2.39 → 1.24 ms | `pnpm measure:chart`       |
+| 图表轮询更新 P50（重建 → 复用）          |      2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |        1,500 → 0 个 | `pnpm measure:chart`       |
 | 单元 / 集成测试                          |           79 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |      12 / 12 passed | `pnpm test:e2e`            |
@@ -295,7 +295,7 @@ cp .env.example apps/server/.env
 pnpm dev
 ```
 
-通过 pnpm filter 启动时，Server 的工作目录是 apps/server，因此环境文件应放在该目录。
+通过 `pnpm --filter` 启动时，Server 的工作目录是 apps/server，因此环境文件应放在该目录。
 
 - **排障 Agent** 使用 OpenAI 兼容的流式 chat/completions 工具调用，已用 DeepSeek `deepseek-chat` 实测。
   E2E 测试与截图脚本固定走离线脚本，不会消耗模型额度。
@@ -320,7 +320,7 @@ pnpm measure:sdk          # SDK 产物体积与真实接入成本，含预算断
 pnpm measure:sdk-runtime  # 真实浏览器里的运行时开销与泄漏回归
 pnpm measure:chart        # 图表更新策略的对照测量
 pnpm evaluate:diagnosis   # 单次诊断的契约冒烟测试
-pnpm smoke:production     # 加载 ESM/CJS 包并启动构建后的服务端
+pnpm smoke:production     # 加载 ESM/CJS 包，启动构建后的服务端并验证 SIGTERM 优雅退出
 ```
 
 ## API 摘要

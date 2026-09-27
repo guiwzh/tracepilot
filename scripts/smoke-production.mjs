@@ -136,6 +136,18 @@ const processExit = new Promise((resolveExit) => {
 
 try {
   await waitForHealth(`http://127.0.0.1:${port}/health`, processExit);
+  // 部署平台用 SIGTERM 停止实例：服务端应关闭应用（中止调查、关闭数据库）后以 0 退出，
+  // 而不是被信号直接终止。
+  server.kill('SIGTERM');
+  const exited = await Promise.race([
+    processExit,
+    new Promise((resolveWait) => setTimeout(() => resolveWait(null), 5_000)),
+  ]);
+  if (!exited || exited.code !== 0) {
+    throw new Error(
+      `Server did not shut down cleanly on SIGTERM: ${exited ? JSON.stringify(exited) : 'timed out after 5 s'}`,
+    );
+  }
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${serverOutput}`, {
     cause: error,
@@ -145,4 +157,6 @@ try {
   await rm(temporaryRoot, { recursive: true, force: true });
 }
 
-process.stdout.write('Production package imports and server health check passed.\n');
+process.stdout.write(
+  'Production package imports, server health check and graceful shutdown passed.\n',
+);

@@ -47,8 +47,7 @@ function run(command, args) {
 
 /**
  * 测量前强制重新构建。缺了这一步，脚本会称量 dist 里碰巧存在的任何东西——
- * 例如 `pnpm dev` 留下的未压缩产物，那会让报告里的 minifiedBytes 高出约 60%
- * 而不给出任何警告。
+ * 例如切换分支之前留下的旧产物，报告出一个与当前源码无关的数字而不给出任何警告。
  */
 await run('pnpm', ['--filter', '@trace-pilot/shared', 'run', 'build']);
 await run('pnpm', ['--filter', '@trace-pilot/monitor-sdk', 'run', 'build']);
@@ -56,13 +55,13 @@ await run('pnpm', ['--filter', '@trace-pilot/monitor-sdk', 'run', 'build']);
 const artifact = await readFile(artifactPath);
 const artifactText = artifact.toString('utf8');
 
-// 即使刚刚构建过，也复核产物确实经过压缩：万一构建脚本被改掉丢了 --minify，
+// 即使刚刚构建过，也复核产物确实经过压缩：万一构建配置里的 minify 被删掉，
 // 这里要直接失败，而不是安静地报告一个更大的数字。
 const lineCount = artifactText.split('\n').length;
 if (lineCount > 5 || artifactText.includes('\n  ')) {
   console.error(
     `产物看起来未经压缩（${lineCount} 行，且包含缩进）。\n` +
-      '请检查 packages/monitor-sdk 的 build 脚本是否仍带 --minify。',
+      '请检查 packages/monitor-sdk/tsdown.config.ts 是否仍设置 minify: true。',
   );
   process.exit(1);
 }

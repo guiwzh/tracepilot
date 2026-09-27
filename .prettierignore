@@ -1,0 +1,2 @@
+# 由 pnpm 生成，格式以包管理器为准；用 Prettier 改写会让下一次 install 产生无意义的差异。
+pnpm-lock.yaml
