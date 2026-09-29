@@ -41,8 +41,8 @@ pnpm install && pnpm seed && pnpm dev
 **方案**　普通发送去掉 keepalive；退出时按 60 KB 切块交给 beacon，浏览器拒收的部分写进
 localStorage 下次加载补发；两条路径都改用 `text/plain`（CORS 安全列表类型，不触发预检），服务端
 只在接入路由的封装作用域里把它解析为 JSON。顺带补上：按字节切批、超大事件先截断长字符串再从最旧
-一端丢 breadcrumb、除 408 / 429 以外的 4xx 拒收直接丢弃不再堵队、退出时把在途批次一并交给 beacon。投递语义是「至少
-一次」，重复由服务端按 `eventId` 幂等去重。
+一端丢 breadcrumb、除 408 / 429 以外的 4xx 拒收直接丢弃不再堵队、退出时把在途批次一并交给
+beacon。投递语义是「至少一次」，重复由服务端按 `eventId` 幂等去重。
 
 **结果**　`tests/e2e/sdk-delivery.spec.ts` 用 SDK 默认配置、真实 Chrome、真实跨域服务端验证：
 
