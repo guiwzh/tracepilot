@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Metric } from 'web-vitals';
 import type { MonitorEvent } from '@trace-pilot/shared';
-import type { PluginContext } from '../types';
+import type { PluginContext } from '../../src/types';
 
 /**
  * web-vitals 被替换成可手动触发的假实现：指标算法由官方库负责并有它自己的测试，
@@ -41,7 +41,7 @@ function emit(name: Metric['name'], value: number, id = `v6-${name}-1`): void {
 
 // 插件的单例状态是模块级的，每个用例重新加载模块，互不影响。
 async function freshPlugin() {
-  const { PerformancePlugin } = await import('./PerformancePlugin');
+  const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
   return new PerformancePlugin();
 }
 
@@ -112,7 +112,7 @@ describe('PerformancePlugin', () => {
   });
 
   it('registers web-vitals once per page however many times monitors start and stop', async () => {
-    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
     const first = fakeContext();
     for (let round = 0; round < 3; round += 1) {
       const plugin = new PerformancePlugin();
@@ -128,7 +128,7 @@ describe('PerformancePlugin', () => {
   });
 
   it('replays metrics that arrived before a later instance started', async () => {
-    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
     const early = new PerformancePlugin();
     early.setup(fakeContext().context);
     emit('TTFB', 320);
@@ -152,8 +152,8 @@ describe('PerformancePlugin', () => {
    * 这两条测试接真实核心，堵住那个盲区。
    */
   it('delivers pending metrics with the exit flush when the real core is destroyed', async () => {
-    const { MonitorCore } = await import('../core/MonitorCore');
-    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const { MonitorCore } = await import('../../src/core/MonitorCore');
+    const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
     const monitor = new MonitorCore({
       dsn: 'http://localhost/envelopes',
       dsnKey: 'test-key',
@@ -175,8 +175,8 @@ describe('PerformancePlugin', () => {
   });
 
   it('submits the latest values before the exit flush when the page is hidden', async () => {
-    const { MonitorCore } = await import('../core/MonitorCore');
-    const { PerformancePlugin } = await import('./PerformancePlugin');
+    const { MonitorCore } = await import('../../src/core/MonitorCore');
+    const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
     const monitor = new MonitorCore({
       dsn: 'http://localhost/envelopes',
       dsnKey: 'test-key',

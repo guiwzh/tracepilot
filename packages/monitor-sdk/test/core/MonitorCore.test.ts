@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
-import { createMonitor } from '../index';
-import { ErrorPlugin } from '../plugins/ErrorPlugin';
-import type { MonitorPlugin, PluginContext } from '../types';
-import { MonitorCore } from './MonitorCore';
+import { createMonitor } from '../../src/index';
+import { ErrorPlugin } from '../../src/plugins/ErrorPlugin';
+import type { MonitorPlugin, PluginContext } from '../../src/types';
+import { MonitorCore } from '../../src/core/MonitorCore';
 
 // 直接实例化核心，隔离验证插件幂等、短窗口去重、脱敏和 beforeSend 边界。
 function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> = {}) {

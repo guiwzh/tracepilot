@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
-import { Transport, utf8Length, type TransportInit } from './Transport';
+import { Transport, utf8Length, type TransportInit } from '../../src/transport/Transport';
 
 // 注入假的 fetch / sendBeacon / storage，让每条发送路径完全可控，不依赖真实网络。
 const event: MonitorEvent = {

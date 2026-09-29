@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { reactErrorHandler } from './react';
+import { reactErrorHandler } from '../../src/integrations/react';
 
 describe('reactErrorHandler', () => {
   it('reports errors React handed to the root callbacks, with the component stack', () => {

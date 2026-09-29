@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../types';
-import { ErrorPlugin } from './ErrorPlugin';
-import { PromisePlugin } from './PromisePlugin';
+import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../../src/types';
+import { ErrorPlugin } from '../../src/plugins/ErrorPlugin';
+import { PromisePlugin } from '../../src/plugins/PromisePlugin';
 
 function recordingContext() {
   const events: CapturePayload[] = [];

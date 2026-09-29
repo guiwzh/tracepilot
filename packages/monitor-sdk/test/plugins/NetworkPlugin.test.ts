@@ -4,8 +4,8 @@ import type {
   CapturePayload,
   PluginContext,
   ResolvedMonitorOptions,
-} from '../types';
-import { NetworkPlugin } from './NetworkPlugin';
+} from '../../src/types';
+import { NetworkPlugin } from '../../src/plugins/NetworkPlugin';
 
 const DSN = 'https://ingest.test/api/v1/envelopes';
 

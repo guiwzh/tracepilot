@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../types';
-import { ResourcePlugin } from './ResourcePlugin';
+import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../../src/types';
+import { ResourcePlugin } from '../../src/plugins/ResourcePlugin';
 
 let plugin: ResourcePlugin | undefined;
 

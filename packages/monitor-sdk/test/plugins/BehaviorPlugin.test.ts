@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BreadcrumbInput, PluginContext, ResolvedMonitorOptions } from '../types';
-import { BehaviorPlugin, elementLabel } from './BehaviorPlugin';
+import type { BreadcrumbInput, PluginContext, ResolvedMonitorOptions } from '../../src/types';
+import { BehaviorPlugin, elementLabel } from '../../src/plugins/BehaviorPlugin';
 
 function mount(html: string): HTMLElement {
   const host = document.createElement('div');
