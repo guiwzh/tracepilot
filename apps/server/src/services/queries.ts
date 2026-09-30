@@ -1,4 +1,5 @@
 import {
+  stripUrlQuery,
   WEB_VITAL_THRESHOLDS,
   type Breadcrumb,
   type Issue,
@@ -391,12 +392,17 @@ interface PerformanceSample {
 /** 归因里带元素的指标。 */
 const ELEMENT_METRICS: readonly PerformanceMetricName[] = ['LCP', 'CLS', 'INP'];
 
+/**
+ * 样本所在的路由：路径，加上 #/cart 这样的 hash 路由（与脱敏规则一致，查询参数和其他片段不算）。
+ * 旧版本 SDK 不带 route 时从页面地址里取。
+ */
 function routeName(pageUrl: string, route?: string): string {
-  if (route) return route.replace(/[?#].*$/, '') || '/';
+  if (route) return stripUrlQuery(route) || '/';
   try {
-    return new URL(pageUrl).pathname || '/';
+    const url = new URL(pageUrl);
+    return stripUrlQuery(`${url.pathname}${url.hash}`) || '/';
   } catch {
-    return pageUrl.replace(/[?#].*$/, '') || 'Unknown';
+    return stripUrlQuery(pageUrl) || 'Unknown';
   }
 }
 

@@ -349,6 +349,68 @@ describe('telemetry ingestion', () => {
     ]);
   });
 
+  it('keeps hash routes apart but drops their parameters and other fragments', async () => {
+    // hash 路由的应用（/app#/cart）靠片段区分页面；路由自己的参数、#access_token=… 这类片段照样去掉。
+    const routed = event('hash-route-event', '93849203');
+    routed.page = {
+      url: 'https://shop.test/app#/checkout?coupon=private-coupon',
+      route: '/app#/checkout?coupon=private-coupon',
+    };
+    routed.breadcrumbs = [
+      {
+        id: 'navigation-breadcrumb',
+        type: 'navigation',
+        category: 'route',
+        message: 'pushState → /app#/checkout?coupon=private-coupon',
+        timestamp: routed.timestamp - 1,
+        data: { url: 'https://shop.test/app#access_token=private-token' },
+      },
+    ];
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events: [routed] },
+    });
+    const issueId = response.json().issueIds[0] as string;
+    const detail = await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}` });
+    expect(detail.body).not.toContain('private-coupon');
+    expect(detail.body).not.toContain('private-token');
+    expect(detail.json().sampleEvent).toMatchObject({
+      pageUrl: 'https://shop.test/app#/checkout',
+      context: { page: { url: 'https://shop.test/app#/checkout', route: '/app#/checkout' } },
+      breadcrumbs: [
+        { message: 'pushState → /app#/checkout', data: { url: 'https://shop.test/app' } },
+      ],
+    });
+
+    // 按路由比较性能时，每个 hash 路由各算一个。
+    const vital = (id: string, route: string, value: number) => ({
+      ...event(id, '12345678'),
+      eventType: 'performance' as const,
+      page: { url: `https://shop.test${route}`, route },
+      payload: { metric: 'LCP', value, rating: 'good', metricId: id },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [
+          vital('lcp-cart', '/app#/cart', 1_800),
+          vital('lcp-checkout', '/app#/checkout?step=2', 2_600),
+        ],
+      },
+    });
+    const overview = (
+      await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/performance' })
+    ).json();
+    expect(overview.byRoute.map((item: { name: string }) => item.name).sort()).toEqual([
+      '/app#/cart',
+      '/app#/checkout',
+    ]);
+  });
+
   it('counts only issue events and the users who hit them in the overview', async () => {
     // 回归：性能样本曾一并计入「24 小时事件数」和「受影响用户」，
     // 于是每个只上报过一次指标的访客都被算作受影响。
@@ -460,6 +522,28 @@ describe('telemetry ingestion', () => {
       });
       expect(detail.json().browserDistribution).toEqual([{ name: browser, value: 1 }]);
     }
+  });
+
+  it('hides the details of every server-side failure, not only a 500', async () => {
+    // 回归：带 statusCode 抛出的 502、503 曾原样返回错误消息，可能带出上游或数据库的细节。
+    app.get('/test/upstream-failure', async () => {
+      throw Object.assign(new Error('upstream refused: user=admin host=db.internal:5432'), {
+        statusCode: 503,
+      });
+    });
+    app.get('/test/bad-input', async () => {
+      throw Object.assign(new Error('page must be a number'), { statusCode: 400 });
+    });
+    const upstream = await app.inject({ method: 'GET', url: '/test/upstream-failure' });
+    expect(upstream.statusCode).toBe(503);
+    expect(upstream.json()).toEqual({
+      error: 'INTERNAL_SERVER_ERROR',
+      message: 'The request could not be completed.',
+    });
+    // 4xx 保留原因，调用方才知道该改什么。
+    const bad = await app.inject({ method: 'GET', url: '/test/bad-input' });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json()).toEqual({ error: 'REQUEST_FAILED', message: 'page must be a number' });
   });
 
   it('lets cross-origin SDKs read Retry-After', async () => {

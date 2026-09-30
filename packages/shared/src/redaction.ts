@@ -1,5 +1,6 @@
 /**
- * 脱敏：遮蔽令牌、密码等敏感字段，删除 URL 里的查询参数。
+ * 脱敏：遮蔽令牌、密码等敏感字段，删除 URL 里的查询参数和片段（#…）。
+ * 片段是 #/cart、#!/cart 这样的前端路由时保留路由本身，只去掉它自己的参数：hash 路由的应用靠它区分页面。
  * 同一套规则用在三处：SDK 在事件离开页面之前，服务端入库时（把客户端数据视为不可信，再做一遍），
  * 以及发给模型之前。
  */
@@ -12,25 +13,42 @@ export function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY.test(key);
 }
 
+/**
+ * 片段里要保留的部分：#/cart、#!/cart 这样的前端路由，只取到第一个 ?、& 或 # 为止
+ * （#/cart?coupon=… → #/cart）：后面是路由自己的参数，可能带令牌。
+ * 其余片段整个去掉：OAuth 隐式授权把 #access_token=… 放在这里，页内锚点（#reviews）也不是路由。
+ */
+function hashRoute(fragment: string): string {
+  return /^#!?\//.test(fragment) ? `#${fragment.slice(1).replace(/[?&#].*$/, '')}` : '';
+}
+
+/** 不经 URL 解析、按字符串去掉查询参数和片段（保留 hash 路由）；用于文本里的地址和解析失败的值。 */
+function withoutQuery(value: string): string {
+  const hash = value.indexOf('#');
+  const address = hash === -1 ? value : value.slice(0, hash);
+  return `${address.replace(/\?.*$/, '')}${hash === -1 ? '' : hashRoute(value.slice(hash))}`;
+}
+
 export function stripUrlQuery(value: string): string {
   try {
     // 第二个参数让 /checkout 这类相对 URL 也能由 URL 类解析。
     const url = new URL(value, 'http://tracepilot.local');
+    const route = hashRoute(url.hash);
     url.search = '';
     url.hash = '';
-    return url.origin === 'http://tracepilot.local' ? `${url.pathname}` : url.toString();
+    return `${url.origin === 'http://tracepilot.local' ? url.pathname : url.toString()}${route}`;
   } catch {
     // 非标准 URL 无法解析时，仍尽力删除 ?query 和 #fragment。
-    return value.replace(/[?#].*$/, '');
+    return withoutQuery(value);
   }
 }
 
 export function stripUrlQueriesInText(value: string): string {
   // 错误消息和 Breadcrumb 往往把 URL 嵌在一段文本里，所以不能只处理“值本身就是 URL”的情况。
   return value
-    .replace(/(?:https?:\/\/|\/\/)[^\s<>"']*[?#][^\s<>"']*/gi, (url) => url.replace(/[?#].*$/, ''))
+    .replace(/(?:https?:\/\/|\/\/)[^\s<>"']*[?#][^\s<>"']*/gi, (url) => withoutQuery(url))
     .replace(/(^|[\s(→=])((?:\/|\.\.?\/)[^\s<>"']*[?#][^\s<>"']*)/g, (_match, prefix, url) => {
-      return `${String(prefix)}${String(url).replace(/[?#].*$/, '')}`;
+      return `${String(prefix)}${withoutQuery(String(url))}`;
     });
 }
 

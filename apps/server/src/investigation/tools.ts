@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { zodFunction } from 'openai/helpers/zod';
 import type { ChatCompletionFunctionTool } from 'openai/resources/chat/completions';
-import { redactSensitive, submittedReportSchema, type Breadcrumb } from '@trace-pilot/shared';
+import {
+  isFailedRequest,
+  redactSensitive,
+  submittedReportSchema,
+  type Breadcrumb,
+} from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { browserName } from '../lib/userAgent';
 import { getIssue, listIssueEvents, mapEvent } from '../services/queries';
@@ -93,6 +98,15 @@ function condenseStack(stack: string): string {
   return kept.join('\n');
 }
 
+/** 一条请求的结果：状态码；被取消的写 aborted，拿不到响应的写明是网络错误（状态码 0 本身看不出原因）。 */
+function requestResult(data: Record<string, unknown>): string {
+  if (data.aborted === true) return 'aborted';
+  if (Number(data.status) === 0 && isFailedRequest(data)) {
+    return `network error${data.error ? ` (${String(data.error)})` : ''}`;
+  }
+  return String(data.status ?? '?');
+}
+
 function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
   const offset = seconds(item.timestamp - eventTime);
   if (item.type === 'network' && item.data) {
@@ -101,7 +115,7 @@ function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
       item.data.businessCode === undefined
         ? ''
         : ` business error ${String(item.data.businessCode)}${item.data.businessMessage ? `: ${String(item.data.businessMessage)}` : ''}`;
-    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${String(item.data.status ?? '?')}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
+    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${requestResult(item.data)}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
   }
   const count = Number(item.data?.count) > 1 ? ` (×${String(item.data?.count)})` : '';
   return `${offset} ${item.type} ${item.message}${count}`;
@@ -185,11 +199,10 @@ const getEventDetail = defineTool({
   execute: ({ eventId }, context) => {
     const event = findEvent(context, eventId);
     const payload = event.context.payload;
-    // 4xx 默认不成为事件，但仍是值得一看的证据；业务码表示失败的 2xx 也算。
+    // 规则见 shared 的 isFailedRequest：4xx 默认不成为事件但仍是证据，拿不到响应的网络错误、
+    // 业务码表示失败的 2xx 也算；被取消的不算。
     const failed = event.breadcrumbs.filter(
-      (item) =>
-        item.type === 'network' &&
-        (Number(item.data?.status ?? 0) >= 400 || item.data?.businessCode !== undefined),
+      (item) => item.type === 'network' && isFailedRequest(item.data),
     );
     return {
       eventId: event.id,

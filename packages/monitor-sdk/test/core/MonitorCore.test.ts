@@ -500,6 +500,23 @@ describe('MonitorCore', () => {
     history.replaceState({}, '', '/');
   });
 
+  it('keeps the hash route of a hash-routed app but not its parameters', () => {
+    // hash 路由的应用靠片段区分页面：事件的 route、白屏消息这类带路由的文字都要保留它，
+    // 路由自己的参数照样去掉。
+    history.replaceState({}, '', '/app#/checkout?coupon=private');
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.captureMessage('Blank page on /app#/checkout?coupon=private');
+
+    expect(events[0]!.page).toMatchObject({
+      url: `${location.origin}/app#/checkout`,
+      route: '/app#/checkout',
+    });
+    expect(events[0]!.payload.message).toBe('Blank page on /app#/checkout');
+    monitor.destroy();
+    history.replaceState({}, '', '/');
+  });
+
   it('reports through flush() whether events actually reached the server', async () => {
     const monitor = core({ maxRetries: 0 });
     vi.mocked(window.fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'));

@@ -19,8 +19,8 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 9,434 字节；业务应用打包后实际多付出 15,048 字节，
-其中 `web-vitals`（归因版本）约 5,275 字节。
+体积（`pnpm measure:sdk`，gzip）：发布产物 9,434 字节；业务应用打包后实际多付出 15,135 字节，
+其中 `web-vitals`（归因版本）约 5,272 字节。
 
 ## 2. 代码结构
 
@@ -232,8 +232,8 @@ flowchart TD
 
 - `eventId`：优先 `crypto.randomUUID()`；`timestamp`：`Date.now()`，服务端会按 `sentAt` 校正设备时钟。
 - `sampleRate`：这个事件生效的采样率，性能样本是两个采样率的乘积。
-- `page`：`url`（`location.href`）、`route`（采集时是路径加 hash）、`title`、`referrer`，整体脱敏。URL 类字段的查询参数
-  和片段都会被去掉，所以上报的 `route` 只剩路径（见第 14 节）。
+- `page`：`url`（`location.href`）、`route`（路径加 hash）、`title`、`referrer`，整体脱敏：查询参数和片段都去掉，
+  `#/cart` 这样的 hash 路由保留（规则见 8.1）。
 - `device`：`userAgent`、`language`、视口宽高。
 - `payload`：按 `redactPayload` 脱敏，堆栈字段保留行列号（见第 8 节）。
 - `breadcrumbs`：性能事件为空数组，其余事件带上当前面包屑的副本。
@@ -385,7 +385,9 @@ Caused by: TypeError: Failed to fetch
 - **敏感字段**：键名包含 `authorization`、`cookie`、`password`、`passwd`、`secret`、`token`、`api_key` /
   `api-key` / `apikey`（不区分大小写，`accessToken`、`clientSecret` 也算）的，值整体替换为 `[REDACTED]`。
 - **地址字段**：`url`、`href`、`referrer`、`route`、`endpoint`、`requestUrl` 等键的值去掉查询参数和片段。
-- **文本**：嵌在文字里的 URL 同样去掉查询参数和片段；`Bearer xxx` 和 `?token=`、`&key=` 这类参数值被遮蔽。
+  片段是 `#/cart`、`#!/cart` 这样的前端路由时保留路由，只去掉它自己的参数（到第一个 `?`、`&` 或 `#` 为止）：
+  hash 路由的应用靠它区分页面。`#access_token=…`（OAuth 隐式授权的回调）这类片段和页内锚点整个去掉。
+- **文本**：嵌在文字里的 URL 和路径按同样的规则处理；`Bearer xxx` 和 `?token=`、`&key=` 这类参数值被遮蔽。
 - **堆栈**（`redactStack`）：栈帧只删掉文件名与 `:行:列` 之间的查询参数，保留行列号。通用的文本规则会把
   `app.js?v=3:1:420)` 从问号起整段删掉，服务端就无法再用 Source Map 还原这一帧。其余行（错误消息）按文本规则。
 - 嵌套深度超过 8 层的部分替换为 `[Max depth]`，防止恶意构造的超深对象拖慢页面。
@@ -777,8 +779,8 @@ createMonitor({
 
 **产出**：`captureEvent('error', …)`，`name: 'WhiteScreen'`、`message: 'Blank page on /checkout/review'`，
 另带 `mechanism: 'white-screen'`、`trigger`（`load` 或 `route`）、空白的采样点数和总数、持续空白的时长。
-服务端按消息聚合，每个路由的白屏是一个 Issue（消息里的 hash 会被脱敏去掉，hash 路由的应用按路径聚合，见第 14 节）；
-事件带着面包屑，能看到白屏之前发生了什么，例如某个接口失败了。
+消息里是路由（路径加 hash 路由），服务端按消息聚合，每个路由的白屏是一个 Issue；事件带着面包屑，能看到白屏之前
+发生了什么，例如某个接口失败了。
 
 ```ts
 createMonitor({
@@ -900,8 +902,8 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
 | 发布产物 `dist/index.js` | 29,608 |  9,434 | 10,800 |
-| 业务应用实际接入成本     | 45,585 | 15,048 | 17,300 |
-| 其中 `web-vitals`        |      — |  5,275 |      — |
+| 业务应用实际接入成本     | 45,747 | 15,135 | 17,300 |
+| 其中 `web-vitals`        |      — |  5,272 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
 白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
@@ -909,13 +911,13 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 13. 测试与质量保障
 
-**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，88 项）。`test/setup.ts` 为每个用例把
+**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，89 项）。`test/setup.ts` 为每个用例把
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
 | 测试文件                            | 覆盖                                                                                                                                                                                                             |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、`flush()` 的投递状况、配置规范化                            |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、`flush()` 的投递状况、配置规范化            |
 | `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                |
 | `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                     |
 | `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                             |
@@ -960,10 +962,6 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 - **cause 链作为文本接在堆栈后面**：指纹只由最外层错误决定，同一个包装错误、不同的根因会聚到同一个 Issue 里
   （Sentry 按整条异常链分组，能把它们分开）。单个事件超过 32 KB 时，传输层把超长字符串截到 4,000 字符、
   保留开头，接在尾部的 cause 链会先被截掉。
-- **hash 路由只剩路径**：脱敏规则去掉 URL 的查询参数和片段（片段里也可能带令牌，例如 OAuth 隐式授权回调的
-  `#access_token=…`），`page.route`、导航面包屑和白屏消息里的 hash 因此都会被去掉，服务端按路由统计性能时
-  也只看路径。用 hash 路由（`/#/cart`）的应用，按路由的比较和白屏 Issue 都会并到同一个路径上；检测本身不受
-  影响，路由变化和白屏判断都在脱敏之前进行。
 - **控制台被包装之后**，开发者工具里 warn、error 的来源位置可能显示为 SDK 的包装函数；包装 `console` 的 SDK
   都有这个问题，打包工具把 SDK 列入忽略列表（ignore list）时会跳过它。不需要时设 `consoleBreadcrumbs: false`。
 - **单页应用的指标按整次页面加载计算**：web-vitals 以真正的页面加载为单位，切换路由不会重新计算 LCP；

@@ -127,7 +127,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   // 任何路由里抛出、没有被自己处理的错误都会落到这里（包括代码 bug）。
   app.setErrorHandler((error, request, reply) => {
-    // 详细错误只进入服务端日志；500 响应不把堆栈和数据库细节暴露给浏览器。
+    // 详细错误只进入服务端日志；5xx 响应不把堆栈、上游和数据库的细节暴露给浏览器。
     request.log.error({ err: error }, 'request failed');
     // 框架或插件抛出的错误常带 statusCode（例如 413 请求体过大、400 非法 JSON），沿用它；
     // 没有的就是意料之外的问题，一律按 500 处理。
@@ -137,10 +137,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         : 500;
     const status = statusCode >= 400 ? statusCode : 500;
     const message = error instanceof Error ? error.message : 'Unknown request error';
+    // 4xx 是客户端的问题，保留原因方便调用方修正；5xx 只给一句模糊描述。曾经只对恰好 500 这样处理，
+    // 带 statusCode 抛出的 502、503 会把原始错误消息（可能带着上游或数据库的细节）原样返回。
+    const serverError = status >= 500;
     return reply.code(status).send({
-      error: status === 500 ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED',
-      // 4xx 是客户端的问题，保留原因方便调用方修正；500 只给一句模糊描述。
-      message: status === 500 ? 'The request could not be completed.' : message,
+      error: serverError ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED',
+      message: serverError ? 'The request could not be completed.' : message,
     });
   });
 

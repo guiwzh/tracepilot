@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import {
   diagnosisResultSchema,
+  isFailedRequest,
   PROMPT_VERSION,
   redactSensitive,
   type DiagnosisRecord,
@@ -59,15 +60,29 @@ interface ModelResult {
 
 function failedRequests(event: StoredEvent): Array<Record<string, unknown>> {
   // 只保留最近 5 个失败请求和少量字段，控制模型输入大小并排除请求体。
+  // 什么算失败见 shared 的 isFailedRequest：包括拿不到响应的网络错误和业务码表示失败的 2xx。
   return event.breadcrumbs
-    .filter((item) => item.type === 'network' && Number(item.data?.status ?? 0) >= 400)
+    .filter((item) => item.type === 'network' && isFailedRequest(item.data))
     .slice(-5)
     .map((item) => ({
       method: item.data?.method,
       url: item.data?.url,
       status: item.data?.status,
       duration: item.data?.duration,
+      ...(item.data?.error === undefined ? {} : { error: item.data.error }),
+      ...(item.data?.businessCode === undefined ? {} : { businessCode: item.data.businessCode }),
     }));
+}
+
+/** 本地规则引擎写证据时，一个失败请求的结果：业务码、网络错误或状态码。 */
+function failureOutcome(failed: Record<string, unknown>): string {
+  if (failed.businessCode !== undefined) {
+    return `returned ${String(failed.status)} with business code ${String(failed.businessCode)}`;
+  }
+  if (Number(failed.status) === 0) {
+    return `failed without a response${failed.error ? ` (${String(failed.error)})` : ''}`;
+  }
+  return `returned ${String(failed.status ?? 'an error')}`;
 }
 
 /** 从数据库组装某个 Issue 的证据快照；Issue 不存在时返回 null。 */
@@ -144,7 +159,7 @@ function evidenceFromContext(context: DiagnosisContext): DiagnosisResult['eviden
   const failed = context.recentEvents.flatMap((event) => event.failedRequests)[0];
   if (failed) {
     evidence.push({
-      description: `${String(failed.method ?? 'Request')} ${String(failed.url ?? 'unknown URL')} returned ${String(failed.status ?? 'an error')}.`,
+      description: `${String(failed.method ?? 'Request')} ${String(failed.url ?? 'unknown URL')} ${failureOutcome(failed)}.`,
       source: 'network',
     });
   }

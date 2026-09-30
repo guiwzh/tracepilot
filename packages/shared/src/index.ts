@@ -6,5 +6,6 @@
 export * from './constants';
 export * from './investigation';
 export * from './redaction';
+export * from './requests';
 export * from './schemas';
 export * from './types';

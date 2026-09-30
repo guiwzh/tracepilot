@@ -195,8 +195,8 @@ pnpm evaluate:agent
 | 指标                                     |                       结果 | 复现命令                   |
 | ---------------------------------------- | -------------------------: | -------------------------- |
 | SDK 发布产物 minified / gzip             |        29,608 / 9,434 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip |       45,585 / 15,048 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals（归因版）                |            5,275 字节 gzip | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |       45,747 / 15,135 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |            5,272 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95¹ |            60 / 190–400 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95¹       |           30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                       0 个 | `pnpm measure:sdk-runtime` |
@@ -207,7 +207,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 187 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 197 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -385,8 +385,8 @@ pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场
 
 ## 安全边界与已知限制
 
-- SDK 发出之前、服务端入库时、发给模型之前各脱敏一次：清理 URL 查询参数与片段、Authorization、Cookie、
-  密码、Token、Secret 和 API Key 形态字段。点击 Breadcrumb 不记录容器里的页面文字。
+- SDK 发出之前、服务端入库时、发给模型之前各脱敏一次：清理 URL 查询参数与片段（`#/cart` 这样的 hash 路由
+  保留路由本身）、Authorization、Cookie、密码、Token、Secret 和 API Key 形态字段。点击 Breadcrumb 不记录容器里的页面文字。
 - 请求体默认不采集；Source Map 目录、SQLite 文件和 `.env` 均被 Git 忽略。
 - 排障 Agent 没有 Shell、文件、Git、浏览器或任何写入工具；源码片段会发给模型服务商，可关闭。
 - **当前是本地单用户 MVP**：没有身份认证、租户隔离、生产限流和数据保留策略。管理类接口在本地是开放的，

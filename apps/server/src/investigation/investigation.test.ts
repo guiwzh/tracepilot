@@ -7,6 +7,7 @@ import type { InvestigationRun, InvestigationStreamEvent } from '@trace-pilot/sh
 import { buildApp, type BuildAppOptions } from '../app';
 import type { ServerConfig } from '../config';
 import { createDatabase } from '../db/client';
+import { buildDiagnosisContext } from '../services/diagnosis';
 import { seedDemoData, seedDemoSourceMaps } from '../seed';
 import type { ModelClient, ModelRequest, ModelTurn } from './model';
 import { runTool } from './tools';
@@ -296,6 +297,91 @@ describe('investigation agent', () => {
       expect(detail.stack.split('\n')).toHaveLength(12 + 2);
       expect(detail.stack).toContain('Caused by: TypeError: Failed to fetch');
       expect(detail.stack).toContain('at request (https://shop.example/assets/api.js:2:30)');
+    } finally {
+      database.close();
+    }
+  });
+
+  it('counts requests that got no response as failed, but not cancelled ones', async () => {
+    // 回归：失败请求只挑状态码 ≥ 400 的，断网、跨域被拦这类拿不到响应的请求（状态码 0）
+    // 从不出现在失败请求里，Agent 和单次诊断都看不到它们。
+    await start();
+    const now = Date.now();
+    const request = (id: string, url: string, data: Record<string, unknown>, before: number) => ({
+      id,
+      type: 'network',
+      category: 'http',
+      message: `GET ${url}`,
+      timestamp: now - before,
+      data: { method: 'GET', url, duration: 120, ...data },
+    });
+    const ingest = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: now,
+        events: [
+          {
+            eventId: 'offline-failure',
+            eventType: 'error',
+            timestamp: now,
+            projectId: 'demo-project',
+            release: '2.4.1',
+            environment: 'production',
+            page: { url: 'https://shop.example/checkout' },
+            device: { userAgent: 'Chrome/140' },
+            payload: { name: 'TypeError', message: 'Failed to fetch' },
+            breadcrumbs: [
+              request(
+                'cart',
+                'https://shop.example/api/cart',
+                { status: 200, success: true },
+                3_000,
+              ),
+              request(
+                'search',
+                'https://shop.example/api/search',
+                { status: 0, success: false, aborted: true },
+                2_000,
+              ),
+              request(
+                'pay',
+                'https://shop.example/api/pay',
+                { status: 0, success: false, error: 'Failed to fetch' },
+                1_000,
+              ),
+            ],
+          },
+        ],
+      },
+    });
+    const [issue] = (ingest.json() as { issueIds: string[] }).issueIds;
+    const database = createDatabase(config.databasePath);
+    try {
+      const result = await runTool(
+        'get_event_detail',
+        JSON.stringify({ eventId: 'offline-failure' }),
+        { database, issueId: issue!, projectId: 'demo-project', allowSourceContext: true },
+      );
+      const detail = JSON.parse(result.output) as { failedRequests: string[]; timeline: string[] };
+      expect(detail.failedRequests).toEqual([
+        '-1.0s network GET https://shop.example/api/pay → network error (Failed to fetch) (120 ms)',
+      ]);
+      // 被取消的请求不算失败，时间线里写明是取消，而不是一个看不出原因的状态码 0。
+      expect(detail.timeline).toContain(
+        '-2.0s network GET https://shop.example/api/search → aborted (120 ms)',
+      );
+      // 单次诊断的证据快照用同一条规则。
+      expect(buildDiagnosisContext(database, issue!)?.recentEvents[0]?.failedRequests).toEqual([
+        {
+          method: 'GET',
+          url: 'https://shop.example/api/pay',
+          status: 0,
+          duration: 120,
+          error: 'Failed to fetch',
+        },
+      ]);
     } finally {
       database.close();
     }

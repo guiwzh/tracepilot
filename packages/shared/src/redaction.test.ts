@@ -7,6 +7,30 @@ describe('privacy helpers', () => {
     expect(stripUrlQuery('https://shop.test/pay?token=secret#step')).toBe('https://shop.test/pay');
   });
 
+  it('keeps a hash route but drops its parameters and any other fragment', () => {
+    // hash 路由的应用（/#/cart）靠片段区分页面；路由自己的参数和其他片段（令牌、页内锚点）照样去掉。
+    expect(stripUrlQuery('https://shop.test/app?token=1#/checkout?coupon=A')).toBe(
+      'https://shop.test/app#/checkout',
+    );
+    expect(stripUrlQuery('/app#!/orders/42')).toBe('/app#!/orders/42');
+    expect(stripUrlQuery('/app#/callback&access_token=abc')).toBe('/app#/callback');
+    expect(stripUrlQuery('https://shop.test/callback#access_token=abc&state=1')).toBe(
+      'https://shop.test/callback',
+    );
+    expect(stripUrlQuery('/docs#reviews')).toBe('/docs');
+    expect(
+      redactSensitive({
+        route: '/app#/cart?step=2',
+        message: 'Blank page on /app#/checkout?step=2',
+        data: { url: 'https://shop.test/app#access_token=abc' },
+      }),
+    ).toEqual({
+      route: '/app#/cart',
+      message: 'Blank page on /app#/checkout',
+      data: { url: 'https://shop.test/app' },
+    });
+  });
+
   it('redacts sensitive keys at any depth', () => {
     expect(redactSensitive({ headers: { Authorization: 'Bearer abc' }, password: '123' })).toEqual({
       headers: { Authorization: '[REDACTED]' },

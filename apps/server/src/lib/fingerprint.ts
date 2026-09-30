@@ -52,17 +52,22 @@ export function normalizeDisplayTitle(input: string): string {
 }
 
 /**
- * 取堆栈里第一行带 URL、路径或 .js 文件名的文本，通常就是栈顶帧。它最接近出错点，比完整堆栈更适合参与指纹：
+ * 栈帧：以「:行:列」结尾的一行。V8 的 "at fn (url:1:2)"、Firefox / Safari 的 "fn@url:1:2" 都是；
+ * 与 SDK 去重签名取首帧用的是同一条规则（monitor-sdk 的 core/helpers.ts 里的 firstFrame）。
+ */
+const FRAME_LINE = /:\d+:\d+\)?$/;
+
+/**
+ * 取堆栈里的第一个栈帧。它最接近出错点，比完整堆栈更适合参与指纹：
  * 完整堆栈会随调用路径（从哪个页面、哪个按钮进来）变化，同一个 bug 会被拆开。
- * 注意 V8 堆栈的第一行是错误消息：消息里带 `/`（例如请求地址）时，取到的是消息行而不是栈帧。
+ * 曾经把「第一行带 URL 或路径的文本」当作栈帧：V8 堆栈的第一行是错误消息，消息里带 `/`（例如请求地址）时
+ * 取到的是消息行，同一条消息、不同出错位置的错误被并成了一个 Issue。没有栈帧时退回第一行。
  */
 export function topStackFrame(stack?: string): string {
   if (!stack) return 'no-stack';
-  const line = stack
-    .split('\n')
-    .map((item) => item.trim())
-    .find((item) => /(?:https?:\/\/|\/|\w+\.js):?\d*/.test(item));
-  return normalizeMessage(line ?? stack.split('\n')[0] ?? 'no-stack');
+  const lines = stack.split('\n').map((item) => item.trim());
+  const frame = lines.find((item) => FRAME_LINE.test(item));
+  return normalizeMessage(frame ?? lines[0] ?? 'no-stack');
 }
 
 /** 失败请求在 Issue 标题里显示的结果：业务错误是「code 业务码」，其余是状态码（网络错误为 0）。 */

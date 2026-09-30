@@ -26,6 +26,7 @@ import { InvestigationPanel } from '../features/investigation/InvestigationPanel
 import { IssueStatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
+import { isFailedRequest, requestOutcome } from '../utils/network';
 
 const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'investigation'] as const;
 type Tab = (typeof tabs)[number];
@@ -362,16 +363,13 @@ export function IssueDetailPage() {
             <div className="network-list">
               {networkBreadcrumbs.map((item) => (
                 <article key={item.id}>
-                  <span
-                    className={Number(item.data?.status) >= 400 ? 'request-failed' : 'request-ok'}
-                  >
+                  <span className={isFailedRequest(item.data) ? 'request-failed' : 'request-ok'}>
                     {String(item.data?.method ?? 'GET')}
                   </span>
                   <div>
                     <strong>{String(item.data?.url ?? item.message)}</strong>
                     <small>
-                      {Number(item.data?.duration ?? 0).toFixed(1)} ms · HTTP{' '}
-                      {String(item.data?.status ?? 'unknown')}
+                      {Number(item.data?.duration ?? 0).toFixed(1)} ms · {requestOutcome(item.data)}
                     </small>
                   </div>
                 </article>
