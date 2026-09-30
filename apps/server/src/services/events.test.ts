@@ -83,7 +83,7 @@ describe('event time', () => {
   });
 
   it('leaves the time of a device with an accurate clock alone', () => {
-    // 几秒的网络耗时不是时钟偏差；补发的旧事件本来就发生在过去。
+    // 几秒的网络耗时不是时钟偏差；重试后才送达的旧事件本来就发生在过去。
     ingestEnvelope(
       database,
       {

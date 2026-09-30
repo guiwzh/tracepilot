@@ -73,8 +73,6 @@ export class MonitorCore implements MonitorClient {
       flushInterval: this.options.flushInterval,
       maxRetries: this.options.maxRetries,
       maxQueueSize: this.options.maxQueueSize,
-      // undefined 表示使用默认的 localStorage；显式关闭时不做退出持久化。
-      storage: options.persistence === false ? null : undefined,
     });
     this.context = {
       options: this.options,
@@ -102,7 +100,7 @@ export class MonitorCore implements MonitorClient {
       document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
     for (const plugin of this.plugins) this.protect(() => plugin.setup(this.context));
-    // 插件全部就绪后才启动传输：定时发送、退出监听和上次遗留事件的补发都从这里开始。
+    // 插件全部就绪后才启动传输：定时发送和退出监听都从这里开始。
     this.transport.start();
   }
 

@@ -163,7 +163,8 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
  *
  * - 出现时间：取最早和最晚；事件乱序到达时，只有更新的事件才改写标题。
  * - 回归：已解决的 Issue 又发生了新事件（发生时间晚于标记解决的时间），重新打开为未解决。
- *   只看发生时间，所以 SDK 补发的、解决之前就发生的积压事件不会把它重新打开。已忽略的 Issue 保持忽略。
+ *   只看发生时间，所以解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）
+ *   不会把它重新打开。已忽略的 Issue 保持忽略。
  * - 计数（event_count、user_count）从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加，
  *   避免新建 Issue 的首条事件被同时计入初始值和增量而重复计数。
  */
@@ -269,7 +270,7 @@ export function ingestEnvelope(
         .prepare('SELECT created_at FROM events WHERE id = ?')
         .get(rowId) as { created_at: number } | undefined;
       if (existing && metricId) {
-        // 以采集时间为准做「后写者胜」：重试或补发的旧值晚到时，不能覆盖已经入库的新值。
+        // 以采集时间为准做「后写者胜」：重试后才送达的旧值晚到时，不能覆盖已经入库的新值。
         if (rawEvent.timestamp >= existing.created_at) {
           database.sqlite
             .prepare('UPDATE events SET context_json = ?, created_at = ? WHERE id = ?')

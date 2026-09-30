@@ -12,7 +12,9 @@ import type { DeliveryStats } from '../types';
  *   的错误约 16 KB，一批 10 个约 165 KB，于是每次发送都失败，失败批次又被放回队首，
  *   后面的事件全部卡死在它身后。
  * - 退出发送：页面正在卸载，只能用 sendBeacon（或 keepalive fetch），它们受同一个 64 KiB
- *   配额约束。所以退出路径按字节切块，浏览器拒收的部分写进 localStorage，下次加载时补发。
+ *   配额约束。所以退出路径按字节切块，浏览器拒收的部分留在队列里：页面只是切到后台时稍后照常发送，
+ *   真的卸载就丢失。发不完的事件不写进 localStorage 下次补发，这和 Sentry、Datadog 的默认做法一致：
+ *   本地副本会占用业务应用的存储配额、在磁盘上留下明文数据，还要处理多个标签页争用同一份副本。
  *
  * 两条路径都用 text/plain 发送 JSON：它是 CORS 安全列表里的类型，跨域不触发预检。
  * application/json 的 sendBeacon 需要带凭据的预检，接入端不允许凭据时 sendBeacon 照样返回 true，
@@ -31,18 +33,12 @@ const KEEPALIVE_BUDGET_BYTES = 60_000;
 const DEFAULT_MAX_EVENT_BYTES = 32_000;
 /** 普通批次的上限，低于服务端 1 MiB 的请求体限制。 */
 const DEFAULT_MAX_BATCH_BYTES = 512_000;
-/** 退出时持久化到 localStorage 的上限，避免撑满同源 5 MB 左右的配额。 */
-const DEFAULT_MAX_STORED_BYTES = 256_000;
 /** payload 中超过这个长度的字符串（通常是异常栈）先被截断，再考虑裁剪 breadcrumb。 */
 const MAX_PAYLOAD_STRING = 4_000;
 /** 连续失败时自动发送的最长间隔。 */
 const MAX_BACKOFF_MS = 300_000;
 /** 服务端要求的等待时间上限，防止一个异常的 Retry-After 让 SDK 长时间停摆。 */
 const MAX_RETRY_AFTER_MS = 600_000;
-/** 退出时持久化副本的键前缀；完整的键再带上接入键和本页实例的编号。 */
-const STORAGE_PREFIX = 'tracepilot:pending:';
-
-type PendingStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
 
 interface TransportOptions {
   endpoint: string;
@@ -54,8 +50,6 @@ interface TransportOptions {
   maxQueueSize: number;
   maxEventBytes: number;
   maxBatchBytes: number;
-  /** 退出时发不完的事件写到哪里；null 表示不持久化。 */
-  storage: PendingStorage | null;
   fetchImpl?: typeof fetch;
 }
 
@@ -64,7 +58,7 @@ export type TransportInit = Pick<
   TransportOptions,
   'endpoint' | 'dsnKey' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'fetchImpl'
 > &
-  Partial<Pick<TransportOptions, 'maxQueueSize' | 'maxEventBytes' | 'maxBatchBytes' | 'storage'>>;
+  Partial<Pick<TransportOptions, 'maxQueueSize' | 'maxEventBytes' | 'maxBatchBytes'>>;
 
 interface QueuedEvent {
   event: MonitorEvent;
@@ -126,13 +120,9 @@ function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-function defaultStorage(): PendingStorage | null {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    // Safari 隐私模式或禁用站点数据时，访问 localStorage 本身就会抛错。
-    return null;
-  }
+/** navigator.onLine 只在为 false 时可信：为 true 并不代表真的连得上。 */
+function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
 export class Transport {
@@ -144,8 +134,6 @@ export class Transport {
   // 正在网络上的批次。退出时把它一并交给 beacon，否则页面卸载会连同在途请求一起丢掉它。
   private inFlight?: QueuedEvent[];
   private inFlightHandedToBeacon = false;
-  // 本页曾把事件持久化过，队列排空后要删除那份副本，避免下次加载重复补发。
-  private persisted = false;
   private started = false;
   private delivered = 0;
   private lastFailure: DeliveryStats['lastFailure'] = null;
@@ -156,8 +144,6 @@ export class Transport {
   // 服务端通过 Retry-After 要求的等待：显式 flush() 也要遵守。
   private retryAfterUntil = 0;
   private readonly fetchImpl?: typeof fetch;
-  private readonly storageKey: string;
-  private readonly storageKeyPrefix: string;
   private readonly envelopeOverhead: number;
   private readonly onPageHide = () => void this.flush(true);
   private readonly onVisibilityChange = () => {
@@ -186,7 +172,6 @@ export class Transport {
         KEEPALIVE_BUDGET_BYTES,
         900_000,
       ),
-      storage: options.storage === undefined ? defaultStorage() : options.storage,
     };
     this.fetchImpl =
       options.fetchImpl ??
@@ -196,17 +181,12 @@ export class Transport {
         : typeof fetch === 'function'
           ? fetch.bind(globalThis)
           : undefined);
-    // 同一个应用开着多个标签页时它们共用 localStorage：键里带上本页实例的编号，
-    // 各自写自己的副本。只按接入键存一份时，后退出的标签页会覆盖先退出的，那部分事件就丢了。
-    this.storageKeyPrefix = `${STORAGE_PREFIX}${options.dsnKey}`;
-    this.storageKey = `${this.storageKeyPrefix}:${Math.random().toString(36).slice(2, 10)}`;
     this.envelopeOverhead = utf8Length(this.envelopeBody([]));
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
-    this.restorePersisted();
     this.timer = setInterval(() => void this.flushAutomatically(), this.options.flushInterval);
     if (typeof window !== 'undefined') window.addEventListener('pagehide', this.onPageHide);
     if (typeof document !== 'undefined') {
@@ -382,7 +362,6 @@ export class Transport {
       this.scheduleRetry(result.retryAfterMs);
       return;
     }
-    if (this.persisted) this.clearPersisted();
   }
 
   /**
@@ -442,135 +421,63 @@ export class Transport {
   /**
    * 页面退出路径。卸载随时可能发生，所以这里全程同步：不 await 任何 Promise。
    *
-   * 待发事件 = 在途批次 + 队列。按 64 KiB 配额切块交给 sendBeacon，浏览器拒收（配额用尽）就停下；
-   * 没有 sendBeacon 时退回一次 keepalive fetch。剩下的写入 localStorage，下次加载时补发。
+   * 待发事件 = 在途批次 + 队列。按 64 KiB 配额切块交给 sendBeacon，浏览器拒收（配额用尽）就停下，
+   * 发不出去的留在队列里；没有 sendBeacon 时退回一次 keepalive fetch。
    *
-   * 注意 visibilitychange 在切换标签页时也会触发，页面并不一定真的卸载：
-   * 所以持久化的事件仍留在队列里继续正常发送，只有交给 beacon 的才移出队列。
+   * visibilitychange 在切换标签页时也会触发，页面并不一定真的卸载，所以要分清两种情况：
+   * - 服务端正常：交给 beacon 的事件移出队列。beacon 没有回执，留着的话回到前台会再发一遍。
+   * - 服务端正在失败（上一批没送达，还在退避）：beacon 多半也送不到，而它失败了不会重试。
+   *   这时交给它只算多试一次，事件继续留在队列里，页面没有卸载就照常重试；
+   *   万一 beacon 其实送达了，重复的那一份由服务端按 eventId 去重。
+   * 浏览器明确处于离线状态时什么都发不出去，事件直接留在队列里。
    */
   private flushOnExit(): void {
+    if (isOffline()) return;
     const inFlight = this.inFlight && !this.inFlightHandedToBeacon ? this.inFlight : [];
     const candidates = [...inFlight, ...this.queue];
     if (candidates.length === 0) return;
 
-    let sent = 0;
-    const canBeacon =
-      typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function';
-    if (canBeacon) {
-      while (sent < candidates.length) {
-        const count = this.batchLength(
-          candidates.slice(sent),
-          Number.POSITIVE_INFINITY,
-          KEEPALIVE_BUDGET_BYTES,
-        );
-        const body = this.envelopeBody(candidates.slice(sent, sent + count));
-        let accepted: boolean;
-        try {
-          accepted = navigator.sendBeacon(
-            this.options.endpoint,
-            new Blob([body], { type: 'text/plain;charset=UTF-8' }),
-          );
-        } catch {
-          accepted = false;
-        }
-        if (!accepted) break;
-        sent += count;
-      }
-    } else if (this.fetchImpl) {
+    if (typeof navigator === 'undefined' || typeof navigator.sendBeacon !== 'function') {
+      if (!this.fetchImpl) return;
       const count = this.batchLength(candidates, Number.POSITIVE_INFINITY, KEEPALIVE_BUDGET_BYTES);
       // keepalive 允许请求在文档卸载后继续；它与 beacon 共享配额，所以只发一块。
+      // 拿不到结果（页面可能正在卸载），事件留在队列里：页面没有卸载就照常再发，由服务端去重。
       void this.fetchImpl(this.options.endpoint, {
         method: 'POST',
         headers: { 'content-type': 'text/plain;charset=UTF-8' },
         body: this.envelopeBody(candidates.slice(0, count)),
         keepalive: true,
       }).catch(() => {
-        // 页面正在离开，没有重试的机会；这一块已经同时写进了持久化副本。
+        // 页面正在离开，没有重试的机会。
       });
-      // 发起了不代表送达，这一块照样写入持久化副本，补发时由服务端幂等去重。
-      this.persist(candidates);
       return;
     }
 
+    let sent = 0;
+    while (sent < candidates.length) {
+      const count = this.batchLength(
+        candidates.slice(sent),
+        Number.POSITIVE_INFINITY,
+        KEEPALIVE_BUDGET_BYTES,
+      );
+      const body = this.envelopeBody(candidates.slice(sent, sent + count));
+      let accepted: boolean;
+      try {
+        accepted = navigator.sendBeacon(
+          this.options.endpoint,
+          new Blob([body], { type: 'text/plain;charset=UTF-8' }),
+        );
+      } catch {
+        accepted = false;
+      }
+      if (!accepted) break;
+      sent += count;
+    }
+
+    if (this.consecutiveFailures > 0) return;
     if (sent >= inFlight.length && inFlight.length > 0) this.inFlightHandedToBeacon = true;
     // 交给 beacon 的事件移出队列；在途批次不在队列里，只需要打上标记。
-    const sentFromQueue = Math.max(0, sent - inFlight.length);
-    this.queue.splice(0, sentFromQueue);
-    this.persist(candidates.slice(sent));
-  }
-
-  private persist(items: QueuedEvent[]): void {
-    const storage = this.options.storage;
-    if (!storage) return;
-    if (items.length === 0) {
-      if (this.persisted) this.clearPersisted();
-      return;
-    }
-    const kept: string[] = [];
-    let bytes = 2;
-    for (const item of items) {
-      if (bytes + item.bytes + 1 > DEFAULT_MAX_STORED_BYTES) break;
-      kept.push(item.json);
-      bytes += item.bytes + 1;
-    }
-    try {
-      storage.setItem(this.storageKey, `[${kept.join(',')}]`);
-      this.persisted = true;
-    } catch {
-      // 配额用尽或存储被禁用：只能放弃持久化，不能让退出路径抛错。
-    }
-  }
-
-  /**
-   * 补发之前留下的副本：本接入键下所有标签页的，也包括旧版本不带实例编号的那个键。
-   * 某个副本的主人可能还开着（只是切到了后台），它也会发送自己队列里的同一批事件，
-   * 这种重复由服务端按 eventId 去重。
-   */
-  private restorePersisted(): void {
-    const storage = this.options.storage;
-    if (!storage) return;
-    const events: MonitorEvent[] = [];
-    try {
-      // 先收集键再逐个读取：边遍历边删除会让 key(index) 的下标错位。
-      const keys: string[] = [];
-      for (let index = 0; index < storage.length; index += 1) {
-        const key = storage.key(index);
-        if (
-          key !== null &&
-          (key === this.storageKeyPrefix || key.startsWith(`${this.storageKeyPrefix}:`))
-        ) {
-          keys.push(key);
-        }
-      }
-      for (const key of keys) {
-        const raw = storage.getItem(key);
-        // 先删再补发：即使这一轮又没发完，退出路径也会把它们写进本页自己的副本。
-        storage.removeItem(key);
-        if (!raw) continue;
-        try {
-          const parsed: unknown = JSON.parse(raw);
-          if (Array.isArray(parsed)) events.push(...(parsed as MonitorEvent[]));
-        } catch {
-          // 损坏的副本无法补发，删掉即可。
-        }
-      }
-    } catch {
-      // 存储不可用：放弃补发。
-    }
-    for (const event of events) {
-      if (event && typeof event === 'object' && typeof event.eventId === 'string') {
-        this.enqueue(event);
-      }
-    }
-  }
-
-  private clearPersisted(): void {
-    try {
-      this.options.storage?.removeItem(this.storageKey);
-    } catch {
-      // 同 persist：存储不可用时没有更好的处理方式。
-    }
-    this.persisted = false;
+    this.queue.splice(0, Math.max(0, sent - inFlight.length));
   }
 
   destroy(): void {

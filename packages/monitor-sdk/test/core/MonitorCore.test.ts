@@ -14,7 +14,6 @@ function core(overrides: Partial<ConstructorParameters<typeof MonitorCore>[0]> =
     release: '1.0.0',
     environment: 'test',
     batchSize: 100,
-    persistence: false,
     ...overrides,
   });
 }
@@ -129,7 +128,6 @@ describe('MonitorCore', () => {
       projectId: 'test-project',
       release: '1.0.0',
       environment: 'test',
-      persistence: false,
     }).use({
       name: 'session-summary',
       setup: (value) => {

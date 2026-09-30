@@ -47,13 +47,14 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - **大小**：单个事件序列化后不超过 32 KB（超出时 SDK 先截断超长字符串、再从最旧一端裁剪 breadcrumb，
   并在 `payload` 上标记 `truncated` / `trimmedBreadcrumbs`）；页面退出时每块不超过 60 KB，以适应浏览器
   64 KiB 的 keepalive / beacon 在途配额；服务端请求体上限 1 MiB。
-- **投递语义**：至少一次。同一事件可能被 beacon、在途请求和下次加载的补发重复送达。
+- **投递语义**：至少一次。同一事件可能被 beacon 和在途请求各送达一次；服务端故障期间交给 beacon 的
+  事件仍留在队列里，恢复后会再发一次。
 - **重试与退避**：一批失败后在同一轮里快速重试（默认 2 次，间隔 100、200 ms）；仍失败则进入退避，
   自动发送的间隔为 `flushInterval × 2^(连续失败次数 − 1)`，上限 5 分钟，再乘 0.5～1 的随机系数。
   429 不做快速重试；服务端给出 `Retry-After` 时按它和退避中较晚的一个等待，显式 `flush()` 也遵守它。
   服务端通过 CORS 的 `Access-Control-Expose-Headers` 暴露 `Retry-After`，跨域的 SDK 才读得到。
-- **退出持久化**：发不完的事件写入 localStorage 的 `tracepilot:pending:<dsnKey>:<页面实例编号>`，
-  每个标签页一份，互不覆盖；下次加载时补发该接入键下的全部副本。
+- **页面退出**：按 60 KB 切块交给 `sendBeacon`，浏览器拒收的部分留在队列里。服务端正在失败时，交给
+  beacon 只算多试一次，事件不移出队列；浏览器离线时不发送。发不完的事件不写入本地存储，页面真正卸载时丢失。
 - **SDK 端脱敏**：事件交给 `beforeSend` 之前，页面地址、请求地址、breadcrumb 与 payload 已按与服务端相同的
   规则（`packages/shared/src/redaction.ts`）去掉 URL 查询参数和片段、遮蔽敏感字段；堆栈只删帧里的
   查询参数，保留行列号，服务端才能还原。点击 breadcrumb 只记录可交互元素上的文字，`data-tp-mask`
@@ -64,7 +65,7 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - `eventId` 是幂等键：已存在的事件计入 `duplicates` 并跳过。
 - **时间**：`timestamp` 和 breadcrumb 的时间来自用户设备的时钟。服务端收到的时间与 `sentAt` 相差超过
   1 分钟时，认为设备时钟不准，把事件和它的 breadcrumb 平移同样的量；平移后仍在未来的事件按收到的时间
-  记录。补发的旧事件（`sentAt` 是补发时间）不受影响。
+  记录。重试后才送达的旧事件（`sentAt` 是这次发送的时间）不受影响。
 - Web Vitals 事件带 `payload.metricId`（来自 web-vitals 的 `metric.id`）。同一指标实例再次上报时按
   `metricId` **覆盖**而不是追加，以采集时间为准，迟到的旧值不会覆盖新值；响应里计入 `metricUpdates`。
 - 整个信封在一个事务里写入；格式错误的信封整体拒绝（400），DSN 与项目不匹配返回 403。

@@ -161,7 +161,6 @@ describe('PerformancePlugin', () => {
       release: '1.0.0',
       environment: 'test',
       batchSize: 100,
-      persistence: false,
     });
     monitor.use(new PerformancePlugin());
     monitor.start();
@@ -184,7 +183,6 @@ describe('PerformancePlugin', () => {
       release: '1.0.0',
       environment: 'test',
       batchSize: 100,
-      persistence: false,
     });
     monitor.use(new PerformancePlugin());
     monitor.start();

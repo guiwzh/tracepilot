@@ -33,11 +33,6 @@ export interface MonitorOptions {
    */
   dedupeWindow?: number;
   /**
-   * 页面退出时浏览器只允许约 64 KiB 的 beacon 在途数据，发不完的事件默认写入 localStorage，
-   * 下次加载时补发（服务端按 eventId 去重）。设为 false 可关闭。
-   */
-  persistence?: boolean;
-  /**
    * 额外忽略的错误：字符串按「消息包含」匹配，正则按消息测试。
    * 内置规则始终生效：跨域脚本的 "Script error."、ResizeObserver 循环告警、浏览器扩展里的报错。
    */

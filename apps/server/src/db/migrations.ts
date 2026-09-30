@@ -106,7 +106,7 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     // 标记为已解决的时间。之后发生的新事件把 Issue 重新打开（回归），更早发生、只是迟到的事件
-    // （SDK 从 localStorage 补发的积压）不会。之前已解决的 Issue 不知道确切的解决时间，
+    // （例如服务端故障期间积压在 SDK 队列里的）不会。之前已解决的 Issue 不知道确切的解决时间，
     // 取它最后一次出现的时间：在那之后再发生，就是回归。
     description: 'issues.resolved_at',
     up: (sqlite) => {

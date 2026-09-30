@@ -38,8 +38,8 @@ pnpm install && pnpm seed && pnpm dev
 - 页面退出时 `sendBeacon` 发送 `application/json`。跨域时这需要**带凭据的 CORS 预检**，接入端
   没有允许凭据，于是真正的 POST 从未发出，而 `sendBeacon` 照样返回 `true`。
 
-**方案**　普通发送去掉 keepalive；退出时按 60 KB 切块交给 beacon，浏览器拒收的部分写进
-localStorage 下次加载补发；两条路径都改用 `text/plain`（CORS 安全列表类型，不触发预检），服务端
+**方案**　普通发送去掉 keepalive；退出时按 60 KB 切块交给 beacon，浏览器拒收的部分留在队列里；
+两条路径都改用 `text/plain`（CORS 安全列表类型，不触发预检），服务端
 只在接入路由的封装作用域里把它解析为 JSON。顺带补上：按字节切批、超大事件先截断长字符串再从最旧
 一端丢 breadcrumb、除 408 / 429 以外的 4xx 拒收直接丢弃不再堵队、退出时把在途批次一并交给
 beacon。投递语义是「至少一次」，重复由服务端按 `eventId` 幂等去重。
@@ -53,8 +53,10 @@ beacon。投递语义是「至少一次」，重复由服务端按 `eventId` 幂
 
 两条测试在修复前都会失败，这一点单独验证过。
 
-**限制**　localStorage 补发只覆盖同一浏览器的下次访问；用户不再回来的事件仍会丢。持久化默认开启，
-可用 `persistence: false` 关闭。
+**限制**　页面真正卸载时，beacon 装不下（超过约 60 KB）的事件，以及服务端不可达期间积压的事件，
+会随页面一起丢失，这与 Sentry、Datadog 的默认行为一致。曾经把发不完的事件写进 localStorage、
+下次加载补发，评估后删掉了：它占用业务应用的存储配额，在磁盘上留下明文数据，还要处理多个标签页
+争用副本；而服务端故障时 beacon 照样被浏览器接收、随后失败，副本反而保不住最需要保住的那部分。
 
 ### 2. 让 Agent 的每条证据都能被核对
 
@@ -261,7 +263,7 @@ flowchart LR
   （`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
 - **可靠传输**：按会话采样、短窗口去重（错误、资源、失败请求）、按条数与字节批量上报、有限重试、
   连续失败时指数退避并遵守 `Retry-After`、拒收的 4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
-  发不完的按标签页持久化补发、`beforeSend`、完整 teardown。
+  服务端故障时退出发送不丢队列、`beforeSend`、完整 teardown。
 - **Fastify 接入服务**：共享 Zod Schema、DSN 校验、事件幂等、Web Vitals 按 metric id 覆盖、二次脱敏、
   按 `sentAt` 校正设备时钟、SQLite 事务、动态 ID 归一化与 SHA-256 指纹聚合、已解决 Issue 再次发生时
   重新打开、按编号迁移升级表结构。

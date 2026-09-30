@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
 import { Transport, utf8Length, type TransportInit } from '../../src/transport/Transport';
 
-// 注入假的 fetch / sendBeacon / storage，让每条发送路径完全可控，不依赖真实网络。
+// 注入假的 fetch / sendBeacon，让每条发送路径完全可控，不依赖真实网络。
 const event: MonitorEvent = {
   eventId: 'event-1',
   eventType: 'error',
@@ -38,30 +38,6 @@ function heavyEvent(eventId: string, breadcrumbCount = 50): MonitorEvent {
   };
 }
 
-function memoryStorage() {
-  const map = new Map<string, string>();
-  return {
-    map,
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => void map.set(key, value),
-    removeItem: (key: string) => void map.delete(key),
-    key: (index: number) => [...map.keys()][index] ?? null,
-    get length() {
-      return map.size;
-    },
-  };
-}
-
-/** 某个接入键下每个标签页留下的持久化副本：键 → 其中事件的 eventId。 */
-function persistedCopies(storage: ReturnType<typeof memoryStorage>, dsnKey = 'public-key') {
-  return [...storage.map.entries()]
-    .filter(([key]) => key.startsWith(`tracepilot:pending:${dsnKey}`))
-    .map(([key, value]) => ({
-      key,
-      eventIds: (JSON.parse(value) as MonitorEvent[]).map((item) => item.eventId),
-    }));
-}
-
 function createTransport(overrides: Partial<TransportInit> = {}) {
   return new Transport({
     endpoint: 'https://ingest.test/envelopes',
@@ -69,7 +45,6 @@ function createTransport(overrides: Partial<TransportInit> = {}) {
     batchSize: 10,
     flushInterval: 60_000,
     maxRetries: 0,
-    storage: null,
     ...overrides,
   });
 }
@@ -209,12 +184,11 @@ describe('Transport', () => {
     expect(transport.pending()).toBe(0);
   });
 
-  it('splits the exit flush into quota-sized beacons and persists what the browser refuses', async () => {
+  it('splits the exit flush into quota-sized beacons and keeps what the browser refuses queued', async () => {
     // 浏览器对 beacon 在途数据只给约 64 KiB：第一块被接受，第二块因配额用尽被拒。
     const sendBeacon = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
     vi.stubGlobal('navigator', { sendBeacon });
-    const storage = memoryStorage();
-    const transport = createTransport({ batchSize: 100, storage });
+    const transport = createTransport({ batchSize: 100 });
 
     for (let index = 0; index < 6; index += 1) transport.enqueue(heavyEvent(`exit-${index}`));
     await transport.flush(true);
@@ -224,90 +198,42 @@ describe('Transport', () => {
     expect((sendBeacon.mock.calls[0]![1] as Blob).type).toBe('text/plain;charset=utf-8');
     const accepted = (await beaconEvents(sendBeacon)).length;
     expect(accepted).toBeGreaterThan(0);
-
-    const [copy, ...others] = persistedCopies(storage);
-    expect(others).toHaveLength(0);
-    expect(copy!.eventIds).toEqual(
-      Array.from({ length: 6 - accepted }, (_, index) => `exit-${accepted + index}`),
-    );
-    // 标签页切到后台也会触发这条路径，页面未必真的卸载：持久化的事件仍留在队列里继续发送。
+    // 标签页切到后台也会触发这条路径，页面未必真的卸载：浏览器拒收的事件留在队列里，之后照常发送。
     expect(transport.pending()).toBe(6 - accepted);
   });
 
-  it('resends events persisted at the previous exit and clears the copy once delivered', async () => {
-    const storage = memoryStorage();
-    storage.setItem(
-      'tracepilot:pending:public-key',
-      JSON.stringify([
-        { ...event, eventId: 'left-over-1' },
-        { ...event, eventId: 'left-over-2' },
-      ]),
-    );
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
-    const transport = createTransport({ storage, fetchImpl });
-
-    transport.start();
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
-    // 等补发真正落定再断言和销毁；否则 destroy 会把仍在途的批次交给退出路径。
+  it('keeps events queued when the exit beacon goes out while the server is failing', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon });
+    const transport = createTransport({ fetchImpl });
+    transport.enqueue({ ...event, eventId: 'during-outage' });
     await transport.flush();
-    expect(sentEvents(fetchImpl.mock.calls[0]![1]!.body).map((item) => item.eventId)).toEqual([
-      'left-over-1',
-      'left-over-2',
-    ]);
-    expect(persistedCopies(storage)).toHaveLength(0);
-    transport.destroy();
+    expect(transport.stats().lastFailure?.status).toBe(503);
+
+    // 回归：故障期间切到后台，事件曾被交给 beacon 后移出队列。beacon 失败了不会重试，
+    // 页面明明还开着，本该在内存里等待重试的事件就这样丢了。现在 beacon 只算多试一次。
+    await transport.flush(true);
+    expect(sendBeacon).toHaveBeenCalledTimes(1);
+    expect(transport.pending()).toBe(1);
+
+    // 回到前台、服务端恢复后照常送达；beacon 若其实也送达了，服务端按 eventId 去重。
+    await transport.flush();
+    expect(transport.stats()).toMatchObject({ pending: 0, delivered: 1 });
   });
 
-  it('keeps one persisted copy per tab so tabs closing together do not overwrite each other', async () => {
-    // 回归：副本曾只按接入键存一份。两个标签页都开着、先后关闭时，后关闭的覆盖了先关闭的，
-    // 前一个标签页发不完的事件就此丢失。
-    vi.stubGlobal('navigator', { sendBeacon: vi.fn().mockReturnValue(false) });
-    const storage = memoryStorage();
-    const first = createTransport({ batchSize: 100, storage });
-    const second = createTransport({ batchSize: 100, storage });
-    first.start();
-    second.start();
-    first.enqueue({ ...event, eventId: 'tab-a' });
-    second.enqueue({ ...event, eventId: 'tab-b' });
+  it('sends nothing on exit while the browser is offline', async () => {
+    const sendBeacon = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('navigator', { sendBeacon, onLine: false });
+    const transport = createTransport();
+    transport.enqueue(event);
 
-    first.destroy();
-    second.destroy();
-    expect(persistedCopies(storage).map((copy) => copy.eventIds)).toEqual([['tab-a'], ['tab-b']]);
-
-    // 下一次加载补发所有标签页的副本（包括旧版本不带实例编号的键），然后删掉它们。
-    storage.setItem(
-      'tracepilot:pending:public-key',
-      JSON.stringify([{ ...event, eventId: 'legacy' }]),
-    );
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
-    const next = createTransport({ storage, fetchImpl });
-    next.start();
-    await next.flush();
-    expect(
-      sentEvents(fetchImpl.mock.calls[0]![1]!.body)
-        .map((item) => item.eventId)
-        .sort(),
-    ).toEqual(['legacy', 'tab-a', 'tab-b']);
-    expect(persistedCopies(storage)).toHaveLength(0);
-    next.destroy();
-  });
-
-  it('clears only its own persisted copy once its queue drains', async () => {
-    vi.stubGlobal('navigator', { sendBeacon: vi.fn().mockReturnValue(false) });
-    const storage = memoryStorage();
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
-    const background = createTransport({ batchSize: 100, storage, fetchImpl });
-    background.enqueue({ ...event, eventId: 'background-tab' });
-    // 切到后台：发不出去的事件写进副本，但仍留在队列里。
-    await background.flush(true);
-    // 另一个标签页随后关闭，留下自己的副本。
-    const closing = createTransport({ batchSize: 100, storage });
-    closing.enqueue({ ...event, eventId: 'closed-tab' });
-    closing.destroy();
-
-    // 回到前台后排空队列，只删自己的副本，不能把别的标签页刚存下的删掉。
-    await background.flush();
-    expect(persistedCopies(storage).map((copy) => copy.eventIds)).toEqual([['closed-tab']]);
+    await transport.flush(true);
+    expect(sendBeacon).not.toHaveBeenCalled();
+    expect(transport.pending()).toBe(1);
   });
 
   it('backs off automatic sends after a failure but still lets an explicit flush through', async () => {

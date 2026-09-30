@@ -9,7 +9,7 @@ Web Vitals，脱敏之后批量上报到服务端的 `POST /api/v1/envelopes`。
 SDK 运行在别人的页面里，所以每一条设计都先回答「会不会影响宿主页面」：
 
 1. **不拖累宿主页面**：采集路径同步且便宜；插件抛出的异常被核心隔离；包装过的全局 API（`fetch`、
-   `XMLHttpRequest`、`history`）在销毁时还原；队列长度、单个事件、每批大小、持久化副本都有上限。
+   `XMLHttpRequest`、`history`）在销毁时还原；队列长度、单个事件、每批大小都有上限。
 2. **只上报会形成 Issue 的信号**：成功和被取消的请求只记成面包屑；默认忽略无法诊断的噪声；同类信号
    短窗口去重；性能样本不携带面包屑。同一个会话（3 次路由、5 次点击、30 个成功请求、1 个错误）的上报
    因此从 33 个事件、182,725 字节降到 3 个事件、10,186 字节。
@@ -44,7 +44,7 @@ packages/monitor-sdk/
 │   ├── integrations/
 │   │   └── react.ts              reactErrorHandler：接 React 19 根节点的错误回调
 │   └── transport/
-│       └── Transport.ts          队列、批量、重试与退避、页面退出发送、持久化补发
+│       └── Transport.ts          队列、批量、重试与退避、页面退出发送
 └── test/                         与 src/ 一一对应的单元测试，setup.ts 为公共替身
 ```
 
@@ -60,7 +60,6 @@ flowchart LR
     Plugins["六个插件"]
     Core["MonitorCore<br/>采样 · 面包屑 · 采集管线"]
     Transport["Transport<br/>队列 · 批量 · 重试 · 退出发送"]
-    Storage[("localStorage<br/>退出时未发完的事件")]
   end
   Server["服务端<br/>POST /api/v1/envelopes"]
   APIs --> Plugins
@@ -68,7 +67,6 @@ flowchart LR
   Core -- "enqueue" --> Transport
   Transport -- "fetch（text/plain）" --> Server
   Transport -- "sendBeacon（页面退出）" --> Server
-  Transport <--> Storage
 ```
 
 职责按层划分：
@@ -78,7 +76,7 @@ flowchart LR
 - **MonitorCore** 决定信号能不能成为事件：采样、过滤、去重、补上下文、脱敏、`beforeSend`，并管理插件和
   传输层的生命周期。
 - **Transport** 只负责把事件送到服务端，不理解事件语义：排队、按条数和字节切批、重试与退避、页面退出时
-  交给 beacon、发不完的写进 localStorage 下次补发。
+  交给 beacon。
 
 ## 4. 公开 API
 
@@ -123,7 +121,6 @@ monitor.start();
 | `maxRetries`    |  否  | 2              | 0–10                                  | 一批失败后同一轮里的快速重试次数（100、200 ms……）    |
 | `maxQueueSize`  |  否  | 1,000          | 10–10,000                             | 队列上限，满了之后丢弃新到的事件                     |
 | `dedupeWindow`  |  否  | 5,000 ms       | 0–10 min                              | 同类信号的去重窗口，见第 7 节                        |
-| `persistence`   |  否  | `true`         | —                                     | 页面退出时发不完的事件是否写入 localStorage 下次补发 |
 | `ignoreErrors`  |  否  | `[]`           | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试 |
 | `user`          |  否  | —              | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改     |
 | `beforeSend`    |  否  | —              | —                                     | 最后一道业务侧闸门：修改事件，或返回 `null` 取消     |
@@ -163,7 +160,7 @@ monitor.start();
 
 ### 5.1 生命周期
 
-**构造**：规范化配置；决定本会话是否被采样；创建 Transport（`persistence: false` 时不给它存储）；
+**构造**：规范化配置；决定本会话是否被采样；创建 Transport；
 准备交给插件的 `PluginContext`。
 
 **采样**按标签页会话一次性决定：按事件采样会让一个错误被采到、而它之前的请求没被采到，证据链断裂。
@@ -176,7 +173,7 @@ monitor.start();
 1. 未被采样就直接返回。
 2. 注册核心自己的 `pagehide` 和 `visibilitychange` 监听（见 5.5）。
 3. 按注册顺序安装插件。
-4. 启动传输层：补发上次退出时留下的事件、开始定时发送、注册退出发送的监听。
+4. 启动传输层：开始定时发送、注册退出发送的监听。
 
 **`destroy()`**，幂等：按注册的**逆序**卸载插件，卸载期间放行采集（PerformancePlugin 在这时提交最后的
 指标）；移除核心的监听；最后销毁传输层，它会把队列里剩下的事件交给退出发送。插件都卸载完才销毁传输层，
@@ -250,15 +247,13 @@ sequenceDiagram
   participant P as 插件
   participant T as Transport
   participant S as 服务端
-  participant L as localStorage
   B->>C: pagehide 或 visibilitychange（hidden）
   C->>P: onPageHidden()
   P->>C: captureEvent（最新的指标值）
   C->>T: enqueue
   B->>T: 同一个事件，传输层的监听
   T->>S: sendBeacon，每块不超过 60 KB，直到浏览器拒收
-  T->>L: 其余写入本页的持久化副本
-  Note over T,L: 下次加载时 start() 读出全部副本、删除并重新入队
+  Note over T,S: 浏览器拒收的留在队列里：只是切到后台就稍后照常发送，真的卸载就丢失
 ```
 
 同一事件上的监听器按注册顺序执行，核心的监听在 `start()` 里早于传输层注册，所以插件提交的数据一定排在
@@ -371,15 +366,14 @@ sequenceDiagram
 
 ### 9.1 上限与常量
 
-| 常量                       | 值         | 作用                                                             |
-| -------------------------- | ---------- | ---------------------------------------------------------------- |
-| `DEFAULT_MAX_EVENT_BYTES`  | 32,000 B   | 单个事件序列化后的上限，保证任何一个事件都能单独放进一次退出发送 |
-| `DEFAULT_MAX_BATCH_BYTES`  | 512,000 B  | 普通批次上限，低于服务端 1 MiB 的请求体限制                      |
-| `KEEPALIVE_BUDGET_BYTES`   | 60,000 B   | 退出发送每块的上限：keepalive 与 beacon 共享 64 KiB 在途配额     |
-| `DEFAULT_MAX_STORED_BYTES` | 256,000 B  | 写入 localStorage 的持久化副本上限                               |
-| `MAX_PAYLOAD_STRING`       | 4,000 字符 | payload 里超过这个长度的字符串（通常是异常栈）先被截断           |
-| `MAX_BACKOFF_MS`           | 5 分钟     | 自动发送退避的上限                                               |
-| `MAX_RETRY_AFTER_MS`       | 10 分钟    | 服务端 `Retry-After` 的上限，防止异常值让 SDK 长时间停摆         |
+| 常量                      | 值         | 作用                                                             |
+| ------------------------- | ---------- | ---------------------------------------------------------------- |
+| `DEFAULT_MAX_EVENT_BYTES` | 32,000 B   | 单个事件序列化后的上限，保证任何一个事件都能单独放进一次退出发送 |
+| `DEFAULT_MAX_BATCH_BYTES` | 512,000 B  | 普通批次上限，低于服务端 1 MiB 的请求体限制                      |
+| `KEEPALIVE_BUDGET_BYTES`  | 60,000 B   | 退出发送每块的上限：keepalive 与 beacon 共享 64 KiB 在途配额     |
+| `MAX_PAYLOAD_STRING`      | 4,000 字符 | payload 里超过这个长度的字符串（通常是异常栈）先被截断           |
+| `MAX_BACKOFF_MS`          | 5 分钟     | 自动发送退避的上限                                               |
+| `MAX_RETRY_AFTER_MS`      | 10 分钟    | 服务端 `Retry-After` 的上限，防止异常值让 SDK 长时间停摆         |
 
 字节数都按 UTF-8 计算（浏览器配额按字节计，而 `string.length` 是 UTF-16 码元数）。
 
@@ -407,7 +401,7 @@ flowchart TD
   O -- "2xx" --> OK["计入 delivered，清零连续失败次数"]
   OK --> M{"队列还有事件？"}
   M -- 是 --> B
-  M -- 否 --> D["删除本页的持久化副本"]
+  M -- 否 --> D["本轮结束"]
   O -- "408、429 以外的 4xx" --> X["整批丢弃，计入 rejected"]
   X --> M
   O -- "408 / 429 / 5xx / 网络错误" --> F["放回队首，进入退避"]
@@ -448,28 +442,29 @@ min(5 分钟, flushInterval × 2^(连续失败次数 − 1)) × 随机系数（0
 `pagehide` 和 `visibilitychange`（hidden）都会触发退出发送。卸载随时可能发生，所以这条路径全程同步，不等待任何
 Promise：
 
-1. 待发事件 = 在途批次 + 队列。在途批次也要算上，否则页面卸载会连同在途请求一起丢掉它。
-2. 有 `sendBeacon` 时，按 60 KB 切块依次交给它，浏览器拒收（配额用尽）就停下。
-3. 没有 `sendBeacon` 时，用 keepalive fetch 发一块（它与 beacon 共享配额），并把全部待发事件写入持久化副本。
+1. 浏览器明确离线（`navigator.onLine === false`）时什么都发不出去，事件全部留在队列里。
+2. 待发事件 = 在途批次 + 队列。在途批次也要算上，否则页面卸载会连同在途请求一起丢掉它。
+3. 有 `sendBeacon` 时，按 60 KB 切块依次交给它，浏览器拒收（配额用尽）就停下。
 4. 交给 beacon 的事件移出队列；在途批次整批交出去之后打上标记，它的请求之后失败也不会再放回队列。
-5. 剩下的写入 localStorage（不超过 256 KB）。
+   浏览器拒收的事件留在队列里。
+5. 没有 `sendBeacon` 时，用 keepalive fetch 发一块（它与 beacon 共享配额）；拿不到结果，事件都留在队列里。
 
-`visibilitychange` 在切换标签页时也会触发，页面并不一定真的卸载：所以写入持久化副本的事件仍留在队列里继续
-正常发送；队列排空后，这份副本被删除，下次加载不会重复补发。
+`visibilitychange` 在切换标签页时也会触发，页面并不一定真的卸载，留在队列里的事件回到前台后照常发送。
+但 beacon 没有回执，失败了也不会重试，所以要看服务端的状态：
 
-### 9.6 持久化与补发
+- **服务端正常**：交给 beacon 的事件按第 4 步移出队列，否则回到前台会再发一遍。
+- **服务端正在失败**（上一批没送达、还在退避）：beacon 多半也送不到。这时交给它只算多试一次，事件
+  **不移出队列**，页面没有卸载就照常重试。早期实现不区分这两种情况，故障期间切一次标签页，本该在内存里等待
+  重试的事件就交给了多半会失败的 beacon，就此丢失。万一 beacon 其实送达了，重复的那一份由服务端按 `eventId` 去重。
 
-- 副本的键是 `tracepilot:pending:<dsnKey>:<页面实例编号>`：同一个应用开着多个标签页时，它们共用
-  localStorage，每个标签页写自己的副本，后关的不会覆盖先关的。
-- `start()` 时读出这个接入键下**全部**副本（包括旧版本不带实例编号的键），逐个删除后重新入队。某个副本的主人
-  可能还开着，它也会发送同一批事件，这种重复由服务端按 `eventId` 去重。
-- localStorage 不可用（Safari 隐私模式、禁用站点数据）时静默放弃持久化，不影响正常发送。
+发不完的事件不写进 localStorage 下次补发。早期版本这样做过，评估后删掉了：本地副本会占用业务应用的存储配额、
+在磁盘上留下明文数据，还要处理多个标签页争用同一份副本；而服务端故障时 beacon 照样被浏览器接收、随后失败，
+副本反而保不住最需要保住的那部分。Sentry、Datadog 默认也不保存。
 
-### 9.7 独立使用
+### 9.6 独立使用
 
 `Transport` 也被导出，可以脱离核心单独使用。构造时数字项同样会被夹紧：`maxEventBytes` 在
-1,000–59,000 之间，`maxBatchBytes` 在 60,000–900,000 之间；`storage` 传 `null` 表示不持久化；
-`fetchImpl` 可以注入测试替身。
+1,000–59,000 之间，`maxBatchBytes` 在 60,000–900,000 之间；`fetchImpl` 可以注入测试替身。
 
 ## 10. 插件
 
@@ -727,16 +722,16 @@ monitor.use(new ConsoleBreadcrumbPlugin());
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
-| 测试文件                            | 覆盖                                                                                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、`flush()` 的投递状况、配置规范化                           |
-| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时交给 beacon 与持久化、按标签页分开的副本、退避与 `Retry-After`、队列上限、UTF-8 字节数 |
-| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                         |
-| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                 |
-| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、XHR、只还原自己的包装                        |
-| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                       |
-| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后                                                                 |
-| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                              |
+| 测试文件                            | 覆盖                                                                                                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、`flush()` 的投递状况、配置规范化                                        |
+| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数 |
+| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                      |
+| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                              |
+| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、XHR、只还原自己的包装                                     |
+| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                    |
+| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后                                                                              |
+| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                           |
 
 **真实浏览器**（Playwright + Chromium）：
 
@@ -752,7 +747,8 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 
 ## 14. 已知限制
 
-- **补发只覆盖同一个浏览器的下次访问**：用户不再回来，localStorage 里的事件仍会丢；副本最多 256 KB。
+- **页面真正卸载时可能丢事件**：beacon 装不下（超过约 60 KB）的部分，以及服务端不可达期间积压的事件，
+  随页面一起丢失，不写入本地存储下次补发（原因见 9.5）。
 - **退出发送按字节切块、不限条数**：一块 60 KB，事件平均不到约 590 字节时一块会装进 100 个以上，超过服务端单个
   信封 100 个事件的上限，整块被拒收；beacon 没有重试，这一块就丢了。只有队列里积压了上百个小事件时才会出现
   （服务端一段时间不可达，或 `batchSize` 配得很大）：一个性能样本连同页面和设备信息约 600–700 字节，

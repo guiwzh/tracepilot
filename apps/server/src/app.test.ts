@@ -194,7 +194,7 @@ describe('telemetry ingestion', () => {
       payload: { status: 'resolved' },
     });
 
-    // 修复之前就发生、只是迟到的事件（SDK 从 localStorage 补发的积压）不算回归。
+    // 修复之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）不算回归。
     await send('late-arrival', Date.now() - 30_000);
     expect(await status(issueId)).toBe('resolved');
 
@@ -470,7 +470,7 @@ describe('telemetry ingestion', () => {
     });
     expect(await lcpSummary()).toMatchObject({ p75: 2_400, samples: 1 });
 
-    // 重试或补发的旧值晚到：以采集时间为准，不能覆盖已入库的新值。
+    // 重试后才送达的旧值晚到：以采集时间为准，不能覆盖已入库的新值。
     await send([lcp('stale-retry', 1_200, now - 2_000)]);
     expect(await lcpSummary()).toMatchObject({ p75: 2_400, samples: 1 });
   });
