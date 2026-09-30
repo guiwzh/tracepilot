@@ -46,6 +46,20 @@ export interface MonitorOptions {
    * 内置规则始终生效：跨域脚本的 "Script error."、ResizeObserver 循环告警、浏览器扩展里的报错。
    */
   ignoreErrors?: Array<string | RegExp>;
+  /**
+   * 哪些 HTTP 状态码算请求失败。失败的请求成为事件、进而聚合为 Issue，其余只记面包屑。
+   * 数字表示单个状态码，[起, 止] 表示闭区间。默认 [[500, 599]]：只有服务端错误算失败——
+   * 4xx 常是预期内的（401 登录过期、404 查无此项、422 表单校验），需要时可以加进来。
+   * 拿不到响应的网络错误始终算失败；被取消的请求和 no-cors 的 opaque 响应始终不算。
+   */
+  failedRequestStatusCodes?: Array<number | [number, number]>;
+  /**
+   * 业务错误判定：接口返回 2xx，但响应体里的业务码表示失败（常见的 { code, message } 约定）。
+   * 返回一个对象表示这次请求失败，其中的 code / message 随事件上报；返回 null 或 undefined 表示成功。
+   * 只有配置了它才会读取响应体，而且只读 JSON：fetch 读 response.clone()，不影响业务代码读取；
+   * XHR 读 response / responseText。响应体只在页面内存里解析，除了这里返回的内容不会上报。
+   */
+  detectBusinessError?: (response: ApiResponseInfo) => BusinessError | null | undefined;
   user?: MonitorUser;
   /**
    * 最后的业务侧隐私闸门；返回 null 可以取消本次事件。
@@ -66,8 +80,23 @@ export type ResolvedMonitorOptions = MonitorOptions &
       | 'maxRetries'
       | 'dedupeWindow'
       | 'maxQueueSize'
+      | 'failedRequestStatusCodes'
     >
   >;
+
+/** 业务错误判定收到的请求信息；body 是解析后的 JSON 响应体。 */
+export interface ApiResponseInfo {
+  method: string;
+  url: string;
+  status: number;
+  body: unknown;
+}
+
+/** detectBusinessError 判定为失败时返回的信息。 */
+export interface BusinessError {
+  code?: string | number;
+  message?: string;
+}
 
 export interface CapturePayload {
   [key: string]: unknown;

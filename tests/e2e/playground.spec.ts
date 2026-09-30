@@ -114,6 +114,22 @@ test('failed fetch and XHR requests are reported without their query strings', a
   expect(JSON.stringify(await latestEvent(request, payment))).not.toContain('demo-secret');
 });
 
+test('a 200 response whose business code means failure becomes its own issue', async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request);
+  await openLab(page, project);
+  await trigger(page, 'business');
+  await flush(page);
+
+  // SDK 读克隆的 JSON 响应体，判定函数返回的业务码随事件上报，服务端按业务码单独成为一个 Issue。
+  const coupon = await waitForIssue(request, project, /^POST \/__lab\/coupon → code 40012$/);
+  expect(await latestEvent(request, coupon)).toMatchObject({
+    context: { payload: { status: 200, businessCode: 40012, businessMessage: 'Coupon expired' } },
+  });
+});
+
 test('route changes and cancelled requests stay breadcrumbs on the next event', async ({
   page,
   request,

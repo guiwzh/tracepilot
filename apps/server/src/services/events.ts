@@ -7,7 +7,7 @@ import {
   type MonitorEvent,
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
-import { eventFingerprint, normalizeDisplayTitle } from '../lib/fingerprint';
+import { eventFingerprint, normalizeDisplayTitle, requestOutcome } from '../lib/fingerprint';
 import type { StoredStack } from './sourcemaps';
 
 /** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
@@ -122,7 +122,7 @@ function shouldCreateIssue(event: MonitorEvent): boolean {
 function eventTitle(event: MonitorEvent): string {
   const payload = event.payload;
   if (event.eventType === 'network') {
-    return `${String(payload.method ?? 'GET').toUpperCase()} ${stripUrlQuery(String(payload.url ?? 'request'))} → ${String(payload.status ?? 'failed')}`;
+    return `${String(payload.method ?? 'GET').toUpperCase()} ${stripUrlQuery(String(payload.url ?? 'request'))} → ${requestOutcome(payload)}`;
   }
   if (event.eventType === 'resource') {
     return `Resource failed: ${stripUrlQuery(String(payload.url ?? payload.tagName ?? 'unknown'))}`;
@@ -137,6 +137,8 @@ function eventLevel(event: MonitorEvent): 'error' | 'warning' | 'info' {
   const declared = event.payload.level;
   if (declared === 'warning' || declared === 'info' || declared === 'error') return declared;
   if (event.eventType === 'performance') return 'info';
+  // 业务码表示失败的请求是真实的失败（接入方的判定函数只标记真正的错误），与 5xx 同级。
+  if (event.eventType === 'network' && event.payload.businessCode !== undefined) return 'error';
   if (event.eventType === 'network' && Number(event.payload.status ?? 0) < 500) return 'warning';
   return 'error';
 }

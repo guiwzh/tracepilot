@@ -1,4 +1,5 @@
-import type { MonitorPlugin, PluginContext } from '../types';
+import { DEFAULT_FAILED_STATUS_CODES } from '../core/options';
+import type { BusinessError, MonitorPlugin, PluginContext } from '../types';
 
 /**
  * 通过轻量 monkey patch 包装 Fetch 与 XHR。
@@ -7,7 +8,10 @@ import type { MonitorPlugin, PluginContext } from '../types';
  * 进而聚合为 Issue。成功的请求不再各自上报：服务端没有任何地方消费它们，
  * 而每个事件都附带最多 50 条 breadcrumb，一个普通会话 30 个请求就能多出上百 KB 的上报。
  *
- * 被取消的请求（AbortController、组件卸载、查询库取消）不是故障，同样只记 breadcrumb。
+ * 什么算失败：
+ * - 状态码落在 failedRequestStatusCodes 里（默认只有 5xx），或者拿不到响应的网络错误；
+ * - 配置了 detectBusinessError 时，2xx 的 JSON 响应里业务码表示失败的也算；
+ * - 被取消的请求（AbortController、组件卸载、查询库取消）和 no-cors 的 opaque 响应不算，只记 breadcrumb。
  */
 interface XhrMeta {
   method: string;
@@ -21,10 +25,18 @@ interface RequestRecord {
   url: string;
   status: number;
   duration: number;
+  /** 按失败规则判定的结果；false 的请求会成为事件。 */
   success: boolean;
   aborted?: boolean;
   error?: string;
+  /** detectBusinessError 判定失败时返回的业务码和说明。 */
+  businessCode?: string | number;
+  businessMessage?: string;
 }
+
+/** 超过这个大小的响应体不解析业务码，避免在页面上为了监控解析大段 JSON。 */
+const MAX_BUSINESS_BODY_BYTES = 256 * 1024;
+const MAX_BUSINESS_MESSAGE = 200;
 
 function inputUrl(input: RequestInfo | URL): string {
   if (typeof input === 'string') return input;
@@ -36,9 +48,33 @@ function isAbort(error: unknown, signal: AbortSignal | null | undefined): boolea
   return signal?.aborted === true || (error as { name?: unknown } | null)?.name === 'AbortError';
 }
 
-/** 与 XHR 口径一致：2xx 和 3xx 都算成功。 */
-function successfulStatus(status: number): boolean {
-  return status >= 200 && status < 400;
+function matchesStatus(status: number, codes: ReadonlyArray<number | [number, number]>): boolean {
+  return codes.some((code) =>
+    typeof code === 'number' ? status === code : status >= code[0] && status <= code[1],
+  );
+}
+
+/** 业务码只看 2xx 的 JSON 响应：非 2xx 已经按状态码判定过了，其他类型（HTML、事件流）不是接口数据。 */
+function readsBusinessBody(status: number, contentType: string | null, length: string | null) {
+  return (
+    status >= 200 &&
+    status < 300 &&
+    /json/i.test(contentType ?? '') &&
+    !(Number(length) > MAX_BUSINESS_BODY_BYTES)
+  );
+}
+
+/** XHR 的响应体在 loadend 时已经就绪，同步取出；取不到或不是 JSON 时返回 undefined。 */
+function xhrJsonBody(xhr: XMLHttpRequest): unknown {
+  if (xhr.responseType === 'json') return xhr.response ?? undefined;
+  if (xhr.responseType !== '' && xhr.responseType !== 'text') return undefined;
+  const text = xhr.responseText;
+  if (text.length > MAX_BUSINESS_BODY_BYTES) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 export class NetworkPlugin implements MonitorPlugin {
@@ -88,13 +124,37 @@ export class NetworkPlugin implements MonitorPlugin {
         const response = await original.call(window, input, init);
         // no-cors 请求拿到的是 opaque 响应，状态码固定为 0，看不出成败，不能当作故障。
         const opaque = response.type === 'opaque' || response.type === 'opaqueredirect';
-        this.record({
+        const request: RequestRecord = {
           method,
           url,
           status: response.status,
           duration: performance.now() - startedAt,
-          success: opaque || successfulStatus(response.status),
-        });
+          success: opaque || !this.failedStatus(response.status),
+        };
+        this.record(request);
+        if (
+          request.success &&
+          this.context?.options.detectBusinessError &&
+          readsBusinessBody(
+            response.status,
+            response.headers.get('content-type'),
+            response.headers.get('content-length'),
+          )
+        ) {
+          // 读克隆出来的响应体，业务代码照常读原响应。异步进行、不等它：等它就得等整个响应体下载完，
+          // 业务拿到响应的时间会被拖后。所以上面先记下 HTTP 层面的面包屑，之后的报错一定带着这次请求。
+          try {
+            void response
+              .clone()
+              .json()
+              .then(
+                (body: unknown) => this.checkBusiness(request, body),
+                () => {},
+              );
+          } catch {
+            // 克隆失败（例如响应体已被读走）就放弃这次业务码检查。
+          }
+        }
         return response;
       } catch (error) {
         const aborted = isAbort(error, signal);
@@ -125,6 +185,10 @@ export class NetworkPlugin implements MonitorPlugin {
     // 包装函数里的 this 是 XHR 实例，插件自己的方法通过闭包取用。
     const shouldObserve = (url: string) => this.shouldObserve(url);
     const record = (request: RequestRecord) => this.record(request);
+    const failedStatus = (status: number) => this.failedStatus(status);
+    const checkBusiness = (request: RequestRecord, body: unknown) =>
+      this.checkBusiness(request, body);
+    const detectsBusiness = () => this.context?.options.detectBusinessError !== undefined;
     // open 阶段只有 method/url，send 阶段才真正开始计时。
     this.wrappedOpen = function (
       this: XMLHttpRequest,
@@ -154,14 +218,29 @@ export class NetworkPlugin implements MonitorPlugin {
         // loadend 无论成功、HTTP 失败、网络错误还是被取消都会触发，适合统一收口；abort 事件先于它。
         this.removeEventListener('abort', onAbort);
         this.removeEventListener('loadend', done);
-        record({
+        const request: RequestRecord = {
           method: meta.method,
           url: meta.url,
           status: this.status,
           duration: performance.now() - meta.startedAt,
-          success: successfulStatus(this.status),
+          // 状态码 0 是拿不到响应：网络错误、跨域被拦、超时。被取消的与 fetch 一致：success 为 false，
+          // 另外标记 aborted，只记面包屑、不成为事件。
+          success: !meta.aborted && this.status !== 0 && !failedStatus(this.status),
           ...(meta.aborted ? { aborted: true } : {}),
-        });
+        };
+        record(request);
+        if (
+          request.success &&
+          detectsBusiness() &&
+          readsBusinessBody(
+            this.status,
+            this.getResponseHeader('content-type'),
+            this.getResponseHeader('content-length'),
+          )
+        ) {
+          const body = xhrJsonBody(this);
+          if (body !== undefined) checkBusiness(request, body);
+        }
       };
       this.addEventListener('abort', onAbort);
       this.addEventListener('loadend', done);
@@ -182,6 +261,45 @@ export class NetworkPlugin implements MonitorPlugin {
       data: { ...request },
     });
     if (!request.success && !request.aborted) context.captureEvent('network', { ...request });
+  }
+
+  private failedStatus(status: number): boolean {
+    const codes = this.context?.options.failedRequestStatusCodes ?? DEFAULT_FAILED_STATUS_CODES;
+    return matchesStatus(status, codes);
+  }
+
+  /**
+   * 用接入方的 detectBusinessError 判定 2xx 响应里的业务码。判定为失败时补一条面包屑并上报事件：
+   * HTTP 层面的面包屑在响应到达时已经记下（状态码 200），这一条说明它在业务上失败了。
+   */
+  private checkBusiness(request: RequestRecord, body: unknown): void {
+    const context = this.context;
+    const detect = context?.options.detectBusinessError;
+    if (!context || !detect) return;
+    let failure: BusinessError | null | undefined;
+    try {
+      failure = detect({ method: request.method, url: request.url, status: request.status, body });
+    } catch {
+      // 接入方的判定函数抛错，当作没有业务错误；不能让它影响业务页面。
+      return;
+    }
+    if (!failure || typeof failure !== 'object') return;
+    const code = failure.code;
+    const failed: RequestRecord = {
+      ...request,
+      success: false,
+      ...(typeof code === 'string' || typeof code === 'number' ? { businessCode: code } : {}),
+      ...(failure.message === undefined
+        ? {}
+        : { businessMessage: String(failure.message).slice(0, MAX_BUSINESS_MESSAGE) }),
+    };
+    context.addBreadcrumb({
+      type: 'network',
+      category: 'http',
+      message: `${request.method} ${request.url} → business error${code === undefined ? '' : ` ${String(code)}`}`,
+      data: { ...failed },
+    });
+    context.captureEvent('network', { ...failed });
   }
 
   teardown(): void {

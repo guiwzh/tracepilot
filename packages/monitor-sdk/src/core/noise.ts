@@ -58,7 +58,8 @@ export function dedupeSignature(
     case 'resource':
       return `resource|${String(payload.tagName ?? '')}|${urlPattern(payload.url)}`;
     case 'network':
-      return `network|${String(payload.method ?? '')}|${urlPattern(payload.url)}|${String(payload.status ?? '')}`;
+      // 业务码也参与：同一个接口返回不同的业务错误（余额不足、优惠券过期）是不同的证据。
+      return `network|${String(payload.method ?? '')}|${urlPattern(payload.url)}|${String(payload.status ?? '')}|${String(payload.businessCode ?? '')}`;
     default:
       // 指标样本由服务端按 metricId 覆盖，同一指标的新值必须送达，不能在这里挡掉。
       return null;

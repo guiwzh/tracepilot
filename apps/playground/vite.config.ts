@@ -14,6 +14,12 @@ const labEndpoints: Connect.NextHandleFunction = (request, response, next) => {
     response.end(JSON.stringify({ error: 'UPSTREAM_UNAVAILABLE', retryAfter: 30 }));
     return;
   }
+  if (path === '/__lab/coupon') {
+    // HTTP 层面成功，业务上失败：很多接口约定 code 为 0 表示成功，失败时照样返回 200。
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ code: 40012, message: 'Coupon expired', data: null }));
+    return;
+  }
   if (path === '/__lab/slow') {
     // 两秒后才响应，足够让「取消请求」场景在它完成之前中止它。
     const timer = setTimeout(() => response.end('{}'), 2_000);

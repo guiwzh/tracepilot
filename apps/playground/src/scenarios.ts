@@ -78,8 +78,16 @@ export const scenarios: Scenario[] = [
     },
   },
   {
-    id: 'route',
+    id: 'business',
     number: '06',
+    title: 'Business error (HTTP 200)',
+    description:
+      'The coupon API answers 200 with { code: 40012 } in the body. detectBusinessError reads a clone of the JSON body and reports it as a failed request.',
+    run: () => fetch('/__lab/coupon', { method: 'POST' }),
+  },
+  {
+    id: 'route',
+    number: '07',
     title: 'SPA route change',
     description:
       'Navigates without reloading. It is not an issue on its own; it shows up as a breadcrumb on the next event.',
@@ -91,7 +99,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'warning',
-    number: '07',
+    number: '08',
     title: 'Captured warning',
     description:
       'An application-owned warning with context. beforeSend removes the customer email before it is sent.',
@@ -107,7 +115,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'react',
-    number: '08',
+    number: '09',
     title: 'React render error',
     description:
       'The order summary widget crashes while rendering. Its error boundary catches it, so window.error never fires; the root onCaughtError hook reports it with the component stack.',
@@ -115,7 +123,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'abort',
-    number: '09',
+    number: '10',
     title: 'Cancelled request',
     description:
       'Starts a slow request and aborts it, as an unmounting component would. It stays a breadcrumb and never becomes an issue.',
@@ -128,7 +136,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'storm',
-    number: '10',
+    number: '11',
     title: 'Error storm',
     description:
       'Throws the same error 20 times and breaks 12 thumbnails at once. Short-window deduplication sends one event of each.',
@@ -149,7 +157,7 @@ export const scenarios: Scenario[] = [
   },
   {
     id: 'exit',
-    number: '11',
+    number: '12',
     title: 'Leave with queued events',
     description:
       'Queues two messages and reloads at once. Whatever has not been sent yet leaves through sendBeacon on the way out.',

@@ -259,8 +259,8 @@ flowchart LR
 
 ## 已实现
 
-- **插件化浏览器 SDK**：runtime error、unhandled rejection、资源错误、失败的 Fetch/XHR（成功与被取消的
-  请求只记 Breadcrumb）、点击/路由 Breadcrumb、Web Vitals（官方 `web-vitals` 计算）、React 错误边界
+- **插件化浏览器 SDK**：runtime error、unhandled rejection、资源错误、失败的 Fetch/XHR（默认只算 5xx 与
+  网络错误，可配置；可选按响应体里的业务码判定失败；其余请求只记 Breadcrumb）、点击/路由 Breadcrumb、Web Vitals（官方 `web-vitals` 计算）、React 错误边界
   （`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
 - **可靠传输**：按会话采样、短窗口去重（错误、资源、失败请求）、按条数与字节批量上报、有限重试、
   连续失败时指数退避并遵守 `Retry-After`、拒收的 4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
@@ -317,9 +317,9 @@ createRoot(container, {
 点击 Breadcrumb 只记录按钮、链接这类可交互元素上的文字；列表、卡片等容器只记标签和 id/class。
 标记了 `data-tp-mask` 的区域不记录任何文字。
 
-Playground 提供 11 个场景：runtime、Promise、资源、Fetch、XHR、SPA 路由、带上下文的告警、React 渲染错误、
-被取消的请求、错误风暴和带着未发送事件离开页面。每个场景都由 `tests/e2e/playground.spec.ts` 在真实 Chrome
-里点一遍，并核对服务端最终收到的内容。上报目标默认是演示项目，可在 `apps/playground/.env`（见同目录的
+Playground 提供 12 个场景：runtime、Promise、资源、Fetch、XHR、业务码失败（HTTP 200）、SPA 路由、
+带上下文的告警、React 渲染错误、被取消的请求、错误风暴和带着未发送事件离开页面。每个场景都由
+`tests/e2e/playground.spec.ts` 在真实 Chrome 里点一遍，并核对服务端最终收到的内容。上报目标默认是演示项目，可在 `apps/playground/.env`（见同目录的
 `.env.example`）或地址参数 `?projectId=…&dsnKey=…` 中修改。
 `pnpm --filter @trace-pilot/playground lab:production` 以生产构建运行演练场（4175 端口），并把 Source Map
 上传到对应版本，用来演示压缩堆栈的还原。

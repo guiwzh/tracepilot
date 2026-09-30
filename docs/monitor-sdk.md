@@ -108,23 +108,25 @@ monitor.start();
 
 ### 4.2 配置项
 
-| 选项                    | 必填 | 默认值         | 取值范围                              | 说明                                                  |
-| ----------------------- | :--: | -------------- | ------------------------------------- | ----------------------------------------------------- |
-| `dsn`                   |  是  | —              | —                                     | 接入接口的完整 URL                                    |
-| `projectId`             |  是  | —              | —                                     | 事件所属项目                                          |
-| `release`               |  是  | —              | —                                     | 当前构建的版本号，必须与上传 Source Map 时填的一致    |
-| `environment`           |  是  | —              | `development` / `test` / `production` |                                                       |
-| `dsnKey`                |  否  | 同 `projectId` | —                                     | 公开的接入键，不是密钥                                |
-| `sampleRate`            |  否  | 1              | 0–1                                   | 按标签页会话采样的比例，错误也包括在内，一般保持 1    |
-| `performanceSampleRate` |  否  | 1              | 0–1                                   | 被采样的会话里上报性能样本的比例，只作用于 Web Vitals |
-| `batchSize`             |  否  | 10             | 1–100                                 | 队列攒够这么多条立即发送                              |
-| `flushInterval`         |  否  | 5,000 ms       | 100 ms–24 h                           | 定时发送间隔；连续失败时在此基础上指数退避            |
-| `maxRetries`            |  否  | 2              | 0–10                                  | 一批失败后同一轮里的快速重试次数（100、200 ms……）     |
-| `maxQueueSize`          |  否  | 1,000          | 10–10,000                             | 队列上限，满了之后丢弃新到的事件                      |
-| `dedupeWindow`          |  否  | 5,000 ms       | 0–10 min                              | 同类信号的去重窗口，见第 7 节                         |
-| `ignoreErrors`          |  否  | `[]`           | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试  |
-| `user`                  |  否  | —              | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改      |
-| `beforeSend`            |  否  | —              | —                                     | 最后一道业务侧闸门：修改事件，或返回 `null` 取消      |
+| 选项                       | 必填 | 默认值         | 取值范围                              | 说明                                                  |
+| -------------------------- | :--: | -------------- | ------------------------------------- | ----------------------------------------------------- |
+| `dsn`                      |  是  | —              | —                                     | 接入接口的完整 URL                                    |
+| `projectId`                |  是  | —              | —                                     | 事件所属项目                                          |
+| `release`                  |  是  | —              | —                                     | 当前构建的版本号，必须与上传 Source Map 时填的一致    |
+| `environment`              |  是  | —              | `development` / `test` / `production` |                                                       |
+| `dsnKey`                   |  否  | 同 `projectId` | —                                     | 公开的接入键，不是密钥                                |
+| `sampleRate`               |  否  | 1              | 0–1                                   | 按标签页会话采样的比例，错误也包括在内，一般保持 1    |
+| `performanceSampleRate`    |  否  | 1              | 0–1                                   | 被采样的会话里上报性能样本的比例，只作用于 Web Vitals |
+| `batchSize`                |  否  | 10             | 1–100                                 | 队列攒够这么多条立即发送                              |
+| `flushInterval`            |  否  | 5,000 ms       | 100 ms–24 h                           | 定时发送间隔；连续失败时在此基础上指数退避            |
+| `maxRetries`               |  否  | 2              | 0–10                                  | 一批失败后同一轮里的快速重试次数（100、200 ms……）     |
+| `maxQueueSize`             |  否  | 1,000          | 10–10,000                             | 队列上限，满了之后丢弃新到的事件                      |
+| `dedupeWindow`             |  否  | 5,000 ms       | 0–10 min                              | 同类信号的去重窗口，见第 7 节                         |
+| `ignoreErrors`             |  否  | `[]`           | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试  |
+| `failedRequestStatusCodes` |  否  | `[[500, 599]]` | 状态码或 `[起, 止]` 区间              | 哪些状态码算请求失败；默认只有 5xx，见 10.5           |
+| `detectBusinessError`      |  否  | —              | —                                     | 判定 2xx 的 JSON 响应是否业务失败，见 10.5            |
+| `user`                     |  否  | —              | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改      |
+| `beforeSend`               |  否  | —              | —                                     | 最后一道业务侧闸门：修改事件，或返回 `null` 取消      |
 
 数字选项在 `core/options.ts` 统一规范化：超出范围的夹到边界并取整，`NaN`、`Infinity` 或缺省时用默认值；
 `sampleRate`、`performanceSampleRate` 同样夹在 0–1 之间（不取整），缺省或非法时为 1。默认值来自
@@ -275,30 +277,30 @@ sequenceDiagram
 
 ### 6.1 哪些信号成为事件
 
-| 信号                                             | 结果                             | 来源                |
-| ------------------------------------------------ | -------------------------------- | ------------------- |
-| 运行时异常                                       | `error` 事件                     | ErrorPlugin         |
-| 未处理的 Promise 拒绝                            | `error` 事件                     | PromisePlugin       |
-| React 错误边界捕获的渲染错误                     | `error` 事件（带组件栈）         | `reactErrorHandler` |
-| `captureException` / `captureMessage`            | `error` 事件                     | 业务代码            |
-| 图片、脚本、样式表、媒体加载失败                 | `resource` 事件                  | ResourcePlugin      |
-| 状态码不在 200–399、或网络错误的请求             | `network` 事件，同时记一条面包屑 | NetworkPlugin       |
-| 成功的请求、被取消的请求、no-cors 的 opaque 响应 | 只记面包屑                       | NetworkPlugin       |
-| 点击、路由变化                                   | 只记面包屑                       | BehaviorPlugin      |
-| LCP、CLS、INP、FCP、TTFB                         | `performance` 事件（不带面包屑） | PerformancePlugin   |
-| `Script error.`、ResizeObserver 告警、扩展报错   | 丢弃                             | 核心的忽略规则      |
+| 信号                                            | 结果                             | 来源                |
+| ----------------------------------------------- | -------------------------------- | ------------------- |
+| 运行时异常                                      | `error` 事件                     | ErrorPlugin         |
+| 未处理的 Promise 拒绝                           | `error` 事件                     | PromisePlugin       |
+| React 错误边界捕获的渲染错误                    | `error` 事件（带组件栈）         | `reactErrorHandler` |
+| `captureException` / `captureMessage`           | `error` 事件                     | 业务代码            |
+| 图片、脚本、样式表、媒体加载失败                | `resource` 事件                  | ResourcePlugin      |
+| 5xx（可配置）、网络错误、业务码表示失败的请求   | `network` 事件，同时记一条面包屑 | NetworkPlugin       |
+| 其余请求（含默认的 4xx）、被取消的、opaque 响应 | 只记面包屑                       | NetworkPlugin       |
+| 点击、路由变化                                  | 只记面包屑                       | BehaviorPlugin      |
+| LCP、CLS、INP、FCP、TTFB                        | `performance` 事件（不带面包屑） | PerformancePlugin   |
+| `Script error.`、ResizeObserver 告警、扩展报错  | 丢弃                             | 核心的忽略规则      |
 
 ### 6.2 各类 payload
 
-| 事件             | payload 字段                                                                                               |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| 运行时异常       | `name`、`message`、`stack`、`filename`、`line`、`column`、`level: 'error'`                                 |
-| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`               |
-| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                      |
-| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                      |
-| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                        |
-| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息） |
-| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`                                                  |
+| 事件             | payload 字段                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 运行时异常       | `name`、`message`、`stack`、`filename`、`line`、`column`、`level: 'error'`                                                                                   |
+| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`                                                                 |
+| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                                                                        |
+| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                        |
+| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                          |
+| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时） |
+| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`                                                                                                    |
 
 非 Error 的 reason 也能稳定序列化：字符串成为 `message`；其他值用 `JSON.stringify` 转成文本，失败时用
 `String()`，`name` 为 `UnknownError`。
@@ -327,7 +329,7 @@ sequenceDiagram
 | ------------- | ------------------------------------------ | -------------------------------------------------------------------- |
 | `error`       | 错误名、消息、栈首帧（行列号替换成占位符） | 同时兼容 V8 的 `at fn (url:1:2)` 与 Firefox / Safari 的 `fn@url:1:2` |
 | `resource`    | 标签名、地址模式                           | 地址模式去掉查询和片段，并把数字串统一成 `0`                         |
-| `network`     | 请求方法、地址模式、状态码                 | 同一接口的另一种失败是新的证据                                       |
+| `network`     | 请求方法、地址模式、状态码、业务码         | 同一接口的另一种失败是新的证据                                       |
 | `performance` | 不去重                                     | 同一指标的新值必须送达，服务端按 `metricId` 覆盖                     |
 
 地址模式让 `/thumbs/product-17.png` 与 `/thumbs/product-18.png`、`/api/orders/1001` 与 `/api/orders/1002`
@@ -546,10 +548,24 @@ interface PluginContext {
 不单独上报：服务端没有任何地方消费它们，而每个事件都附带最多 50 条面包屑，一个普通会话 30 个请求就能多出上百
 KB 的上报。
 
+**什么算失败**：
+
+| 情况                                                   | 结果           |
+| ------------------------------------------------------ | -------------- |
+| 状态码落在 `failedRequestStatusCodes` 里（默认 5xx）   | 失败，成为事件 |
+| 拿不到响应的网络错误（状态码 0：断网、跨域被拦、超时） | 失败，成为事件 |
+| 2xx 的 JSON 响应，`detectBusinessError` 判定为业务失败 | 失败，成为事件 |
+| 其余状态码，包括默认的 4xx                             | 只记面包屑     |
+| 被取消的请求、no-cors 的 opaque 响应                   | 只记面包屑     |
+
+4xx 默认不算失败：401 登录过期、404 查无此项、422 表单校验这类响应常是预期内的，报成 Issue 只会制造噪声，
+Sentry 也只把 5xx 算作失败。需要时把它们加进 `failedRequestStatusCodes`，例如 `[[400, 499], [500, 599]]`。
+无论算不算失败，面包屑里都有状态码，排障 Agent 看时间线时照样能看到 4xx。
+
 **fetch**：替换 `window.fetch` 为一个包装函数。
 
 - 记录方法（`init.method`，或 `Request` 对象的 method，默认 `GET`）、地址、状态码、耗时（`performance.now()`）。
-- 响应的状态码在 200–399 之间算成功；no-cors 请求拿到的 opaque 响应状态码固定为 0、看不出成败，也算成功，不当作故障。
+- no-cors 请求拿到的 opaque 响应状态码固定为 0、看不出成败，不当作故障。
 - 请求抛错时：`AbortController` 触发的取消（signal 已中止或 `AbortError`）标记为 `aborted`，只记面包屑；其余是
   网络错误，状态码记为 0，带上错误消息，成为事件。采集之后**原样重新抛出**，不改变业务代码对 fetch rejection 的处理。
 
@@ -557,13 +573,39 @@ KB 的上报。
 
 - `open` 时记下方法和地址（存在 `WeakMap` 里，不阻止 XHR 对象被回收）。
 - `send` 时开始计时，监听 `abort` 和 `loadend`：`loadend` 在成功、HTTP 失败、网络错误、被取消时都会触发，统一在这里
-  记录；`abort` 先于它到达，用来区分取消。
+  记录；`abort` 先于它到达，用来区分取消。状态码 0 且没有被取消的，是拿不到响应的网络错误。
+
+**业务码**：很多接口失败时也返回 HTTP 200，把结果放在响应体里（常见约定是 `{ code, message }`，`code` 为 0
+表示成功）。只看状态码，这类失败永远看不到。配置了 `detectBusinessError` 后：
+
+```ts
+createMonitor({
+  // ...
+  detectBusinessError: ({ body }) => {
+    const { code, message } = (body ?? {}) as { code?: number; message?: string };
+    return code === undefined || code === 0 ? null : { code, message };
+  },
+});
+```
+
+- **只读 2xx 的 JSON 响应**：非 2xx 已经按状态码判定过了；`content-type` 不含 `json` 的不读（HTML、文件、
+  事件流），`content-length` 超过 256 KB 的也不读，不在页面上为了监控解析大段 JSON。
+- **fetch 读克隆**：用 `response.clone().json()` 读取，业务代码照常读原响应。这一步是异步的，也不等它完成：
+  等它就得等整个响应体下载完，业务拿到响应的时间会被拖后，流式读取也会被打乱。所以响应到达时先记下
+  HTTP 层面的面包屑（`→ 200`），之后的报错一定带着这次请求；读完判定为失败，再补一条
+  `→ business error 40012` 的面包屑，并上报事件。
+- **XHR 同步读**：`loadend` 时响应体已经就绪，直接读 `response` / `responseText` 解析。
+- **隐私**：响应体只在页面内存里解析，除了判定函数返回的 `code` 和 `message`（截断到 200 字符）不会上报。
+- **隔离**：判定函数抛错当作没有业务错误，不影响业务页面。
+- 服务端按业务码单独聚合：同一个接口上的不同业务码是不同的 Issue，标题形如
+  `POST /api/coupon → code 40012`，级别为 error。
 
 **产出**：
 
 - 面包屑：`type: 'network'`、`category: 'http'`，消息形如 `POST https://api.example.com/pay → 503` 或
   `GET /api/slow → aborted`，`data` 是完整的请求记录。地址里的查询参数由核心在加入面包屑时脱敏。
-- 事件：不成功且没有被取消时，`captureEvent('network', 请求记录)`。
+- 事件：判定为失败且没有被取消时，`captureEvent('network', 请求记录)`。请求记录里的 `success` 表示
+  按上面的规则有没有判为失败，所以一个默认配置下的 404 是 `success: true`。
 
 **不采集自己**：地址里包含 `dsn` 的请求直接透传。正常情况下 SDK 的上报根本不经过包装（传输层保存的是原生 fetch），
 这道判断兜住的是另一个 SDK 实例在本插件之后创建、因而保存到了包装版本的情况。不用自定义请求头做标记：自定义头会
@@ -733,22 +775,22 @@ monitor.use(new ConsoleBreadcrumbPlugin());
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
-| 测试文件                            | 覆盖                                                                                                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、`flush()` 的投递状况、配置规范化                          |
-| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数 |
-| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                      |
-| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                              |
-| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、XHR、只还原自己的包装                                     |
-| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                    |
-| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后                                                                              |
-| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                           |
+| 测试文件                            | 覆盖                                                                                                                                                                                                             |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、`flush()` 的投递状况、配置规范化                                                                                         |
+| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                |
+| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                     |
+| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                             |
+| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装 |
+| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                   |
+| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后                                                                                                                                             |
+| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                          |
 
 **真实浏览器**（Playwright + Chromium）：
 
 - `tests/e2e/sdk-delivery.spec.ts`：用 SDK 默认配置和真实的跨域服务端，验证 50 次请求之后连续 10 个带完整面包屑的
   错误全部送达，以及页面退出时仍在队列里的事件经 beacon 送达。这两条路径都曾在单元测试全绿的情况下静默丢数据。
-- `tests/e2e/playground.spec.ts`：逐个点击演练场的 11 个场景，核对服务端最终收到的内容。
+- `tests/e2e/playground.spec.ts`：逐个点击演练场的 12 个场景，核对服务端最终收到的内容。
 
 **运行时开销与泄漏**（`pnpm measure:sdk-runtime`，真实 Chromium）：`createMonitor()` + `start()` 的 P50 约
 30 µs，单次 `captureException` 的 P50 约 25 µs（数量级绊线分别是 2,000 µs 和 250 µs）；500 个错误、10 种签名的
@@ -767,6 +809,8 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 - **去重按页面实例**：不跨标签页，也不跨页面加载。
 - **资源失败只覆盖能拿到地址的元素**：`<img>`、`<script>`、`<link>`、`<audio>` / `<video>`。CSS 里的背景图、
   字体加载失败不触发 error 事件，采不到。
+- **业务码只看 2xx 的 JSON 响应**：`content-type` 不含 `json` 或超过 256 KB 的响应不解析；fetch 的判定是异步的，
+  业务失败的面包屑和事件比 HTTP 层面的那条晚一点出现。
 - **请求只覆盖 fetch 和 XHR**：WebSocket、EventSource 和业务自己调用的 `sendBeacon` 不在其中；不采集请求和响应的
   body 与 headers。
 - **不采集控制台输出**：面包屑的类型里保留了 `console`，但没有默认插件产生它（可参考 10.9 自己加）。

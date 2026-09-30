@@ -166,3 +166,37 @@ describe('sample rate', () => {
     expect([rate('sampled'), rate('legacy')]).toEqual([0.25, 1]);
   });
 });
+
+describe('business errors', () => {
+  it('groups a 200 response with a failing business code by that code', () => {
+    const business = (id: string, code: number): MonitorEvent => ({
+      ...errorAt(id, RECEIVED_AT),
+      eventType: 'network',
+      payload: {
+        method: 'POST',
+        url: 'https://api.shop.test/coupon',
+        status: 200,
+        duration: 12,
+        success: false,
+        businessCode: code,
+        businessMessage: 'Coupon expired',
+      },
+    });
+    ingestEnvelope(
+      database,
+      {
+        dsnKey: 'demo-dsn-key',
+        sentAt: RECEIVED_AT,
+        events: [business('a', 40012), business('b', 40012), business('c', 50001)],
+      },
+      RECEIVED_AT,
+    );
+    const issues = database.sqlite
+      .prepare('SELECT title, level, event_count FROM issues ORDER BY title')
+      .all();
+    expect(issues).toEqual([
+      { title: 'POST https://api.shop.test/coupon → code 40012', level: 'error', event_count: 2 },
+      { title: 'POST https://api.shop.test/coupon → code 50001', level: 'error', event_count: 1 },
+    ]);
+  });
+});

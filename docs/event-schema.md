@@ -36,8 +36,10 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
   转交的渲染错误，以及 `captureException` / `captureMessage`。默认忽略 `Script error.`、
   ResizeObserver 循环告警和浏览器扩展里的报错。
 - `resource`：图片、脚本、样式表、媒体加载失败。
-- `network`：**只有失败的请求**（状态码 ≥ 400 或网络错误）。成功的请求、被取消的请求和 no-cors 的
-  opaque 响应只记成 breadcrumb，作为之后错误的上下文。
+- `network`：**只有失败的请求**：状态码落在 `failedRequestStatusCodes` 里（默认只有 5xx）、拿不到响应的
+  网络错误，或者配置了 `detectBusinessError` 后业务码表示失败的 2xx 响应（payload 带 `businessCode`、
+  `businessMessage`）。其余请求（包括默认的 4xx）、被取消的请求和 no-cors 的 opaque 响应只记成 breadcrumb，
+  作为之后错误的上下文。
 - `performance`：Web Vitals 样本，**不附带 breadcrumb**——它们不属于任何 Issue 的证据链。
 
 同一签名的 `error`、`resource`、`network` 事件在短窗口（默认 5 秒）内只发送第一条。窗口从上一次发送算起，
@@ -77,7 +79,7 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）；
   `stack` 与 `componentStack` 只删帧里的查询参数，保留行列号。
 - **聚合**：错误按「类型 + 归一化后的消息 + 栈顶帧」的指纹归入 Issue，资源加载失败按地址，失败的请求按
-  「方法 + 地址 + 状态码」；地址都去掉查询参数、把业务 ID 归一。已解决的 Issue 收到发生时间晚于解决时间的
+  「方法 + 地址 + 状态码」，业务失败再加上原样的业务码；地址都去掉查询参数、把业务 ID 归一。已解决的 Issue 收到发生时间晚于解决时间的
   新事件时重新打开为未解决；已忽略的保持忽略。
 - 带堆栈的新事件在入库之后按所在 Release 的 Source Map 还原，结果存为 `originalStack`；
   map 缺失、损坏或还原失败只会少这一项，不影响 202。

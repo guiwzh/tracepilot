@@ -53,7 +53,11 @@ export function activitySnapshot(): Activity[] {
 
 function summarize(eventType: string, payload: Record<string, unknown>): string {
   if (eventType === 'network') {
-    return `network · ${String(payload.method)} ${String(payload.url)} → ${String(payload.status)}`;
+    const outcome =
+      payload.businessCode === undefined
+        ? String(payload.status)
+        : `code ${String(payload.businessCode)}`;
+    return `network · ${String(payload.method)} ${String(payload.url)} → ${outcome}`;
   }
   if (eventType === 'performance') {
     return `performance · ${String(payload.metric)} ${String(payload.value)}`;
@@ -71,6 +75,11 @@ export const monitor = createMonitor({
   // 攒够 3 条或每 2 秒发送一次，演示时不用久等；真实应用用默认值即可。
   batchSize: 3,
   flushInterval: 2_000,
+  // 演练场的接口约定 code 为 0 表示成功；HTTP 200 但 code 不为 0 的按失败上报。
+  detectBusinessError: ({ body }) => {
+    const { code, message } = (body ?? {}) as { code?: number; message?: string };
+    return code === undefined || code === 0 ? null : { code, message };
+  },
   beforeSend(event) {
     // SDK 的默认脱敏认得出 token、password 和 URL 查询参数，认不出业务数据：
     // customerEmail 是个人信息这件事只有业务自己知道，所以在这里删掉。

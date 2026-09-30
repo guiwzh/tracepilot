@@ -78,7 +78,11 @@ function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
   const offset = seconds(item.timestamp - eventTime);
   if (item.type === 'network' && item.data) {
     const duration = Number(item.data.duration);
-    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${String(item.data.status ?? '?')}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
+    const business =
+      item.data.businessCode === undefined
+        ? ''
+        : ` business error ${String(item.data.businessCode)}${item.data.businessMessage ? `: ${String(item.data.businessMessage)}` : ''}`;
+    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${String(item.data.status ?? '?')}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
   }
   return `${offset} ${item.type} ${item.message}`;
 }
@@ -161,8 +165,11 @@ const getEventDetail = defineTool({
   execute: ({ eventId }, context) => {
     const event = findEvent(context, eventId);
     const payload = event.context.payload;
+    // 4xx 默认不成为事件，但仍是值得一看的证据；业务码表示失败的 2xx 也算。
     const failed = event.breadcrumbs.filter(
-      (item) => item.type === 'network' && Number(item.data?.status ?? 0) >= 400,
+      (item) =>
+        item.type === 'network' &&
+        (Number(item.data?.status ?? 0) >= 400 || item.data?.businessCode !== undefined),
     );
     return {
       eventId: event.id,
