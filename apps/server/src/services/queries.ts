@@ -384,7 +384,12 @@ interface PerformanceSample {
   route: string;
   browser: string;
   createdAt: number;
+  /** 造成这个指标的元素（CSS 选择器），来自 SDK 上报的 web-vitals 归因；只有 LCP、CLS、INP 有。 */
+  element?: string;
 }
+
+/** 归因里带元素的指标。 */
+const ELEMENT_METRICS: readonly PerformanceMetricName[] = ['LCP', 'CLS', 'INP'];
 
 function routeName(pageUrl: string, route?: string): string {
   if (route) return route.replace(/[?#].*$/, '') || '/';
@@ -413,8 +418,9 @@ function getPerformanceSamples(database: TraceDatabase, projectId: string): Perf
     const context = parseJson<{
       page?: { route?: string };
       device?: { userAgent?: string };
-      payload?: { metric?: string; value?: number };
+      payload?: { metric?: string; value?: number; attribution?: { target?: unknown } };
     }>(String(row.context_json), {});
+    const target = context.payload?.attribution?.target;
     const metric = context.payload?.metric?.toUpperCase();
     const value = Number(context.payload?.value);
     if (!PERFORMANCE_METRICS.includes(metric as PerformanceMetricName) || !Number.isFinite(value)) {
@@ -427,6 +433,7 @@ function getPerformanceSamples(database: TraceDatabase, projectId: string): Perf
       route: routeName(String(row.page_url), context.page?.route),
       browser: browserName(context.device?.userAgent ?? ''),
       createdAt: number(row.created_at),
+      ...(typeof target === 'string' && target ? { element: target } : {}),
     });
   }
   return samples;
@@ -493,6 +500,39 @@ function performanceComparison(
     .sort((left, right) => right.samples - left.samples || left.name.localeCompare(right.name));
 }
 
+/**
+ * p75 最差的元素：LCP 是哪张图或哪段文字、CLS 是谁在移动、INP 是点了什么。
+ * 按「指标 + 元素」分组，每个指标取 p75 最高的 5 个，比按路由比较更直接地指向要优化的地方。
+ */
+function slowestElements(samples: PerformanceSample[]): PerformanceComparison[] {
+  const grouped = new Map<string, number[]>();
+  for (const sample of samples) {
+    if (!sample.element || !ELEMENT_METRICS.includes(sample.metric)) continue;
+    const key = `${sample.metric}\u0000${sample.element}`;
+    const values = grouped.get(key);
+    if (values) values.push(sample.value);
+    else grouped.set(key, [sample.value]);
+  }
+  const items = [...grouped.entries()].map(([key, values]) => {
+    const [metric = 'LCP', name = 'Unknown'] = key.split('\u0000');
+    const metricName = metric as PerformanceMetricName;
+    const p75 = percentile(values, 0.75);
+    return {
+      name,
+      metric: metricName,
+      p75,
+      rating: metricRating(metricName, p75),
+      samples: values.length,
+    };
+  });
+  return ELEMENT_METRICS.flatMap((metric) =>
+    items
+      .filter((item) => item.metric === metric)
+      .sort((left, right) => right.p75 - left.p75 || right.samples - left.samples)
+      .slice(0, 5),
+  );
+}
+
 export function getPerformanceOverview(
   database: TraceDatabase,
   projectId: string,
@@ -514,6 +554,7 @@ export function getPerformanceOverview(
     byRelease: performanceComparison(samples, 'release'),
     byRoute: performanceComparison(samples, 'route'),
     byBrowser: performanceComparison(samples, 'browser'),
+    byElement: slowestElements(samples),
     trend: PERFORMANCE_METRICS.flatMap((metric) =>
       Array.from({ length: 7 }, (_, bucket) => {
         const values = trendGroups.get(`${bucket}\u0000${metric}`) ?? [];

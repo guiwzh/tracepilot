@@ -229,12 +229,20 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
   }
 
   const vitalValues = { LCP: 2280, INP: 184, CLS: 0.082, FCP: 1420, TTFB: 620 } as const;
+  // web-vitals 归因给出的元素：[偏慢的那个, 较快的那个]。FCP、TTFB 没有元素。
+  const vitalTargets: Partial<Record<string, [string, string]>> = {
+    LCP: ['main>section.hero>img.hero-banner', 'main>div.product-grid>img.product-thumb'],
+    CLS: ['div.promo-banner', 'footer>div.newsletter-signup'],
+    INP: ['button#apply-coupon', 'button#pay'],
+  };
   let metricIndex = 0;
   for (const [metric, base] of Object.entries(vitalValues)) {
     for (let sample = 0; sample < 28; sample += 1) {
       const id = `demo-vital-${metric}-${sample}`;
       const timestamp = now - sample * 3 * 60 * 60_000;
       const variance = metric === 'CLS' ? sample * 0.0015 : (sample % 7) * 72;
+      const targets = vitalTargets[metric];
+      const slower = metric === 'CLS' ? sample > 14 : sample % 7 >= 4;
       events.push({
         ...baseEvent(id, timestamp, metricIndex + 400),
         eventType: 'performance',
@@ -242,6 +250,7 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
           metric,
           value: base + variance,
           rating: sample > 23 ? 'needs-improvement' : 'good',
+          ...(targets ? { attribution: { target: slower ? targets[0] : targets[1] } } : {}),
         },
         breadcrumbs: [],
       });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Metric } from 'web-vitals';
 import type { MonitorEvent } from '@trace-pilot/shared';
-import type { PluginContext } from '../../src/types';
+import type { CaptureOptions, PluginContext } from '../../src/types';
 
 /**
  * web-vitals 被替换成可手动触发的假实现：指标算法由官方库负责并有它自己的测试，
@@ -12,7 +12,7 @@ const webVitals = vi.hoisted(() => ({
   registrations: 0,
 }));
 
-vi.mock('web-vitals', () => {
+vi.mock('web-vitals/attribution', () => {
   const register = (name: string) => (callback: (metric: unknown) => void) => {
     webVitals.registrations += 1;
     webVitals.callbacks.set(name, callback);
@@ -26,17 +26,25 @@ vi.mock('web-vitals', () => {
   };
 });
 
-function emit(name: Metric['name'], value: number, id = `v6-${name}-1`): void {
+function emit(
+  name: Metric['name'],
+  value: number,
+  id = `v6-${name}-1`,
+  attribution?: Record<string, unknown>,
+): void {
   webVitals.callbacks.get(name)?.({
-    name,
-    value,
-    rating: 'good',
-    delta: value,
-    id,
-    entries: [],
-    navigationType: 'navigate',
-    navigationId: 1,
-  } satisfies Metric);
+    ...({
+      name,
+      value,
+      rating: 'good',
+      delta: value,
+      id,
+      entries: [],
+      navigationType: 'navigate',
+      navigationId: 1,
+    } satisfies Metric),
+    attribution,
+  });
 }
 
 // 插件的单例状态是模块级的，每个用例重新加载模块，互不影响。
@@ -46,7 +54,9 @@ async function freshPlugin() {
 }
 
 function fakeContext() {
-  const captureEvent = vi.fn((_type: string, _payload: Record<string, unknown>) => 'event-id');
+  const captureEvent = vi.fn(
+    (_type: string, _payload: Record<string, unknown>, _options?: CaptureOptions) => 'event-id',
+  );
   return { captureEvent, context: { captureEvent } as unknown as PluginContext };
 }
 
@@ -111,6 +121,93 @@ describe('PerformancePlugin', () => {
     plugin.teardown();
   });
 
+  it('reports where a metric happened, not the route the user left the page from', async () => {
+    // 回归：LCP、CLS、INP 在页面隐藏时才上报，事件曾带着那一刻的页面。单页应用里用户早已换了路由，
+    // 首屏的 LCP 就被算到了最后停留的结账页上，按路由比较性能的结论全是错的。
+    history.replaceState({}, '', '/landing');
+    const plugin = await freshPlugin();
+    const { captureEvent, context } = fakeContext();
+    plugin.setup(context);
+
+    emit('LCP', 2_400);
+    history.pushState({}, '', '/checkout');
+    emit('INP', 320);
+    history.pushState({}, '', '/confirmation');
+    plugin.onPageHidden();
+
+    expect(
+      captureEvent.mock.calls.map(([, payload, options]) => [payload.metric, options?.page?.route]),
+    ).toEqual([
+      ['LCP', '/landing'],
+      ['INP', '/checkout'],
+    ]);
+    plugin.teardown();
+  });
+
+  it('sends the element behind a metric and its timing breakdown, not the raw entries', async () => {
+    const plugin = await freshPlugin();
+    const { captureEvent, context } = fakeContext();
+    plugin.setup(context);
+
+    emit('LCP', 3_100, 'v6-LCP-1', {
+      target: 'main>img.hero',
+      url: 'https://cdn.shop.test/hero.jpg',
+      timeToFirstByte: 612.345,
+      resourceLoadDelay: 180,
+      resourceLoadDuration: 1_900.04,
+      elementRenderDelay: 407.6,
+      // 原始条目（含 DOM 元素引用）不应上报。
+      lcpEntry: { element: document.body, size: 120_000 },
+    });
+    emit('INP', 540, 'v6-INP-1', {
+      interactionTarget: 'button#pay',
+      interactionType: 'pointer',
+      inputDelay: 12,
+      processingDuration: 480.25,
+      presentationDelay: 47.75,
+      loadState: 'complete',
+      longAnimationFrameEntries: [{ duration: 560 }],
+      longestScript: {
+        entry: {
+          sourceURL: 'https://shop.test/assets/checkout.js',
+          sourceFunctionName: 'validateCart',
+          invoker: 'BUTTON#pay.onclick',
+          invokerType: 'event-listener',
+        },
+        subpart: 'processing-duration',
+        intersectingDuration: 455.55,
+      },
+    });
+    plugin.onPageHidden();
+
+    const [lcp, inp] = captureEvent.mock.calls.map(([, payload]) => payload.attribution);
+    expect(lcp).toEqual({
+      target: 'main>img.hero',
+      url: 'https://cdn.shop.test/hero.jpg',
+      timeToFirstByte: 612.3,
+      resourceLoadDelay: 180,
+      resourceLoadDuration: 1_900,
+      elementRenderDelay: 407.6,
+    });
+    expect(inp).toEqual({
+      target: 'button#pay',
+      interactionType: 'pointer',
+      inputDelay: 12,
+      processingDuration: 480.3,
+      presentationDelay: 47.8,
+      loadState: 'complete',
+      longestScript: {
+        sourceURL: 'https://shop.test/assets/checkout.js',
+        sourceFunctionName: 'validateCart',
+        invoker: 'BUTTON#pay.onclick',
+        invokerType: 'event-listener',
+        subpart: 'processing-duration',
+        duration: 455.6,
+      },
+    });
+    plugin.teardown();
+  });
+
   it('registers web-vitals once per page however many times monitors start and stop', async () => {
     const { PerformancePlugin } = await import('../../src/plugins/PerformancePlugin');
     const first = fakeContext();
@@ -142,6 +239,8 @@ describe('PerformancePlugin', () => {
     expect(captureEvent).toHaveBeenCalledWith(
       'performance',
       expect.objectContaining({ metric: 'TTFB', value: 320, metricId: 'v6-TTFB-1' }),
+      // 补收的值带着它当初发生时记下的页面。
+      { page: expect.objectContaining({ url: expect.any(String) }) },
     );
     late.teardown();
   });

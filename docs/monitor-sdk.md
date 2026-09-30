@@ -134,18 +134,18 @@ monitor.start();
 
 ### 4.3 MonitorClient
 
-| 方法                                | 说明                                                                         |
-| ----------------------------------- | ---------------------------------------------------------------------------- |
-| `use(plugin)`                       | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装                     |
-| `start()`                           | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                       |
-| `setUser(user?)`                    | 之后的事件带上这个用户；服务端据此统计受影响用户数                           |
-| `captureException(error, context?)` | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`                |
-| `captureMessage(message, level?)`   | 上报一条消息，`level` 默认 `info`                                            |
-| `captureEvent(eventType, payload)`  | 底层采集入口，插件和上面两个方法都经过它                                     |
-| `addBreadcrumb(breadcrumb)`         | 加一条自定义面包屑                                                           |
-| `flush()`                           | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回   |
-| `stats()`                           | 当前投递状况                                                                 |
-| `destroy()`                         | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()` |
+| 方法                                         | 说明                                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| `use(plugin)`                                | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装                      |
+| `start()`                                    | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                        |
+| `setUser(user?)`                             | 之后的事件带上这个用户；服务端据此统计受影响用户数                            |
+| `captureException(error, context?)`          | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`                 |
+| `captureMessage(message, level?)`            | 上报一条消息，`level` 默认 `info`                                             |
+| `captureEvent(eventType, payload, options?)` | 底层采集入口，插件和上面两个方法都经过它；`options.page` 指定信号发生时的页面 |
+| `addBreadcrumb(breadcrumb)`                  | 加一条自定义面包屑                                                            |
+| `flush()`                                    | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回    |
+| `stats()`                                    | 当前投递状况                                                                  |
+| `destroy()`                                  | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()`  |
 
 `DeliveryStats` 用来判断事件是否真的到了服务端，而不是把 `flush()` resolve 当成「已送达」：
 
@@ -300,7 +300,7 @@ sequenceDiagram
 | `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                        |
 | 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                          |
 | 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时） |
-| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`                                                                                                    |
+| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`、`attribution`（元素与分段耗时，见 10.7）                                                          |
 
 非 Error 的 reason 也能稳定序列化：字符串成为 `message`；其他值用 `JSON.stringify` 转成文本，失败时用
 `String()`，`name` 为 `UnknownError`。
@@ -493,7 +493,7 @@ interface MonitorPlugin {
 
 interface PluginContext {
   readonly options: Readonly<ResolvedMonitorOptions>;
-  captureEvent(eventType, payload): string | null;
+  captureEvent(eventType, payload, options?: { page? }): string | null;
   addBreadcrumb(breadcrumb): void;
 }
 ```
@@ -644,6 +644,10 @@ createMonitor({
 `PerformanceObserver` 计算，三个口径都是错的：CLS 把所有偏移直接累加（现行定义是按会话窗口取最大值），INP 取了
 所有 event 条目的最大时长（应只看带 `interactionId` 的交互、分组后取高分位），LCP 在首次输入后仍在更新。
 
+用的是 `web-vitals/attribution`（归因版本）：除了数值，还给出造成指标的元素和拆分后的几段耗时。只有数值时，
+「LCP 慢」无从下手；有了归因，才能落到「哪张图、慢在下载还是渲染」。Sentry、Datadog、Grafana Faro 都采集这类
+归因。代价是接入方的包多约 2.3 KB gzip（web-vitals 从 2.9 KB 变为 5.3 KB）。
+
 **整页只注册一次**：`web-vitals` 的 `onXXX` 没有注销 API，注册的 `PerformanceObserver` 和监听器会存活到页面结束。
 每次 setup 都注册的话，SPA 里反复 start / destroy 会让它们无限累积。所以模块级只注册一次，插件实例是这个分发中心
 的订阅者；分发中心同时记着每个指标的最新值。
@@ -662,8 +666,29 @@ createMonitor({
 **晚到的实例**：比首批指标晚创建的插件实例（例如 StrictMode 下的第二次挂载）在 setup 之后的微任务里补收已有的值。
 放进微任务是因为 setup 期间核心会屏蔽采集；补收的值与之前同 id，服务端覆盖而不是重复计数。
 
+**页面归属**：每次指标值变化时记下当时的页面，上报时通过 `captureEvent` 的第三个参数 `{ page }` 带上它，
+而不是用上报那一刻的页面。LCP、CLS、INP 要等页面隐藏才上报，单页应用里用户那时可能已经换了几次路由：
+早期实现用上报时的页面，首屏的 LCP 就被算到了用户最后停留的结账页上，按路由比较性能的结论全是错的。
+现在 LCP 归到首屏所在的路由，INP 归到发生最慢那次交互的路由，CLS 归到位移最大的那段时间所在的路由。
+
 **payload**：`metric`、`value`（CLS 保留 4 位小数，其余 1 位）、`rating`（good / needs-improvement / poor）、
-`metricId`、`navigationType`。
+`metricId`、`navigationType`，以及精简后的 `attribution`：
+
+| 指标 | `attribution` 字段                                                                                                               |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------- |
+| LCP  | `target`（元素）、`url`（图片等资源地址）、`timeToFirstByte`、`resourceLoadDelay`、`resourceLoadDuration`、`elementRenderDelay`  |
+| CLS  | `target`（位移最大的元素）、`largestShiftTime`、`largestShiftValue`、`loadState`                                                 |
+| INP  | `target`（交互的元素）、`interactionType`、`inputDelay`、`processingDuration`、`presentationDelay`、`loadState`、`longestScript` |
+| FCP  | `timeToFirstByte`、`firstByteToFCP`、`loadState`                                                                                 |
+| TTFB | `waitingDuration`、`cacheDuration`、`dnsDuration`、`connectionDuration`、`requestDuration`                                       |
+
+- 三个有元素的指标都放在 `target` 里，服务端据此按元素聚合，性能页列出每个指标 p75 最差的元素。
+- LCP 的四段加起来就是 LCP：首字节时间、资源开始加载前的等待、资源下载、下载完到渲染出来。哪一段大，
+  就优化哪一段（服务端、资源优先级、图片体积、渲染阻塞）。
+- INP 的三段是输入延迟（主线程正忙）、事件处理耗时、处理完到下一帧绘制。`longestScript` 来自长动画帧
+  （LoAF）：与这次交互重叠最久的脚本的地址、函数名、触发方式（如 `BUTTON#pay.onclick`）和所在阶段。
+- 元素是 web-vitals 生成的 CSS 选择器（标签、id、class），不含页面文字；`url`、`sourceURL` 由核心脱敏。
+- 原始归因里的 PerformanceEntry 对象（DOM 元素引用、完整条目列表）体积大、大多用不上，不上报。
 
 ### 10.8 React 集成：reactErrorHandler
 
@@ -783,7 +808,7 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 | `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                             |
 | `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装 |
 | `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                   |
-| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后                                                                                                                                             |
+| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                 |
 | `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                          |
 
 **真实浏览器**（Playwright + Chromium）：
@@ -814,6 +839,8 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 - **请求只覆盖 fetch 和 XHR**：WebSocket、EventSource 和业务自己调用的 `sendBeacon` 不在其中；不采集请求和响应的
   body 与 headers。
 - **不采集控制台输出**：面包屑的类型里保留了 `console`，但没有默认插件产生它（可参考 10.9 自己加）。
+- **单页应用的指标按整次页面加载计算**：web-vitals 以真正的页面加载为单位，切换路由不会重新计算 LCP；
+  INP、CLS 取整次访问里最差的那次，只是归到它发生时所在的路由（见 10.7）。
 - **`web-vitals` 的监听无法注销**：整页只注册一次，页面结束前一直存在。
 - **真实浏览器测试只覆盖 Chromium**：Firefox 与 Safari 的堆栈格式由单元测试覆盖，没有在真实浏览器里跑过。
 - **时间来自设备时钟**：服务端按 `sentAt` 校正，相差不到 1 分钟的偏差不校正。

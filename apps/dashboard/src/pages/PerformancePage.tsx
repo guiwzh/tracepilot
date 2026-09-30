@@ -24,10 +24,12 @@ function ComparisonPanel({
   title,
   items,
   metric,
+  emptyMessage = 'No matching samples.',
 }: {
   title: string;
   items?: PerformanceComparison[];
   metric: MetricName;
+  emptyMessage?: string;
 }) {
   const visible = items?.filter((item) => item.metric === metric) ?? [];
   return (
@@ -40,7 +42,7 @@ function ComparisonPanel({
         <small>{metric} p75</small>
       </header>
       {visible.length === 0 ? (
-        <p className="inline-empty">No matching samples.</p>
+        <p className="inline-empty">{emptyMessage}</p>
       ) : (
         <div className="comparison-list">
           {visible.map((item) => (
@@ -234,6 +236,16 @@ export function PerformancePage() {
               title="By browser"
               items={metrics.data?.byBrowser}
               metric={selectedMetric}
+            />
+            <ComparisonPanel
+              title="Slowest elements"
+              items={metrics.data?.byElement}
+              metric={selectedMetric}
+              emptyMessage={
+                selectedMetric === 'LCP' || selectedMetric === 'CLS' || selectedMetric === 'INP'
+                  ? 'No element attribution in these samples.'
+                  : 'Element attribution covers LCP, CLS and INP.'
+              }
             />
           </div>
           <section className="panel performance-chart trend-chart">

@@ -312,6 +312,43 @@ describe('telemetry ingestion', () => {
     expect(projects.json().items[0]).toMatchObject({ issueCount: 0, eventCount: 1 });
   });
 
+  it('points at the elements behind the slowest LCP and INP samples', async () => {
+    const vital = (id: string, metric: string, value: number, target: string) => ({
+      ...event(id, '12345678'),
+      eventType: 'performance' as const,
+      payload: { metric, value, rating: 'good', metricId: id, attribution: { target } },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [
+          vital('lcp-hero-1', 'LCP', 3_800, 'main>img.hero'),
+          vital('lcp-hero-2', 'LCP', 4_200, 'main>img.hero'),
+          vital('lcp-logo', 'LCP', 1_200, 'header>img.logo'),
+          vital('inp-pay', 'INP', 520, 'button#pay'),
+        ],
+      },
+    });
+    const overview = (
+      await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/performance' })
+    ).json();
+    // 每个指标里按 p75 从差到好排：先看拖慢最多的那张图。
+    expect(
+      overview.byElement.map((item: { metric: string; name: string; samples: number }) => [
+        item.metric,
+        item.name,
+        item.samples,
+      ]),
+    ).toEqual([
+      ['LCP', 'main>img.hero', 2],
+      ['LCP', 'header>img.logo', 1],
+      ['INP', 'button#pay', 1],
+    ]);
+  });
+
   it('counts only issue events and the users who hit them in the overview', async () => {
     // 回归：性能样本曾一并计入「24 小时事件数」和「受影响用户」，
     // 于是每个只上报过一次指标的访客都被算作受影响。

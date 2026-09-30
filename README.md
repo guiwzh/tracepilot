@@ -260,8 +260,9 @@ flowchart LR
 ## 已实现
 
 - **插件化浏览器 SDK**：runtime error、unhandled rejection、资源错误、失败的 Fetch/XHR（默认只算 5xx 与
-  网络错误，可配置；可选按响应体里的业务码判定失败；其余请求只记 Breadcrumb）、点击/路由 Breadcrumb、Web Vitals（官方 `web-vitals` 计算）、React 错误边界
-  （`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
+  网络错误，可配置；可选按响应体里的业务码判定失败；其余请求只记 Breadcrumb）、点击/路由 Breadcrumb、
+  Web Vitals（官方 `web-vitals` 归因版：数值、造成指标的元素与分段耗时，归到指标实际发生的路由）、
+  React 错误边界（`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
 - **可靠传输**：按会话采样、短窗口去重（错误、资源、失败请求）、按条数与字节批量上报、有限重试、
   连续失败时指数退避并遵守 `Retry-After`、拒收的 4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
   服务端故障时退出发送不丢队列、`beforeSend`、完整 teardown。
@@ -269,7 +270,7 @@ flowchart LR
   按 `sentAt` 校正设备时钟、SQLite 事务、动态 ID 归一化与 SHA-256 指纹聚合、已解决 Issue 再次发生时
   重新打开、按编号迁移升级表结构。
 - **调查工作台**：项目、筛选/分页 Issue、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
-  证据链、网络、事件、性能、Release，以及实时调查时间线。
+  证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release，以及实时调查时间线。
 - **Source Map**：私有上传（落盘前完整校验每条映射）、Release 隔离、压缩堆栈还原（解析结果跨请求缓存）、
   读取内联源码片段、map 缺失或损坏时降级为压缩堆栈，接入照常返回 202。
 - **排障 Agent**：5 个只读工具、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与

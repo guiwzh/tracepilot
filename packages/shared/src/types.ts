@@ -113,6 +113,8 @@ export interface PerformanceOverview {
   byRelease: PerformanceComparison[];
   byRoute: PerformanceComparison[];
   byBrowser: PerformanceComparison[];
+  /** LCP、CLS、INP 各自 p75 最差的元素（name 是 CSS 选择器），来自 web-vitals 归因。 */
+  byElement: PerformanceComparison[];
   trend: PerformanceTrendPoint[];
 }
 

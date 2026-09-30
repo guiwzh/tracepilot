@@ -27,9 +27,11 @@ const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 // 2026-09-28 再次设定：SDK 端默认脱敏（含 shared 的脱敏规则）、噪声过滤与多类型去重、
 // 跨周期退避与 Retry-After、按标签页持久化、React 错误回调适配器，产物 +1.8 KB、接入 +2.2 KB gzip，
 // 明细见 docs/reports/performance.md。
+// 2026-09-30 再次设定：web-vitals 换成归因版本（LCP、CLS、INP 的元素与分段耗时），它被 external 化，
+// 接入成本里 web-vitals 从 2.9 KB 变为 5.3 KB gzip；同期请求失败判定与业务码检查使产物 +0.6 KB。
 const BUDGETS = {
-  artifactGzipBytes: 8_600,
-  consumerGzipBytes: 12_200,
+  artifactGzipBytes: 9_200,
+  consumerGzipBytes: 15_700,
   consumerZodIdentifiers: 0,
 };
 

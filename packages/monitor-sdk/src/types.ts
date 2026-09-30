@@ -102,6 +102,15 @@ export interface CapturePayload {
   [key: string]: unknown;
 }
 
+/** captureEvent 的可选项。 */
+export interface CaptureOptions {
+  /**
+   * 信号发生时所在的页面，缺省时取采集这一刻的页面。信号先发生、稍后才上报时要传入它：
+   * 页面隐藏时才提交的 LCP、CLS、INP，单页应用里那时可能已经换了路由。
+   */
+  page?: MonitorEvent['page'];
+}
+
 /** addBreadcrumb 的入参：id 由 SDK 生成，时间缺省为当前时刻。 */
 export type BreadcrumbInput = Omit<Breadcrumb, 'id' | 'timestamp'> &
   Partial<Pick<Breadcrumb, 'timestamp'>>;
@@ -112,7 +121,11 @@ export type BreadcrumbInput = Omit<Breadcrumb, 'id' | 'timestamp'> &
  */
 export interface PluginContext {
   readonly options: Readonly<ResolvedMonitorOptions>;
-  captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null;
+  captureEvent(
+    eventType: MonitorEvent['eventType'],
+    payload: CapturePayload,
+    options?: CaptureOptions,
+  ): string | null;
   addBreadcrumb(breadcrumb: BreadcrumbInput): void;
 }
 
@@ -160,7 +173,11 @@ export interface MonitorClient {
   setUser(user?: MonitorUser): void;
   captureException(error: unknown, context?: CapturePayload): string | null;
   captureMessage(message: string, level?: 'error' | 'warning' | 'info'): string | null;
-  captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null;
+  captureEvent(
+    eventType: MonitorEvent['eventType'],
+    payload: CapturePayload,
+    options?: CaptureOptions,
+  ): string | null;
   addBreadcrumb(breadcrumb: BreadcrumbInput): void;
   /**
    * 立即尝试发送队列里的全部事件。服务端不可达时也会正常返回（事件留在队列里等下次），

@@ -7,6 +7,7 @@ import {
 } from '@trace-pilot/shared';
 import type {
   BreadcrumbInput,
+  CaptureOptions,
   CapturePayload,
   DeliveryStats,
   MonitorClient,
@@ -85,7 +86,7 @@ export class MonitorCore implements MonitorClient {
     });
     this.context = {
       options: this.options,
-      captureEvent: (eventType, payload) => this.captureEvent(eventType, payload),
+      captureEvent: (eventType, payload, options) => this.captureEvent(eventType, payload, options),
       addBreadcrumb: (breadcrumb) => this.addBreadcrumb(breadcrumb),
     };
   }
@@ -146,7 +147,11 @@ export class MonitorCore implements MonitorClient {
     return this.captureEvent('error', { name: 'Message', message, level });
   }
 
-  captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null {
+  captureEvent(
+    eventType: MonitorEvent['eventType'],
+    payload: CapturePayload,
+    options: CaptureOptions = {},
+  ): string | null {
     if (!this.started || this.destroyed || !this.sampled || this.suppressCapture) return null;
     // 性能样本另有自己的采样率：它们量大、按分位数统计，抽样不影响结论；会形成 Issue 的信号不受影响。
     if (eventType === 'performance' && !this.performanceSampled) return null;
@@ -167,7 +172,7 @@ export class MonitorCore implements MonitorClient {
         projectId: this.options.projectId,
         release: this.options.release,
         environment: this.options.environment,
-        page: redactSensitive(getPageContext()),
+        page: redactSensitive(options.page ?? getPageContext()),
         user: this.user,
         device: getDeviceContext(),
         payload: redactPayload(payload),

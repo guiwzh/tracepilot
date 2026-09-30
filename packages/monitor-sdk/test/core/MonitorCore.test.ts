@@ -352,6 +352,18 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
+  it('uses the page a signal happened on when one is given, scrubbed like any other', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.captureEvent(
+      'performance',
+      { metric: 'LCP', value: 2_400 },
+      { page: { url: 'https://shop.test/landing?token=secret', route: '/landing' } },
+    );
+    expect(events[0]!.page).toEqual({ url: 'https://shop.test/landing', route: '/landing' });
+    monitor.destroy();
+  });
+
   it('keeps breadcrumbs off metric samples but on events that form issues', () => {
     const { monitor, events } = capturing();
     monitor.start();

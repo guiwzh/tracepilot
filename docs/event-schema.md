@@ -40,7 +40,9 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
   网络错误，或者配置了 `detectBusinessError` 后业务码表示失败的 2xx 响应（payload 带 `businessCode`、
   `businessMessage`）。其余请求（包括默认的 4xx）、被取消的请求和 no-cors 的 opaque 响应只记成 breadcrumb，
   作为之后错误的上下文。
-- `performance`：Web Vitals 样本，**不附带 breadcrumb**——它们不属于任何 Issue 的证据链。
+- `performance`：Web Vitals 样本，**不附带 breadcrumb**——它们不属于任何 Issue 的证据链。payload 带精简的
+  `attribution`：LCP、CLS、INP 的 `target` 是造成指标的元素（CSS 选择器），另有各指标拆分后的几段耗时；
+  事件的 `page` 是指标发生时所在的页面，不是页面隐藏、真正上报时的页面。
 
 同一签名的 `error`、`resource`、`network` 事件在短窗口（默认 5 秒）内只发送第一条。窗口从上一次发送算起，
 一直在发生的问题每个窗口至少发送一次。资源与请求的签名去掉查询参数并把数字归一，只差编号的一批资源或接口
