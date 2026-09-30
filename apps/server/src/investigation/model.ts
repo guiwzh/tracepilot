@@ -161,7 +161,8 @@ export class OpenAICompatibleClient implements ModelClient {
 
 /**
  * 统一错误类型：取消类错误统一成 name = 'AbortError'，上层据此区分「被取消」和「失败」；
- * 其余错误包装成 ModelCallError，消息截断到 300 字符，避免把超长的上游响应写进数据库。
+ * 其余错误包装成 ModelCallError，消息截断到 300 字符，不把超长的上游响应原样往上传。
+ * 运行记录不存这条消息，只存错误码和固定描述（见 service.ts）。
  */
 function asModelError(error: unknown): Error {
   if (error instanceof Error && error.name === 'AbortError') return error;

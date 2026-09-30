@@ -257,7 +257,8 @@ flowchart LR
 技术栈：`React 19 · TypeScript 6 · Fastify 5 · SQLite（better-sqlite3，手写 SQL + 编号迁移） · Zod 4 · pnpm 12 Monorepo · Vite 8 · tsdown · Vitest 5 · web-vitals · Playwright`
 
 详细设计见 [architecture.md](docs/architecture.md)，SDK 的内部结构与每个插件见
-[monitor-sdk.md](docs/monitor-sdk.md)，关键决策见
+[monitor-sdk.md](docs/monitor-sdk.md)，服务端的分层、数据模型、接入管线与排障 Agent 的实现见
+[server.md](docs/server.md)，关键决策见
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、
 [ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md) 与
 [ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)。

@@ -17,13 +17,14 @@ flowchart LR
   Agent -- 事件日志 + SSE --> Dashboard
 ```
 
-排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)。
+排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)，实现见
+[server.md](server.md#10-排障-agent)。
 
 ## 工作区边界
 
 - `packages/shared`：传输 Schema、公开响应类型、隐私工具与阈值。
 - `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件，内部结构见 [monitor-sdk.md](monitor-sdk.md)。
-- `apps/server`：数据接入、聚合、查询、私有 Source Map、排障 Agent 与评测集。
+- `apps/server`：数据接入、聚合、查询、私有 Source Map、排障 Agent 与评测集，内部结构见 [server.md](server.md)。
 - `apps/dashboard`：面向调查人员的用户界面。
 - `apps/playground`：用于验证完整遥测链路的可控场景；`tests/e2e/playground.spec.ts` 逐个点击这些场景，
   它们同时是 SDK 各插件在真实浏览器里的回归测试。
