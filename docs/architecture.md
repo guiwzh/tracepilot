@@ -22,7 +22,7 @@ flowchart LR
 ## 工作区边界
 
 - `packages/shared`：传输 Schema、公开响应类型、隐私工具与阈值。
-- `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件。
+- `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件，内部结构见 [monitor-sdk.md](monitor-sdk.md)。
 - `apps/server`：数据接入、聚合、查询、私有 Source Map、排障 Agent 与评测集。
 - `apps/dashboard`：面向调查人员的用户界面。
 - `apps/playground`：用于验证完整遥测链路的可控场景；`tests/e2e/playground.spec.ts` 逐个点击这些场景，
