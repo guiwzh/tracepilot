@@ -242,6 +242,65 @@ describe('investigation agent', () => {
     expect(last.tools.map((tool) => tool.function.name)).toEqual(['submit_report']);
   });
 
+  it('shows the model the cause chain even below a long outer stack', async () => {
+    await start();
+    const outer = Array.from(
+      { length: 14 },
+      (_, index) => `    at layer${index} (https://shop.example/assets/app.js:1:${index + 10})`,
+    );
+    const stack = [
+      'Error: Checkout failed',
+      ...outer,
+      'Caused by: TypeError: Failed to fetch',
+      '    at request (https://shop.example/assets/api.js:2:30)',
+    ].join('\n');
+    const ingest = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: Date.now(),
+        events: [
+          {
+            eventId: 'wrapped-failure',
+            eventType: 'error',
+            timestamp: Date.now(),
+            projectId: 'demo-project',
+            release: '2.4.1',
+            environment: 'production',
+            page: { url: 'https://shop.example/checkout' },
+            device: { userAgent: 'Chrome/140' },
+            payload: { name: 'Error', message: 'Checkout failed', stack },
+            breadcrumbs: [],
+          },
+        ],
+      },
+    });
+    const [issue] = (ingest.json() as { issueIds: string[] }).issueIds;
+    const database = createDatabase(config.databasePath);
+    try {
+      const result = await runTool(
+        'get_event_detail',
+        JSON.stringify({ eventId: 'wrapped-failure' }),
+        {
+          database,
+          issueId: issue!,
+          projectId: 'demo-project',
+          allowSourceContext: true,
+        },
+      );
+      const detail = JSON.parse(result.output.slice(result.output.indexOf('{'))) as {
+        stack: string;
+      };
+      // 最外层只留前 12 行，但根因所在的 cause 段仍在。
+      expect(detail.stack.split('\n')).toHaveLength(12 + 2);
+      expect(detail.stack).toContain('Caused by: TypeError: Failed to fetch');
+      expect(detail.stack).toContain('at request (https://shop.example/assets/api.js:2:30)');
+    } finally {
+      database.close();
+    }
+  });
+
   it('keeps tools scoped to the issue under investigation', async () => {
     await start();
     const target = await issueId("reading 'total'");

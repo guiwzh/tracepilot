@@ -60,6 +60,13 @@ export interface MonitorOptions {
    * XHR 读 response / responseText。响应体只在页面内存里解析，除了这里返回的内容不会上报。
    */
   detectBusinessError?: (response: ApiResponseInfo) => BusinessError | null | undefined;
+  /**
+   * 记成面包屑的控制台级别，默认 ['warn', 'error']；false 表示不包装 console。
+   * 只记面包屑、不单独成为事件：它们是之后错误的上下文。
+   */
+  consoleBreadcrumbs?: ConsoleLevel[] | false;
+  /** 白屏检测的配置；false 表示关闭。默认开启，规则见 WhiteScreenPlugin。 */
+  whiteScreen?: WhiteScreenOptions | false;
   user?: MonitorUser;
   /**
    * 最后的业务侧隐私闸门；返回 null 可以取消本次事件。
@@ -83,6 +90,22 @@ export type ResolvedMonitorOptions = MonitorOptions &
       | 'failedRequestStatusCodes'
     >
   >;
+
+export type ConsoleLevel = 'debug' | 'log' | 'info' | 'warn' | 'error';
+
+export interface WhiteScreenOptions {
+  /**
+   * 「空容器」：采样点上最上层的元素是它们，这个点算空。默认 html、body、#root、#app、#__next、#__nuxt，
+   * 应用挂载在别的节点上时加进来。
+   */
+  containers?: string[];
+  /** 骨架屏、加载占位的选择器：采样点落在它们里面也算空，例如 ['.skeleton', '[aria-busy="true"]']。 */
+  skeletons?: string[];
+  /** 两次检测的间隔（毫秒），默认 1000。 */
+  interval?: number;
+  /** 连续几次都是空白才上报，默认 5，即加载或切换路由后空白约 5 秒。 */
+  checks?: number;
+}
 
 /** 业务错误判定收到的请求信息；body 是解析后的 JSON 响应体。 */
 export interface ApiResponseInfo {

@@ -129,6 +129,23 @@ export class MonitorCore implements MonitorClient {
       ...breadcrumb,
       timestamp: breadcrumb.timestamp ?? Date.now(),
     });
+    // 控制台刷屏（循环里反复打印同一句告警）会把缓冲挤满，把真正有用的操作和请求挤出去：
+    // 与上一条完全相同的控制台面包屑合并成一条，累加次数、更新时间。换一个新对象而不是原地修改，
+    // 已经复制进事件的那份不受影响。
+    const last = this.breadcrumbs[this.breadcrumbs.length - 1];
+    if (
+      redacted.type === 'console' &&
+      last?.type === 'console' &&
+      last.category === redacted.category &&
+      last.message === redacted.message
+    ) {
+      this.breadcrumbs[this.breadcrumbs.length - 1] = {
+        ...last,
+        timestamp: redacted.timestamp,
+        data: { ...last.data, count: Number(last.data?.count ?? 1) + 1 },
+      };
+      return;
+    }
     // Breadcrumb 是一个有界环形历史：超过上限时丢弃最旧项，控制每个事件的体积。
     this.breadcrumbs.push(breadcrumbId(redacted));
     if (this.breadcrumbs.length > MAX_BREADCRUMBS) this.breadcrumbs.shift();

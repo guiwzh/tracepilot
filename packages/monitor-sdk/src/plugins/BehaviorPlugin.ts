@@ -1,3 +1,5 @@
+import { currentRoute } from '../core/helpers';
+import { watchHistory } from '../core/history';
 import type { MonitorPlugin, PluginContext } from '../types';
 
 /** 用户能点击操作的元素。点击的文字说明只从这些元素上取。 */
@@ -84,17 +86,10 @@ export function elementLabel(target: EventTarget | null): string {
   return `${identity(element)}${label ? ` “${label}”` : ''}`;
 }
 
-function currentRoute(): string {
-  return `${location.pathname}${location.hash}`;
-}
-
 export class BehaviorPlugin implements MonitorPlugin {
   readonly name = 'BehaviorPlugin';
   private context?: PluginContext;
-  private originalPushState?: typeof history.pushState;
-  private originalReplaceState?: typeof history.replaceState;
-  private wrappedPushState?: typeof history.pushState;
-  private wrappedReplaceState?: typeof history.replaceState;
+  private stopWatchingHistory?: () => void;
   private lastRoute?: string;
   private readonly clickListener = (event: MouseEvent) => {
     this.context?.addBreadcrumb({
@@ -112,24 +107,8 @@ export class BehaviorPlugin implements MonitorPlugin {
     // 捕获阶段可以在业务 handler 阻止冒泡前记录点击。
     document.addEventListener('click', this.clickListener, true);
     window.addEventListener('popstate', this.popStateListener);
-    const originalPushState = history.pushState;
-    const originalReplaceState = history.replaceState;
-    this.originalPushState = originalPushState;
-    this.originalReplaceState = originalReplaceState;
-    const recordNavigation = (mechanism: string) => this.recordNavigation(mechanism);
     // SPA 路由变化不会触发 popstate，所以需要包装 pushState/replaceState。
-    this.wrappedPushState = function (this: History, ...args) {
-      const result = originalPushState.apply(this, args);
-      recordNavigation('pushState');
-      return result;
-    };
-    this.wrappedReplaceState = function (this: History, ...args) {
-      const result = originalReplaceState.apply(this, args);
-      recordNavigation('replaceState');
-      return result;
-    };
-    history.pushState = this.wrappedPushState;
-    history.replaceState = this.wrappedReplaceState;
+    this.stopWatchingHistory = watchHistory((mechanism) => this.recordNavigation(mechanism));
   }
 
   private recordNavigation(mechanism: string): void {
@@ -152,17 +131,9 @@ export class BehaviorPlugin implements MonitorPlugin {
       document.removeEventListener('click', this.clickListener, true);
     if (typeof window !== 'undefined')
       window.removeEventListener('popstate', this.popStateListener);
-    // 与 NetworkPlugin 相同：只有全局引用仍是自己的包装时才还原，否则留在链上只做透传。
-    if (typeof history !== 'undefined') {
-      if (this.wrappedPushState && history.pushState === this.wrappedPushState) {
-        history.pushState = this.originalPushState!;
-      }
-      if (this.wrappedReplaceState && history.replaceState === this.wrappedReplaceState) {
-        history.replaceState = this.originalReplaceState!;
-      }
-    }
+    // 只有全局引用仍是自己的包装时才还原，否则留在链上只做透传（见 watchHistory）。
+    this.stopWatchingHistory?.();
+    this.stopWatchingHistory = undefined;
     this.context = undefined;
-    this.wrappedPushState = undefined;
-    this.wrappedReplaceState = undefined;
   }
 }

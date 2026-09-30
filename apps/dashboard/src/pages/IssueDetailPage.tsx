@@ -15,6 +15,7 @@ import {
   Route,
   ShieldAlert,
   Sparkles,
+  SquareTerminal,
   UserRound,
 } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -67,6 +68,7 @@ function BreadcrumbIcon({ item }: { item: Breadcrumb }) {
   if (item.type === 'network') return <Network />;
   if (item.type === 'navigation') return <Route />;
   if (item.type === 'error') return <ShieldAlert />;
+  if (item.type === 'console') return <SquareTerminal />;
   return <CircleDot />;
 }
 
@@ -85,7 +87,11 @@ function BreadcrumbTimeline({ items }: { items: Breadcrumb[] }) {
             <small>
               {item.category} · {absoluteTime(item.timestamp)}
             </small>
-            <strong>{item.message}</strong>
+            <strong>
+              {item.message}
+              {/* SDK 把连续相同的控制台输出合并成一条，count 是合并的次数。 */}
+              {Number(item.data?.count) > 1 && ` ×${String(item.data?.count)}`}
+            </strong>
             {item.data && <code>{JSON.stringify(item.data, null, 2)}</code>}
           </div>
         </li>

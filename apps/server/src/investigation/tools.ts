@@ -74,6 +74,25 @@ function seconds(ms: number): string {
   return `${ms <= 0 ? '-' : '+'}${(Math.abs(ms) / 1000).toFixed(1)}s`;
 }
 
+/**
+ * 给模型看的堆栈：最外层错误取前 12 行，每个「Caused by:」段取标题和前 3 帧。
+ * 只截前 12 行的话，SDK 接在后面的 cause 链（根因往往在那里）就全被截掉了。
+ */
+function condenseStack(stack: string): string {
+  const kept: string[] = [];
+  let budget = 12;
+  for (const line of stack.split('\n')) {
+    if (line.startsWith('Caused by: ')) {
+      kept.push(line);
+      budget = 3;
+    } else if (budget > 0) {
+      kept.push(line);
+      budget -= 1;
+    }
+  }
+  return kept.join('\n');
+}
+
 function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
   const offset = seconds(item.timestamp - eventTime);
   if (item.type === 'network' && item.data) {
@@ -84,7 +103,8 @@ function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
         : ` business error ${String(item.data.businessCode)}${item.data.businessMessage ? `: ${String(item.data.businessMessage)}` : ''}`;
     return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${String(item.data.status ?? '?')}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
   }
-  return `${offset} ${item.type} ${item.message}`;
+  const count = Number(item.data?.count) > 1 ? ` (×${String(item.data?.count)})` : '';
+  return `${offset} ${item.type} ${item.message}${count}`;
 }
 
 /** 按 id 取事件，并用 issue_id 条件保证它属于本次调查的 Issue（作用域绑定）。 */
@@ -180,7 +200,7 @@ const getEventDetail = defineTool({
       userAgent: event.context.device.userAgent,
       // 不叫 error：工具失败时的结果形如 { error, message }，同名字段会让两者难以区分。
       message: event.message,
-      stack: (event.originalStack ?? event.stack ?? '').split('\n').slice(0, 12).join('\n') || null,
+      stack: condenseStack(event.originalStack ?? event.stack ?? '') || null,
       stackMapped: Boolean(event.originalStack),
       timeline: event.breadcrumbs
         .slice(-15)

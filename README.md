@@ -1,6 +1,6 @@
 # TracePilot
 
-前端可观测平台，加一个**证据约束的只读排障 Agent**。浏览器 SDK 采集错误、请求、用户操作、
+前端可观测平台，加一个**证据约束的只读排障 Agent**。浏览器 SDK 采集错误、请求、白屏、用户操作和
 Web Vitals，服务端聚合成 Issue、用 Source Map 还原源码；排障时，Agent 通过 5 个只读工具
 自己查证据，报告里的每条证据都必须逐字引用某次工具调用的结果，服务端逐条核对后才接受。
 
@@ -138,7 +138,7 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 - **递归防护的闸门误伤生命周期收尾**　一个 `protecting` 标志同时承担「插件生命周期不嵌套」和
   「采集不递归」两件事，结果 `destroy()` 期间提交的最终指标被静默丢弃。拆成三个标志各管一件事；
   `pnpm measure:sdk-runtime` 在真实浏览器里跑 20 轮 start/destroy，断言监听器不增长、
-  `fetch`/`XHR`/`history` 全部还原为原始引用。
+  `fetch`/`XHR`/`history`/`console` 全部还原为原始引用。
 - **接入路径的写入放大**　`event_count` 原本每条事件都 `COUNT(*)` 重新派生，单 Issue 1 万条事件时
   单批接入 P50 从 1.79 ms 劣化到 12.88 ms。幂等已由 `eventId` 去重保证，改为增量累加后恒定在约 1 ms。
   「该用户是否已出现」必须在事件落库**之前**判定，第一版写反了，被既有测试抓出来。
@@ -147,6 +147,9 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 - **按会话采样，性能单独抽样**　按事件采样会让一条错误被采到、而它之前的请求没被采到，证据链断裂。
   改为每个标签页会话抽一次签；未采样的会话连插件都不安装。错误默认不抽样，只发生一次的也要看到；
   量大的性能样本用 `performanceSampleRate` 单独抽样。每个事件带上生效的采样率。
+- **白屏没有报错**　接口返回空数据、渲染条件永远不满足时页面一片空白，却没有任何 JS 异常。在视口两条中线上
+  取 18 个点，用 `elementFromPoint` 看最上层元素是不是空容器或骨架屏，连续 5 次都空才上报。后台标签页不绘制，
+  这时的空白不说明问题：检测暂停、回到前台再从头查，从后台打开的标签页因此既不误报、也不漏检。
 - **命令式图表库与 React 共存**　ECharts 实例生命周期与数据更新拆成两个 effect。写在一起、依赖
   `[option]` 时，React Query 每次 refetch 产生新引用，300 次更新新建 1,500 个 canvas；拆开后为 0。
 - **评测分数曾被标题污染**　规则引擎把 Issue 标题拼进摘要，标题里本来就有的词（`503`、`coupon`）
@@ -185,15 +188,16 @@ pnpm evaluate:agent
 
 ## 本机实测基线
 
-这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库，**不代表生产容量**：
+这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库（SDK 体积与运行时为 2026-09-30 SDK 修订后重测），
+**不代表生产容量**：
 
 | 指标                                     |                    结果 | 复现命令                   |
 | ---------------------------------------- | ----------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             |     22,656 / 7,321 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip |    32,085 / 10,596 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals                          |         2,929 字节 gzip | `pnpm measure:sdk`         |
-| `createMonitor()` + `start()` P50 / P95¹ |         30 / 160–170 µs | `pnpm measure:sdk-runtime` |
-| 单次 `captureException` P50 / P95¹       |           25 / 39–55 µs | `pnpm measure:sdk-runtime` |
+| SDK 发布产物 minified / gzip             |     29,608 / 9,434 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |    45,585 / 15,048 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |         5,275 字节 gzip | `pnpm measure:sdk`         |
+| `createMonitor()` + `start()` P50 / P95¹ |         60 / 190–400 µs | `pnpm measure:sdk-runtime` |
+| 单次 `captureException` P50 / P95¹       |        30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                    0 个 | `pnpm measure:sdk-runtime` |
 | 10 事件接入批次 P50 / P95                |       1.13 ms / 1.57 ms | `pnpm benchmark`           |
 | 单 Issue 累积 1 万事件时接入 P50         |                 1.10 ms | `pnpm benchmark`           |
@@ -202,18 +206,18 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        |   0.15 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |          2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |            1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |              157 项通过 | `pnpm verify`              |
-| 浏览器闭环测试                           |          18 / 18 passed | `pnpm test:e2e`            |
+| 单元 / 集成测试                          |              187 项通过 | `pnpm verify`              |
+| 浏览器闭环测试                           |          20 / 20 passed | `pnpm test:e2e`            |
 
-¹ SDK 运行时两行是 2026-09-28 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
-同一台机器上修订前后的对照（采集约多 15 µs，是 SDK 端脱敏的代价）见性能报告。
+¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
+同一台机器上修订前后的对照（初始化多约 20 µs，是新增白屏与控制台两个插件的安装开销；单次采集持平）见性能报告。
 
 ² 2026-09-28 服务端修订后在另一台、慢约 3 倍的机器上测得，括号里是同一台机器上修订前的代码。
 这台机器上的其余服务端数字：接入快约 10%，列表查询持平，见性能报告。
 
 体积同时报告两个口径：发布产物本身，以及业务应用把 SDK 打进自己包后实际付出的字节，两者会背离。
 运行时开销在真实浏览器里测量，另带两项与机器快慢无关的硬断言：监听器不随轮数增长，`fetch`、
-`XHR.open/send`、`history.pushState/replaceState` 全部还原为插桩前的引用。
+`XHR.open/send`、`history.pushState/replaceState`、`console.warn/error` 全部还原为插桩前的引用。
 
 复现方式、口径差异与限制见[性能报告](docs/reports/performance.md)。**引用这些数字时请连同限制一起
 引用，不要把本机测量包装成生产 SLA。**
@@ -259,8 +263,9 @@ flowchart LR
 
 ## 已实现
 
-- **插件化浏览器 SDK**：runtime error、unhandled rejection、资源错误、失败的 Fetch/XHR（默认只算 5xx 与
-  网络错误，可配置；可选按响应体里的业务码判定失败；其余请求只记 Breadcrumb）、点击/路由 Breadcrumb、
+- **插件化浏览器 SDK**：runtime error（沿 `cause` 链带上根因）、unhandled rejection、资源错误、失败的
+  Fetch/XHR（默认只算 5xx 与网络错误，可配置；可选按响应体里的业务码判定失败；其余请求只记 Breadcrumb）、
+  白屏检测（采样点 + `elementFromPoint`，加载和 SPA 切换路由之后都检测）、点击/路由/控制台 Breadcrumb、
   Web Vitals（官方 `web-vitals` 归因版：数值、造成指标的元素与分段耗时，归到指标实际发生的路由）、
   React 错误边界（`reactErrorHandler`）。默认忽略 `Script error.`、ResizeObserver 告警和浏览器扩展里的报错。
 - **可靠传输**：按会话采样、短窗口去重（错误、资源、失败请求）、按条数与字节批量上报、有限重试、
@@ -318,8 +323,8 @@ createRoot(container, {
 点击 Breadcrumb 只记录按钮、链接这类可交互元素上的文字；列表、卡片等容器只记标签和 id/class。
 标记了 `data-tp-mask` 的区域不记录任何文字。
 
-Playground 提供 12 个场景：runtime、Promise、资源、Fetch、XHR、业务码失败（HTTP 200）、SPA 路由、
-带上下文的告警、React 渲染错误、被取消的请求、错误风暴和带着未发送事件离开页面。每个场景都由
+Playground 提供 13 个场景：runtime、Promise、资源、Fetch、XHR、业务码失败（HTTP 200）、SPA 路由、
+带上下文的告警、React 渲染错误、被取消的请求、错误风暴、白屏和带着未发送事件离开页面。每个场景都由
 `tests/e2e/playground.spec.ts` 在真实 Chrome 里点一遍，并核对服务端最终收到的内容。上报目标默认是演示项目，可在 `apps/playground/.env`（见同目录的
 `.env.example`）或地址参数 `?projectId=…&dsnKey=…` 中修改。
 `pnpm --filter @trace-pilot/playground lab:production` 以生产构建运行演练场（4175 端口），并把 Source Map

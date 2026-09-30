@@ -29,9 +29,11 @@ const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 // 明细见 docs/reports/performance.md。
 // 2026-09-30 再次设定：web-vitals 换成归因版本（LCP、CLS、INP 的元素与分段耗时），它被 external 化，
 // 接入成本里 web-vitals 从 2.9 KB 变为 5.3 KB gzip；同期请求失败判定与业务码检查使产物 +0.6 KB。
+// 2026-09-30 当天再次设定：新增白屏检测（约 0.8 KB）、控制台面包屑（约 0.4 KB）与 cause 链，
+// 产物 +1.4 KB、接入 +1.4 KB gzip。
 const BUDGETS = {
-  artifactGzipBytes: 9_200,
-  consumerGzipBytes: 15_700,
+  artifactGzipBytes: 10_800,
+  consumerGzipBytes: 17_300,
   consumerZodIdentifiers: 0,
 };
 

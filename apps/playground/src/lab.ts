@@ -75,6 +75,8 @@ export const monitor = createMonitor({
   // 攒够 3 条或每 2 秒发送一次，演示时不用久等；真实应用用默认值即可。
   batchSize: 3,
   flushInterval: 2_000,
+  // 白屏连续 3 次、每次间隔 0.4 秒就上报，演示时不用久等；真实应用用默认值（1 秒 × 5 次）即可。
+  whiteScreen: { interval: 400, checks: 3 },
   // 演练场的接口约定 code 为 0 表示成功；HTTP 200 但 code 不为 0 的按失败上报。
   detectBusinessError: ({ body }) => {
     const { code, message } = (body ?? {}) as { code?: number; message?: string };

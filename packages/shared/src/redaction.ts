@@ -7,6 +7,11 @@ const SENSITIVE_KEY = /authorization|cookie|password|passwd|secret|token|api[-_]
 const URL_VALUE_KEY =
   /^(?:url|uri|href|referrer|location|route|endpoint|request[-_]?url|response[-_]?url|page[-_]?url|callback[-_]?url|redirect[-_]?url|source[-_]?url|target[-_]?url)$/i;
 
+/** 键名是否像令牌、密码、Cookie 这类敏感字段；这类键的值一律遮蔽。 */
+export function isSensitiveKey(key: string): boolean {
+  return SENSITIVE_KEY.test(key);
+}
+
 export function stripUrlQuery(value: string): string {
   try {
     // 第二个参数让 /checkout 这类相对 URL 也能由 URL 类解析。
@@ -45,7 +50,7 @@ export function redactSensitive<T>(value: T, depth = 0): T {
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
       // 敏感键直接遮蔽；URL 字段保留路径用于聚合，但删除可能含身份信息的查询参数。
-      if (SENSITIVE_KEY.test(key)) {
+      if (isSensitiveKey(key)) {
         result[key] = '[REDACTED]';
       } else if (URL_VALUE_KEY.test(key) && typeof item === 'string') {
         result[key] = stripUrlQuery(redactSensitive(item, depth + 1));

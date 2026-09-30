@@ -352,6 +352,86 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
+  it('reports the cause chain of a wrapped error under its own stack', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    const network = new TypeError('Failed to fetch');
+    network.stack =
+      'TypeError: Failed to fetch\n    at request (https://shop.test/assets/api.js:3:14)';
+    const failure = new Error('Checkout failed', { cause: network });
+    failure.stack =
+      'Error: Checkout failed\n    at submit (https://shop.test/assets/checkout.js:8:2)';
+    monitor.captureException(failure);
+
+    expect(events[0]!.payload.stack).toBe(
+      [
+        'Error: Checkout failed',
+        '    at submit (https://shop.test/assets/checkout.js:8:2)',
+        'Caused by: TypeError: Failed to fetch',
+        '    at request (https://shop.test/assets/api.js:3:14)',
+      ].join('\n'),
+    );
+    monitor.destroy();
+  });
+
+  it('stops a cause chain at a cycle, and describes causes that are not errors', () => {
+    const { monitor, events } = capturing({ dedupeWindow: 0 });
+    monitor.start();
+    const first = new Error('first');
+    const second = new Error('second', { cause: first });
+    (first as { cause?: unknown }).cause = second;
+    first.stack = 'Error: first';
+    second.stack = 'Error: second';
+    monitor.captureException(first);
+    monitor.captureException(new Error('Validation failed', { cause: { field: 'email' } }));
+
+    expect(events[0]!.payload.stack).toBe('Error: first\nCaused by: Error: second');
+    expect(String(events[1]!.payload.stack)).toContain('Caused by: {"field":"email"}');
+    monitor.destroy();
+  });
+
+  it('keeps what it has when reading a cause throws, instead of throwing at the caller', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    const outer = new Error('Checkout failed', { cause: new Error('Inventory lookup failed') });
+    outer.stack = 'Error: Checkout failed';
+    (outer.cause as Error).stack = 'Error: Inventory lookup failed';
+    Object.defineProperty(outer.cause, 'cause', {
+      get() {
+        throw new Error('getter blew up');
+      },
+    });
+
+    expect(() => monitor.captureException(outer)).not.toThrow();
+    expect(events[0]!.payload.stack).toBe(
+      'Error: Checkout failed\nCaused by: Error: Inventory lookup failed',
+    );
+    monitor.destroy();
+  });
+
+  it('merges repeated console breadcrumbs so a noisy loop cannot flush the evidence', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.addBreadcrumb({ type: 'click', category: 'ui.click', message: 'button#pay' });
+    for (let index = 0; index < 30; index += 1) {
+      monitor.addBreadcrumb({
+        type: 'console',
+        category: 'console.warn',
+        message: 'Price is stale',
+        data: { level: 'warn' },
+      });
+    }
+    monitor.captureException(new Error('payment failed'));
+
+    expect(
+      events[0]!.breadcrumbs.map((item) => [item.type, item.message, item.data?.count]),
+    ).toEqual([
+      ['click', 'button#pay', undefined],
+      ['console', 'Price is stale', 30],
+    ]);
+    monitor.destroy();
+  });
+
   it('uses the page a signal happened on when one is given, scrubbed like any other', () => {
     const { monitor, events } = capturing();
     monitor.start();

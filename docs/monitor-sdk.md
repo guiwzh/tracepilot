@@ -1,7 +1,7 @@
 # Monitor SDK 技术架构
 
-`packages/monitor-sdk` 是运行在业务页面里的浏览器 SDK：采集错误、失败的请求、资源加载失败、用户操作和
-Web Vitals，脱敏之后批量上报到服务端的 `POST /api/v1/envelopes`。本文描述它的内部结构、每个插件的实现、
+`packages/monitor-sdk` 是运行在业务页面里的浏览器 SDK：采集错误、失败的请求、资源加载失败、白屏、用户操作、
+控制台输出和 Web Vitals，脱敏之后批量上报到服务端的 `POST /api/v1/envelopes`。本文描述它的内部结构、每个插件的实现、
 传输层的投递语义，以及与服务端的约定。事件信封的字段定义见 [event-schema.md](event-schema.md)。
 
 ## 1. 设计原则
@@ -9,7 +9,7 @@ Web Vitals，脱敏之后批量上报到服务端的 `POST /api/v1/envelopes`。
 SDK 运行在别人的页面里，所以每一条设计都先回答「会不会影响宿主页面」：
 
 1. **不拖累宿主页面**：采集路径同步且便宜；插件抛出的异常被核心隔离；包装过的全局 API（`fetch`、
-   `XMLHttpRequest`、`history`）在销毁时还原；队列长度、单个事件、每批大小都有上限。
+   `XMLHttpRequest`、`history`、`console`）在销毁时还原；队列长度、单个事件、每批大小都有上限。
 2. **只上报会形成 Issue 的信号**：成功和被取消的请求只记成面包屑；默认忽略无法诊断的噪声；同类信号
    短窗口去重；性能样本不携带面包屑。同一个会话（3 次路由、5 次点击、30 个成功请求、1 个错误）的上报
    因此从 33 个事件、182,725 字节降到 3 个事件、10,186 字节。
@@ -19,8 +19,8 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 7,321 字节；业务应用打包后实际多付出 10,596 字节，
-其中 `web-vitals` 约 2,929 字节。
+体积（`pnpm measure:sdk`，gzip）：发布产物 9,434 字节；业务应用打包后实际多付出 15,048 字节，
+其中 `web-vitals`（归因版本）约 5,275 字节。
 
 ## 2. 代码结构
 
@@ -33,14 +33,17 @@ packages/monitor-sdk/
 │   │   ├── MonitorCore.ts        生命周期、采样、面包屑、采集管线、页面隐藏通知
 │   │   ├── options.ts            数字配置的默认值与上下界（唯一一份）
 │   │   ├── noise.ts              噪声过滤与去重签名
-│   │   └── helpers.ts            事件 id、页面与设备上下文、会话采样、栈首帧
+│   │   ├── history.ts            watchHistory：包装 pushState / replaceState，得知 SPA 路由变化
+│   │   └── helpers.ts            事件 id、页面与设备上下文、错误描述与 cause 链、会话采样、栈首帧
 │   ├── plugins/
 │   │   ├── ErrorPlugin.ts        window error：运行时异常
 │   │   ├── PromisePlugin.ts      unhandledrejection：未处理的 Promise 拒绝
 │   │   ├── ResourcePlugin.ts     捕获阶段的 error：图片、脚本、样式、媒体加载失败
 │   │   ├── NetworkPlugin.ts      包装 fetch 与 XHR：请求面包屑与失败请求事件
 │   │   ├── BehaviorPlugin.ts     点击与路由面包屑
-│   │   └── PerformancePlugin.ts  Web Vitals（官方 web-vitals 库）
+│   │   ├── PerformancePlugin.ts  Web Vitals（官方 web-vitals 库）
+│   │   ├── WhiteScreenPlugin.ts  白屏检测：加载或切换路由后页面持续空白
+│   │   └── ConsolePlugin.ts      包装 console：warn、error 记成面包屑
 │   ├── integrations/
 │   │   └── react.ts              reactErrorHandler：接 React 19 根节点的错误回调
 │   └── transport/
@@ -56,8 +59,8 @@ packages/monitor-sdk/
 ```mermaid
 flowchart LR
   subgraph Page["业务页面"]
-    APIs["浏览器 API<br/>error · unhandledrejection<br/>fetch · XHR · click · history<br/>web-vitals"]
-    Plugins["六个插件"]
+    APIs["浏览器 API<br/>error · unhandledrejection<br/>fetch · XHR · click · history<br/>console · elementFromPoint · web-vitals"]
+    Plugins["八个插件"]
     Core["MonitorCore<br/>采样 · 面包屑 · 采集管线"]
     Transport["Transport<br/>队列 · 批量 · 重试 · 退出发送"]
   end
@@ -95,9 +98,9 @@ const monitor = createMonitor({
 monitor.start();
 ```
 
-`createMonitor` 等价于 `new MonitorCore(options)` 依次 `use` 六个默认插件：ErrorPlugin、PromisePlugin、
-ResourcePlugin、NetworkPlugin、PerformancePlugin、BehaviorPlugin。需要按需组合时，可以直接用导出的
-`MonitorCore` 和各个插件类：
+`createMonitor` 等价于 `new MonitorCore(options)` 依次 `use` 八个默认插件：ErrorPlugin、PromisePlugin、
+ResourcePlugin、NetworkPlugin、PerformancePlugin、BehaviorPlugin、ConsolePlugin、WhiteScreenPlugin。
+需要按需组合时，可以直接用导出的 `MonitorCore` 和各个插件类：
 
 ```ts
 import { ErrorPlugin, MonitorCore, NetworkPlugin } from '@trace-pilot/monitor-sdk';
@@ -108,29 +111,31 @@ monitor.start();
 
 ### 4.2 配置项
 
-| 选项                       | 必填 | 默认值         | 取值范围                              | 说明                                                  |
-| -------------------------- | :--: | -------------- | ------------------------------------- | ----------------------------------------------------- |
-| `dsn`                      |  是  | —              | —                                     | 接入接口的完整 URL                                    |
-| `projectId`                |  是  | —              | —                                     | 事件所属项目                                          |
-| `release`                  |  是  | —              | —                                     | 当前构建的版本号，必须与上传 Source Map 时填的一致    |
-| `environment`              |  是  | —              | `development` / `test` / `production` |                                                       |
-| `dsnKey`                   |  否  | 同 `projectId` | —                                     | 公开的接入键，不是密钥                                |
-| `sampleRate`               |  否  | 1              | 0–1                                   | 按标签页会话采样的比例，错误也包括在内，一般保持 1    |
-| `performanceSampleRate`    |  否  | 1              | 0–1                                   | 被采样的会话里上报性能样本的比例，只作用于 Web Vitals |
-| `batchSize`                |  否  | 10             | 1–100                                 | 队列攒够这么多条立即发送                              |
-| `flushInterval`            |  否  | 5,000 ms       | 100 ms–24 h                           | 定时发送间隔；连续失败时在此基础上指数退避            |
-| `maxRetries`               |  否  | 2              | 0–10                                  | 一批失败后同一轮里的快速重试次数（100、200 ms……）     |
-| `maxQueueSize`             |  否  | 1,000          | 10–10,000                             | 队列上限，满了之后丢弃新到的事件                      |
-| `dedupeWindow`             |  否  | 5,000 ms       | 0–10 min                              | 同类信号的去重窗口，见第 7 节                         |
-| `ignoreErrors`             |  否  | `[]`           | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试  |
-| `failedRequestStatusCodes` |  否  | `[[500, 599]]` | 状态码或 `[起, 止]` 区间              | 哪些状态码算请求失败；默认只有 5xx，见 10.5           |
-| `detectBusinessError`      |  否  | —              | —                                     | 判定 2xx 的 JSON 响应是否业务失败，见 10.5            |
-| `user`                     |  否  | —              | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改      |
-| `beforeSend`               |  否  | —              | —                                     | 最后一道业务侧闸门：修改事件，或返回 `null` 取消      |
+| 选项                       | 必填 | 默认值              | 取值范围                              | 说明                                                      |
+| -------------------------- | :--: | ------------------- | ------------------------------------- | --------------------------------------------------------- |
+| `dsn`                      |  是  | —                   | —                                     | 接入接口的完整 URL                                        |
+| `projectId`                |  是  | —                   | —                                     | 事件所属项目                                              |
+| `release`                  |  是  | —                   | —                                     | 当前构建的版本号，必须与上传 Source Map 时填的一致        |
+| `environment`              |  是  | —                   | `development` / `test` / `production` |                                                           |
+| `dsnKey`                   |  否  | 同 `projectId`      | —                                     | 公开的接入键，不是密钥                                    |
+| `sampleRate`               |  否  | 1                   | 0–1                                   | 按标签页会话采样的比例，错误也包括在内，一般保持 1        |
+| `performanceSampleRate`    |  否  | 1                   | 0–1                                   | 被采样的会话里上报性能样本的比例，只作用于 Web Vitals     |
+| `batchSize`                |  否  | 10                  | 1–100                                 | 队列攒够这么多条立即发送                                  |
+| `flushInterval`            |  否  | 5,000 ms            | 100 ms–24 h                           | 定时发送间隔；连续失败时在此基础上指数退避                |
+| `maxRetries`               |  否  | 2                   | 0–10                                  | 一批失败后同一轮里的快速重试次数（100、200 ms……）         |
+| `maxQueueSize`             |  否  | 1,000               | 10–10,000                             | 队列上限，满了之后丢弃新到的事件                          |
+| `dedupeWindow`             |  否  | 5,000 ms            | 0–10 min                              | 同类信号的去重窗口，见第 7 节                             |
+| `ignoreErrors`             |  否  | `[]`                | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试      |
+| `failedRequestStatusCodes` |  否  | `[[500, 599]]`      | 状态码或 `[起, 止]` 区间              | 哪些状态码算请求失败；默认只有 5xx，见 10.5               |
+| `detectBusinessError`      |  否  | —                   | —                                     | 判定 2xx 的 JSON 响应是否业务失败，见 10.5                |
+| `consoleBreadcrumbs`       |  否  | `['warn', 'error']` | 级别数组或 `false`                    | 哪些控制台级别记成面包屑；`false` 不包装 console，见 10.9 |
+| `whiteScreen`              |  否  | 开启                | 对象或 `false`                        | 白屏检测的容器、骨架屏选择器、间隔与次数，见 10.8         |
+| `user`                     |  否  | —                   | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改          |
+| `beforeSend`               |  否  | —                   | —                                     | 最后一道业务侧闸门：修改事件，或返回 `null` 取消          |
 
 数字选项在 `core/options.ts` 统一规范化：超出范围的夹到边界并取整，`NaN`、`Infinity` 或缺省时用默认值；
 `sampleRate`、`performanceSampleRate` 同样夹在 0–1 之间（不取整），缺省或非法时为 1。默认值来自
-`packages/shared/src/constants.ts`。
+`packages/shared/src/constants.ts`。`whiteScreen` 里的 `interval`、`checks` 由白屏插件按同样的规则处理。
 
 ### 4.3 MonitorClient
 
@@ -245,7 +250,10 @@ flowchart TD
 - 环形缓冲区，最多 50 条（`MAX_BREADCRUMBS`），超出时丢最旧的。
 - 加入时脱敏一次、分配 id、缺省时间为当前时刻；之后随多个事件发送，不必重复处理。
 - 来源：NetworkPlugin 的请求（`network` / `http`）、BehaviorPlugin 的点击（`click` / `ui.click`）和
-  路由（`navigation` / `route`），以及业务代码的 `addBreadcrumb`。
+  路由（`navigation` / `route`）、ConsolePlugin 的控制台输出（`console` / `console.warn` 等），以及业务代码的
+  `addBreadcrumb`。
+- 与上一条完全相同的控制台面包屑合并成一条，`data.count` 累加、时间更新为最近一次：循环里反复打印的同一句
+  告警不会把缓冲挤满，把真正有用的点击和请求挤出去。合并时换一个新对象，已经复制进事件的那份不受影响。
 - 性能样本不属于任何 Issue，不携带面包屑：带上 50 条只会让每个样本大几十倍。
 
 ### 5.5 页面隐藏通知
@@ -277,36 +285,59 @@ sequenceDiagram
 
 ### 6.1 哪些信号成为事件
 
-| 信号                                            | 结果                             | 来源                |
-| ----------------------------------------------- | -------------------------------- | ------------------- |
-| 运行时异常                                      | `error` 事件                     | ErrorPlugin         |
-| 未处理的 Promise 拒绝                           | `error` 事件                     | PromisePlugin       |
-| React 错误边界捕获的渲染错误                    | `error` 事件（带组件栈）         | `reactErrorHandler` |
-| `captureException` / `captureMessage`           | `error` 事件                     | 业务代码            |
-| 图片、脚本、样式表、媒体加载失败                | `resource` 事件                  | ResourcePlugin      |
-| 5xx（可配置）、网络错误、业务码表示失败的请求   | `network` 事件，同时记一条面包屑 | NetworkPlugin       |
-| 其余请求（含默认的 4xx）、被取消的、opaque 响应 | 只记面包屑                       | NetworkPlugin       |
-| 点击、路由变化                                  | 只记面包屑                       | BehaviorPlugin      |
-| LCP、CLS、INP、FCP、TTFB                        | `performance` 事件（不带面包屑） | PerformancePlugin   |
-| `Script error.`、ResizeObserver 告警、扩展报错  | 丢弃                             | 核心的忽略规则      |
+| 信号                                            | 结果                                  | 来源                |
+| ----------------------------------------------- | ------------------------------------- | ------------------- |
+| 运行时异常                                      | `error` 事件                          | ErrorPlugin         |
+| 未处理的 Promise 拒绝                           | `error` 事件                          | PromisePlugin       |
+| React 错误边界捕获的渲染错误                    | `error` 事件（带组件栈）              | `reactErrorHandler` |
+| `captureException` / `captureMessage`           | `error` 事件                          | 业务代码            |
+| 图片、脚本、样式表、媒体加载失败                | `resource` 事件                       | ResourcePlugin      |
+| 5xx（可配置）、网络错误、业务码表示失败的请求   | `network` 事件，同时记一条面包屑      | NetworkPlugin       |
+| 其余请求（含默认的 4xx）、被取消的、opaque 响应 | 只记面包屑                            | NetworkPlugin       |
+| 点击、路由变化                                  | 只记面包屑                            | BehaviorPlugin      |
+| 页面加载或切换路由之后持续空白                  | `error` 事件（`name: 'WhiteScreen'`） | WhiteScreenPlugin   |
+| 控制台的 warn、error                            | 只记面包屑                            | ConsolePlugin       |
+| LCP、CLS、INP、FCP、TTFB                        | `performance` 事件（不带面包屑）      | PerformancePlugin   |
+| `Script error.`、ResizeObserver 告警、扩展报错  | 丢弃                                  | 核心的忽略规则      |
 
 ### 6.2 各类 payload
 
-| 事件             | payload 字段                                                                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 运行时异常       | `name`、`message`、`stack`、`filename`、`line`、`column`、`level: 'error'`                                                                                   |
-| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`                                                                 |
-| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                                                                        |
-| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                        |
-| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                          |
-| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时） |
-| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`、`attribution`（元素与分段耗时，见 10.7）                                                          |
+| 事件             | payload 字段                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 运行时异常       | `name`、`message`、`stack`（带着 cause 链，见 6.3）、`filename`、`line`、`column`、`level: 'error'`                                                                                |
+| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`                                                                                       |
+| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                                                                                              |
+| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                                              |
+| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                                                |
+| 白屏             | `name: 'WhiteScreen'`、`message: 'Blank page on <路由>'`、`mechanism: 'white-screen'`、`trigger`（`load` / `route`）、`emptyPoints`、`totalPoints`、`blankForMs`、`level: 'error'` |
+| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时）                       |
+| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`、`attribution`（元素与分段耗时，见 10.7）                                                                                |
 
 非 Error 的 reason 也能稳定序列化：字符串成为 `message`；其他值用 `JSON.stringify` 转成文本，失败时用
 `String()`，`name` 为 `UnknownError`。
 
 事件信封与每个字段的长度上限见 [event-schema.md](event-schema.md)，权威定义在
 `packages/shared/src/schemas.ts`。
+
+### 6.3 错误的 cause 链
+
+ES2022 的 `new Error(message, { cause })` 常用来包装底层错误：请求失败之后，业务层抛出「下单失败」。只报最外层，
+真正的根因就丢了。所有错误都经过 `errorPayload`，它沿着 `cause` 往下最多跟 5 层，遇到循环引用就停，把每一层接在
+`stack` 后面：
+
+```text
+Error: Checkout failed
+    at submit (https://shop.example/assets/checkout.js:8:2)
+Caused by: TypeError: Failed to fetch
+    at request (https://shop.example/assets/api.js:3:14)
+```
+
+- 每层一行 `Caused by: 类型: 消息`，接着是那一层的栈帧。V8 的堆栈第一行本身就是「类型: 消息」，拼接时去掉，
+  不重复；cause 不是 Error 时（例如一个对象）只写一行描述。
+- **拼成文本，而不是另加结构化字段**：服务端逐行还原 Source Map、按栈顶帧生成指纹的逻辑都不用改，cause 段里的帧
+  同样被还原；指纹仍由最外层错误决定。Sentry 的 linkedErrors 同样最多跟 5 层，但作为结构化的异常列表上报。
+- 排障 Agent 读堆栈时，最外层取前 12 行，每个 `Caused by:` 段取标题和前 3 帧：只截前 12 行的话，
+  接在后面的根因就全被截掉了。
 
 ## 7. 噪声过滤与去重
 
@@ -373,7 +404,9 @@ sequenceDiagram
 - 请求和响应的 body、headers：NetworkPlugin 只记方法、地址、状态码和耗时。
 - 用户输入：点击勾选框、单选框只记 `name`，不记选中状态；下拉框只记 `name`，不记选中的值。
 - 容器里的页面文字：点击描述只从按钮、链接这类可交互元素上取文字，标了 `data-tp-mask` 的区域一个字都不记
-  （规则见 10.5）。
+  （规则见 10.6）。
+- 控制台的全部输出：默认只记 warn 和 error，参数只取简短预览（对象只展开一层、最多 5 项），敏感键的值遮蔽。
+- 页面内容本身：白屏检测只看采样点上最上层的元素是不是空容器，不截图、不读页面文字。
 
 ## 9. 传输层：Transport
 
@@ -498,23 +531,27 @@ interface PluginContext {
 }
 ```
 
-六个默认插件遵守同一组约定：
+八个默认插件遵守同一组约定：
 
 - **setup 幂等**：已经安装过（持有 context）或不在浏览器环境（没有 `window`）时直接返回。
 - **监听器用固定的函数引用**：`removeEventListener` 必须拿到注册时同一个引用和同样的 capture 标志，teardown
   才能对称移除。
 - **只还原自己的包装**：包装全局 API 的插件在 teardown 时，只有全局引用仍是自己的包装才还原。如果之后又有别的
   库包了一层，直接还原会把它的包装一起抹掉；这种情况下自己的包装留在调用链上，context 已清空，只做透传。
+  `history` 的包装由 `core/history.ts` 的 `watchHistory` 实现，BehaviorPlugin 和 WhiteScreenPlugin 各包一层，
+  按相反顺序撤销时各自都能还原干净。
 - **需要在离开页面前提交数据的实现 `onPageHidden`**，不自己监听 `pagehide`（原因见 5.5）。
 
-| 插件              | 挂载点                                                                               | 产出                           |
-| ----------------- | ------------------------------------------------------------------------------------ | ------------------------------ |
-| ErrorPlugin       | `window` 的 `error`（冒泡阶段）                                                      | `error` 事件                   |
-| PromisePlugin     | `window` 的 `unhandledrejection`                                                     | `error` 事件                   |
-| ResourcePlugin    | `window` 的 `error`（捕获阶段）                                                      | `resource` 事件                |
-| NetworkPlugin     | 包装 `window.fetch`、`XMLHttpRequest.prototype.open/send`                            | 请求面包屑；失败的请求另成事件 |
-| BehaviorPlugin    | `document` 的 `click`（捕获阶段）、包装 `history.pushState/replaceState`、`popstate` | 点击与路由面包屑               |
-| PerformancePlugin | `web-vitals` 的 `onLCP`、`onCLS`、`onINP`、`onFCP`、`onTTFB`                         | `performance` 事件             |
+| 插件              | 挂载点                                                                                                     | 产出                           |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| ErrorPlugin       | `window` 的 `error`（冒泡阶段）                                                                            | `error` 事件                   |
+| PromisePlugin     | `window` 的 `unhandledrejection`                                                                           | `error` 事件                   |
+| ResourcePlugin    | `window` 的 `error`（捕获阶段）                                                                            | `resource` 事件                |
+| NetworkPlugin     | 包装 `window.fetch`、`XMLHttpRequest.prototype.open/send`                                                  | 请求面包屑；失败的请求另成事件 |
+| BehaviorPlugin    | `document` 的 `click`（捕获阶段）、包装 `history.pushState/replaceState`、`popstate`                       | 点击与路由面包屑               |
+| PerformancePlugin | `web-vitals` 的 `onLCP`、`onCLS`、`onINP`、`onFCP`、`onTTFB`                                               | `performance` 事件             |
+| WhiteScreenPlugin | `load`、包装 `history.pushState/replaceState`、`popstate`、`visibilitychange`、`document.elementFromPoint` | 白屏的 `error` 事件            |
+| ConsolePlugin     | 包装 `console.warn`、`console.error`（级别可配置）                                                         | 控制台面包屑                   |
 
 ### 10.2 ErrorPlugin：运行时异常
 
@@ -524,9 +561,10 @@ interface PluginContext {
 - **描述错误**：优先用抛出的原始值 `event.error`，而不是 `event.message`。后者是浏览器拼好的展示文本，
   Chrome 会加上 `Uncaught ` 前缀；同一个错误经 `captureException` 上报时没有这个前缀，两者消息不一致就会得到
   不同的指纹，被拆成两个 Issue。没有 error 对象时（例如跨域脚本的 `Script error.`）才退回 `event.message`。
-- **payload**：错误的 `name`、`message`、`stack`，加上 `filename`、`line`、`column`、`level: 'error'`。
+- **payload**：错误的 `name`、`message`、`stack`（带着 cause 链，见 6.3），加上 `filename`、`line`、`column`、
+  `level: 'error'`。
 - **与 React**：React 19 里 `onClick` 等事件处理函数中抛出的错误会经 `reportError` 到达 `window.error`，由
-  这个插件采集；被错误边界捕获的渲染错误不会，需要 `reactErrorHandler`（10.8）。
+  这个插件采集；被错误边界捕获的渲染错误不会，需要 `reactErrorHandler`（10.10）。
 
 ### 10.3 PromisePlugin：未处理的 Promise 拒绝
 
@@ -631,7 +669,8 @@ createMonitor({
 逐个文本节点读取而不用 `textContent`：后者要把整棵子树的文字拼成一个字符串，点在一个装着几千行数据的容器上时，
 每次点击都要在业务处理之前同步付出这个代价。
 
-**路由**：包装 `history.pushState`、`history.replaceState`（SPA 路由变化不会触发 `popstate`），并监听 `popstate`。
+**路由**：用 `watchHistory` 包装 `history.pushState`、`history.replaceState`（SPA 路由变化不会触发 `popstate`），
+并监听 `popstate`。
 只在**路径或 hash 真的变化**时记一条面包屑：`type: 'navigation'`、`category: 'route'`，消息形如
 `pushState → /checkout/review`，`data.url` 为当前地址（查询参数由核心脱敏）。同步搜索框、筛选条件的 `replaceState`
 往往只改查询参数，每次都记会把 50 条的面包屑缓冲冲掉，真正有用的证据被挤出去。
@@ -690,7 +729,82 @@ createMonitor({
 - 元素是 web-vitals 生成的 CSS 选择器（标签、id、class），不含页面文字；`url`、`sourceURL` 由核心脱敏。
 - 原始归因里的 PerformanceEntry 对象（DOM 元素引用、完整条目列表）体积大、大多用不上，不上报。
 
-### 10.8 React 集成：reactErrorHandler
+### 10.8 WhiteScreenPlugin：白屏
+
+页面加载完成、或单页应用切换路由之后，页面在一段时间里始终是空的。白屏往往没有任何 JS 报错：接口返回了空数据、
+样式把内容盖住、渲染条件永远不满足、路由没有匹配的组件。只靠错误监控，这类问题完全看不到。
+
+**判断方法：采样点**。在视口的水平、垂直两条中线上各取 9 个点（中心点取了两次，共 18 个），用
+`document.elementFromPoint` 看每个点上最上层的元素：
+
+- 落在「空容器」上：`html`、`body`、`#root`、`#app`、`#__next`、`#__nuxt`，可以用 `containers` 追加；
+- 或者落在骨架屏、加载占位里：`skeletons` 配置的选择器，用 `closest` 判断，点在骨架屏的子元素上也算；
+
+这个点就是空的。18 个点**全部**为空才算这一次检测空白。
+
+为什么不用另外两种常见做法：
+
+| 做法                          | 问题                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| 看 DOM 里有没有节点           | 有节点不代表用户看得见：被隐藏、尺寸为 0、被遮住                       |
+| 截图（canvas）后分析像素      | 开销大，还要把页面画出来，涉及隐私；适合出问题之后辅助排查，不适合常驻 |
+| **采样点 + elementFromPoint** | 看的是用户实际看到的最上层元素，每次只需 18 次命中测试                 |
+
+腾讯 Aegis 等国内 SDK 用的也是采样点方案。
+
+**什么时候检测**：
+
+- 页面 `load` 之后（安装时文档已经加载完就立即开始），以及每次路由变化之后。路由变化从 `watchHistory` 和
+  `popstate` 得知，只在路径或 hash 变化时重新检测，只改查询参数的 `replaceState` 不算换页面。
+- 每隔 `interval`（默认 1 秒）检测一次，**连续 `checks` 次（默认 5 次）都空白才上报**：加载中的页面本来就可能
+  暂时空白，一次空白不算。中途出现内容，这一轮就结束。
+- 新一轮检测开始（路由又变了）时取消上一轮。
+
+**误报控制**：
+
+- **页面在后台时暂停**：后台标签页不绘制，依赖 `requestAnimationFrame` 的渲染也会停下，这时的空白不说明问题。
+  检测遇到 `visibilityState === 'hidden'` 就暂停这一轮，回到前台后从头再查，所以从后台打开的标签页切到前台后
+  照样会检测。
+- **视口没有尺寸时不判断**：隐藏的 iframe 里 `innerWidth` 为 0，所有采样点都会落在 `html` 上。
+- **同一路由在一次页面访问里只报一次**：用户停在白屏上来回切换，不会重复上报。
+- 配置里写错的选择器被丢掉（在空的文档片段上试解析一次），`interval`、`checks` 不是有限数字时用默认值：
+  `interval` 为 `NaN` 时 `setTimeout` 会立即触发，页面还在加载就会误报。
+
+**产出**：`captureEvent('error', …)`，`name: 'WhiteScreen'`、`message: 'Blank page on /checkout/review'`，
+另带 `mechanism: 'white-screen'`、`trigger`（`load` 或 `route`）、空白的采样点数和总数、持续空白的时长。
+消息里是路由（路径加 hash），服务端按消息聚合，每个路由的白屏是一个 Issue；事件带着面包屑，能看到白屏之前
+发生了什么，例如某个接口失败了。
+
+```ts
+createMonitor({
+  // ...
+  whiteScreen: {
+    containers: ['#main-app'], // 应用挂载在默认列表以外的节点上
+    skeletons: ['.skeleton', '[aria-busy="true"]'],
+  },
+});
+```
+
+**teardown**：清掉定时器，移除 `load`、`popstate`、`visibilitychange` 监听，撤销 `history` 的包装。
+
+### 10.9 ConsolePlugin：控制台面包屑
+
+业务代码和框架常把「处理掉了、但值得注意」的问题打到控制台：接口封装里 `console.error` 一个失败的响应，React
+的开发期告警，第三方库的弃用提示。它们是之后报错的重要上下文，Sentry 默认也会记录。
+
+- **只记面包屑，不单独成为事件**：控制台输出多是预期内的，报成 Issue 只会制造噪声。
+- **默认只记 `warn` 和 `error`**：`log` 太多，会把 50 条的缓冲挤满。`consoleBreadcrumbs` 可以改级别，`false`
+  表示完全不包装 `console`。
+- **包装方式**：替换 `console` 上对应的方法，先记录、再调用原方法，控制台照常输出。记录过程中的任何异常都被
+  吞掉（例如参数的 getter 抛错）：业务的 `console` 调用绝不能因为监控而失败。
+- **参数预览**：字符串原样；Error 写成 `类型: 消息`；对象只展开一层、最多 5 项，更深的写成 `{…}` / `[…]`，
+  敏感键的值遮蔽，整条最多 500 字符。不用 `JSON.stringify`：对一个大对象序列化，会在业务的 `console` 调用里
+  同步付出这个代价。
+- **面包屑**：`type: 'console'`、`category: 'console.warn'` 等，`data.level` 为级别；连续相同的由核心合并
+  （见 5.4），时间线上显示为 `Price is stale ×30`。
+- **teardown**：只在全局引用仍是自己的包装时还原。
+
+### 10.10 React 集成：reactErrorHandler
 
 不是插件，而是给 React 19 根节点错误回调用的适配器：
 
@@ -710,54 +824,45 @@ createRoot(container, {
 传入自己的回调会替换 React 默认的处理，所以适配器默认的第二个参数同样打印到控制台，接上它不会让开发时的报错
 凭空消失。
 
-### 10.9 编写自己的插件
+### 10.11 编写自己的插件
 
 ```ts
 import type { MonitorPlugin, PluginContext } from '@trace-pilot/monitor-sdk';
 
-/** 示例：把 console.error 记成面包屑。 */
-export class ConsoleBreadcrumbPlugin implements MonitorPlugin {
-  readonly name = 'ConsoleBreadcrumbPlugin';
+/** 示例：内容安全策略（CSP）拦下的资源和脚本，报成事件。 */
+export class CspViolationPlugin implements MonitorPlugin {
+  readonly name = 'CspViolationPlugin';
   private context?: PluginContext;
-  private original?: typeof console.error;
-  private wrapped?: typeof console.error;
+  // 固定的函数引用：teardown 时 removeEventListener 才能找到它。
+  private readonly listener = (event: SecurityPolicyViolationEvent) => {
+    // 地址里的查询参数由核心脱敏。
+    this.context?.captureEvent('error', {
+      name: 'CSPViolation',
+      message: `${event.effectiveDirective} blocked ${event.blockedURI}`,
+      level: 'warning',
+    });
+  };
 
   setup(context: PluginContext): void {
-    if (this.context) return;
+    if (this.context || typeof document === 'undefined') return;
     this.context = context;
-    const original = console.error;
-    this.original = original;
-    this.wrapped = (...args: unknown[]) => {
-      try {
-        // teardown 之后 context 为空，只透传。
-        this.context?.addBreadcrumb({
-          type: 'console',
-          category: 'console.error',
-          message: args
-            .map((arg) => String(arg))
-            .join(' ')
-            .slice(0, 500),
-        });
-      } catch {
-        // String(Object.create(null)) 这类参数会抛错；记录失败不能影响业务的 console.error。
-      }
-      original.apply(console, args);
-    };
-    console.error = this.wrapped;
+    document.addEventListener('securitypolicyviolation', this.listener);
   }
 
   teardown(): void {
-    // 只在全局引用仍是自己的包装时还原。
-    if (console.error === this.wrapped) console.error = this.original!;
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('securitypolicyviolation', this.listener);
+    }
     this.context = undefined;
   }
 }
 
-monitor.use(new ConsoleBreadcrumbPlugin());
+monitor.use(new CspViolationPlugin());
 ```
 
 插件在 setup 中产生的信号会被丢弃（那是安装过程的副作用）。setup、teardown、`onPageHidden` 抛出的异常被核心
-隔离，不影响其他插件和页面；但包装函数是在业务代码调用时执行的，不在核心的保护范围内，要像上例一样自己兜住异常。
+隔离，不影响其他插件和页面。但监听器和包装函数是在浏览器派发事件、业务代码调用时执行的，不在核心的保护范围内：
+处理参数这类可能抛错的代码要自己兜住，否则包装函数里的异常会直接抛给业务代码。包装全局 API 的写法参考 ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 11. 与服务端的约定
 
@@ -788,40 +893,44 @@ monitor.use(new ConsoleBreadcrumbPlugin());
 
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
-| 发布产物 `dist/index.js` | 22,656 |  7,321 |  8,600 |
-| 业务应用实际接入成本     | 32,085 | 10,596 | 12,200 |
-| 其中 `web-vitals`        |      — |  2,929 |      — |
+| 发布产物 `dist/index.js` | 29,608 |  9,434 | 10,800 |
+| 业务应用实际接入成本     | 45,585 | 15,048 | 17,300 |
+| 其中 `web-vitals`        |      — |  5,275 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
+白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
+只体现在接入成本里。各次改动的体积代价见[性能报告](reports/performance.md)。
 
 ## 13. 测试与质量保障
 
-**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，62 项）。`test/setup.ts` 为每个用例把
+**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，88 项）。`test/setup.ts` 为每个用例把
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
 | 测试文件                            | 覆盖                                                                                                                                                                                                             |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、`flush()` 的投递状况、配置规范化                                                                                         |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、`flush()` 的投递状况、配置规范化                            |
 | `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                |
 | `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                     |
 | `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                             |
 | `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装 |
 | `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                   |
 | `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                 |
+| `plugins/WhiteScreenPlugin.test.ts` | 连续空白才上报、中途出现内容不报、骨架屏算空白、路由变化后重新检测且每个路由只报一次、后台暂停回前台再查、零尺寸视口、非法配置用默认值、teardown 停止检测并还原 `history`                                        |
+| `plugins/ConsolePlugin.test.ts`     | 默认只记 warn 与 error 且照常输出、对象只展开一层并遮蔽敏感键、参数抛错不影响业务调用、可配置级别与关闭、只还原自己的包装                                                                                        |
 | `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                          |
 
 **真实浏览器**（Playwright + Chromium）：
 
 - `tests/e2e/sdk-delivery.spec.ts`：用 SDK 默认配置和真实的跨域服务端，验证 50 次请求之后连续 10 个带完整面包屑的
   错误全部送达，以及页面退出时仍在队列里的事件经 beacon 送达。这两条路径都曾在单元测试全绿的情况下静默丢数据。
-- `tests/e2e/playground.spec.ts`：逐个点击演练场的 12 个场景，核对服务端最终收到的内容。
+- `tests/e2e/playground.spec.ts`：逐个点击演练场的 13 个场景，核对服务端最终收到的内容。
 
 **运行时开销与泄漏**（`pnpm measure:sdk-runtime`，真实 Chromium）：`createMonitor()` + `start()` 的 P50 约
-30 µs，单次 `captureException` 的 P50 约 25 µs（数量级绊线分别是 2,000 µs 和 250 µs）；500 个错误、10 种签名的
+60 µs，单次 `captureException` 的 P50 约 30 µs（数量级绊线分别是 2,000 µs 和 250 µs）；500 个错误、10 种签名的
 重复风暴只有 10 个进入队列；20 轮 start / destroy 之后残留监听器 0 个，`fetch`、XHR 的 `open` / `send`、
-`history.pushState` / `replaceState` 全部还原为插桩前的引用。时间数字随机器波动，只作绊线；两项泄漏断言与机器
-快慢无关。详见[性能报告](reports/performance.md)。
+`history.pushState` / `replaceState`、`console.warn` / `console.error` 全部还原为插桩前的引用。时间数字随机器
+波动，只作绊线；两项泄漏断言与机器快慢无关。详见[性能报告](reports/performance.md)。
 
 ## 14. 已知限制
 
@@ -838,7 +947,14 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
   业务失败的面包屑和事件比 HTTP 层面的那条晚一点出现。
 - **请求只覆盖 fetch 和 XHR**：WebSocket、EventSource 和业务自己调用的 `sendBeacon` 不在其中；不采集请求和响应的
   body 与 headers。
-- **不采集控制台输出**：面包屑的类型里保留了 `console`，但没有默认插件产生它（可参考 10.9 自己加）。
+- **白屏检测只看采样点上最上层的元素**：应用渲染了一个铺满视口、但没有内容的外层容器（例如只有背景色的布局
+  `div`）时，要把它加进 `containers`，否则检测不到；只空了半屏、或者被一个全屏的错误提示盖住，都不算白屏。
+- **白屏只在加载和切换路由之后检测**：页面显示过内容、之后才变空（例如没被错误边界接住的渲染错误卸载了整个
+  应用），不会再检测；这种情况下的错误本身由 ErrorPlugin 或 `reactErrorHandler` 上报。
+- **cause 链作为文本接在堆栈后面**：指纹只由最外层错误决定，同一个包装错误、不同的根因会聚到同一个 Issue 里
+  （Sentry 按整条异常链分组，能把它们分开）。
+- **控制台被包装之后**，开发者工具里 warn、error 的来源位置可能显示为 SDK 的包装函数；包装 `console` 的 SDK
+  都有这个问题，打包工具把 SDK 列入忽略列表（ignore list）时会跳过它。不需要时设 `consoleBreadcrumbs: false`。
 - **单页应用的指标按整次页面加载计算**：web-vitals 以真正的页面加载为单位，切换路由不会重新计算 LCP；
   INP、CLS 取整次访问里最差的那次，只是归到它发生时所在的路由（见 10.7）。
 - **`web-vitals` 的监听无法注销**：整页只注册一次，页面结束前一直存在。

@@ -232,6 +232,8 @@ const report = await page.evaluate(
     const originalSend = XMLHttpRequest.prototype.send;
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
+    const originalConsoleWarn = console.warn;
+    const originalConsoleError = console.error;
 
     for (let index = 0; index < samples.cycles; index += 1) {
       const monitor = createMonitor(options);
@@ -247,6 +249,8 @@ const report = await page.evaluate(
       xhrSend: XMLHttpRequest.prototype.send === originalSend,
       pushState: history.pushState === originalPushState,
       replaceState: history.replaceState === originalReplaceState,
+      consoleWarn: console.warn === originalConsoleWarn,
+      consoleError: console.error === originalConsoleError,
     };
 
     // 堆用量只作参考：JIT 与 GC 时机让它天然带噪声，不作断言，也不作为对外引用的数字。

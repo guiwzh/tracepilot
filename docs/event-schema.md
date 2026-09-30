@@ -34,12 +34,16 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 
 - `error`：运行时异常、未处理的 Promise rejection、React 根节点错误回调（`reactErrorHandler`）
   转交的渲染错误，以及 `captureException` / `captureMessage`。默认忽略 `Script error.`、
-  ResizeObserver 循环告警和浏览器扩展里的报错。
+  ResizeObserver 循环告警和浏览器扩展里的报错。错误带 `cause` 时，`stack` 后面接着每一层 cause
+  （`Caused by: 类型: 消息` 加那一层的栈帧，最多 5 层）；指纹仍由最外层错误决定。
+  白屏也是 `error` 事件：`name` 为 `WhiteScreen`，`message` 为 `Blank page on <路由>`，payload 另带
+  `mechanism: 'white-screen'`、`trigger`（`load` / `route`）、`emptyPoints`、`totalPoints`、`blankForMs`。
 - `resource`：图片、脚本、样式表、媒体加载失败。
 - `network`：**只有失败的请求**：状态码落在 `failedRequestStatusCodes` 里（默认只有 5xx）、拿不到响应的
   网络错误，或者配置了 `detectBusinessError` 后业务码表示失败的 2xx 响应（payload 带 `businessCode`、
   `businessMessage`）。其余请求（包括默认的 4xx）、被取消的请求和 no-cors 的 opaque 响应只记成 breadcrumb，
-  作为之后错误的上下文。
+  作为之后错误的上下文。控制台的 warn、error 同样只记成 breadcrumb（`type: 'console'`），连续相同的合并成
+  一条，`data.count` 是次数。
 - `performance`：Web Vitals 样本，**不附带 breadcrumb**——它们不属于任何 Issue 的证据链。payload 带精简的
   `attribution`：LCP、CLS、INP 的 `target` 是造成指标的元素（CSS 选择器），另有各指标拆分后的几段耗时；
   事件的 `page` 是指标发生时所在的页面，不是页面隐藏、真正上报时的页面。

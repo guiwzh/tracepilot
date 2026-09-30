@@ -156,8 +156,25 @@ export const scenarios: Scenario[] = [
     },
   },
   {
-    id: 'exit',
+    id: 'blank',
     number: '12',
+    title: 'Blank page after navigation',
+    description:
+      'Navigates to /checkout/blank and renders nothing there. No error is thrown; the white screen plugin samples 18 points, finds only empty containers three checks in a row and reports it. The page comes back after a few seconds.',
+    run: () => {
+      const root = document.getElementById('root');
+      const previous = `${location.pathname}${location.search}${location.hash}`;
+      history.pushState({}, '', `/checkout/blank${location.search}`);
+      if (root) root.style.display = 'none';
+      window.setTimeout(() => {
+        if (root) root.style.display = '';
+        history.pushState({}, '', previous);
+      }, 3_000);
+    },
+  },
+  {
+    id: 'exit',
+    number: '13',
     title: 'Leave with queued events',
     description:
       'Queues two messages and reloads at once. Whatever has not been sent yet leaves through sendBeacon on the way out.',

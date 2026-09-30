@@ -8,11 +8,16 @@ export function createId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** 当前路由：路径加 hash，不含查询参数。 */
+export function currentRoute(): string {
+  return `${location.pathname}${location.hash}`;
+}
+
 export function getPageContext(): MonitorEvent['page'] {
   if (typeof location === 'undefined') return { url: 'unknown://' };
   return {
     url: location.href,
-    route: `${location.pathname}${location.hash}`,
+    route: currentRoute(),
     title: typeof document !== 'undefined' ? document.title : undefined,
     referrer: typeof document !== 'undefined' ? document.referrer : undefined,
   };
@@ -29,17 +34,59 @@ export function getDeviceContext(): MonitorEvent['device'] {
   };
 }
 
+/** 最多跟到第几层 cause：再往下通常是框架内部的包装，只会让堆栈变长。 */
+const MAX_CAUSES = 5;
+/** 堆栈里的一帧：以 :行:列 结尾（V8、Firefox、Safari），或者 V8 的「at ...」。 */
+const FRAME_LINE = /:\d+:\d+\)?\s*$|^\s*at\s/;
+
+/** 把任意值描述成一行文字：rejection 的 reason、cause 都可能不是 Error。 */
+function describe(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** 只取堆栈里的帧：V8 的堆栈第一行是「类型: 消息」，cause 段的标题已经写了它。 */
+function stackFrames(error: Error): string {
+  const lines = (error.stack ?? '').split('\n');
+  const first = lines.findIndex((line) => FRAME_LINE.test(line));
+  return first === -1 ? '' : lines.slice(first).join('\n');
+}
+
+/**
+ * 把 cause 链接在堆栈后面：每层一行「Caused by: 类型: 消息」，再接那一层的帧，最多 5 层，遇到循环引用就停。
+ * ES2022 的 new Error(message, { cause }) 常用来包装底层错误（请求失败 → 业务层抛出「下单失败」），
+ * 只报最外层，真正的根因就丢了。拼成文本而不是另加结构化字段：服务端逐行还原 Source Map、
+ * 按栈顶帧生成指纹的逻辑都不用改，指纹仍由最外层错误决定。
+ */
+function stackWithCauses(error: Error): string | undefined {
+  let stack = error.stack;
+  const seen = new Set<unknown>([error]);
+  try {
+    let cause: unknown = (error as { cause?: unknown }).cause;
+    for (let depth = 0; depth < MAX_CAUSES && cause != null && !seen.has(cause); depth += 1) {
+      seen.add(cause);
+      const title = cause instanceof Error ? `${cause.name}: ${cause.message}` : describe(cause);
+      const frames = cause instanceof Error ? stackFrames(cause) : '';
+      stack = `${stack ?? `${error.name}: ${error.message}`}\nCaused by: ${title}${frames ? `\n${frames}` : ''}`;
+      cause = cause instanceof Error ? (cause as { cause?: unknown }).cause : undefined;
+    }
+  } catch {
+    // cause 是会抛错的 getter 之类的情况：保留已经拼好的部分。captureException 不能把异常抛给业务代码。
+  }
+  return stack;
+}
+
 export function errorPayload(error: unknown): Record<string, unknown> {
   // Promise rejection 的 reason 可以是任意值，统一转换后才能稳定序列化。
   if (error instanceof Error) {
-    return { name: error.name, message: error.message, stack: error.stack };
+    return { name: error.name, message: error.message, stack: stackWithCauses(error) };
   }
   if (typeof error === 'string') return { name: 'Error', message: error };
-  try {
-    return { name: 'UnknownError', message: JSON.stringify(error) };
-  } catch {
-    return { name: 'UnknownError', message: String(error) };
-  }
+  return { name: 'UnknownError', message: describe(error) };
 }
 
 /**

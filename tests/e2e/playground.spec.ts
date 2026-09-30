@@ -196,6 +196,20 @@ test('an error storm sends one event per signature', async ({ page, request }) =
   ]);
 });
 
+test('a route that renders nothing is reported as a blank page', async ({ page, request }) => {
+  const project = await createProject(request);
+  await openLab(page, project);
+  // 整个应用被隐藏，「Flush」按钮也点不到：等 SDK 按 flushInterval 自己发出。
+  await trigger(page, 'blank');
+
+  const blank = await waitForIssue(request, project, /^Blank page on \/checkout\/blank$/);
+  expect(await latestEvent(request, blank)).toMatchObject({
+    context: {
+      payload: { name: 'WhiteScreen', mechanism: 'white-screen', emptyPoints: 18, totalPoints: 18 },
+    },
+  });
+});
+
 test('events still queued when the page unloads reach the server', async ({ page, request }) => {
   const project = await createProject(request);
   await openLab(page, project);

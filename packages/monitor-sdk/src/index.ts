@@ -1,10 +1,12 @@
 import { MonitorCore } from './core/MonitorCore';
 import { BehaviorPlugin } from './plugins/BehaviorPlugin';
+import { ConsolePlugin } from './plugins/ConsolePlugin';
 import { ErrorPlugin } from './plugins/ErrorPlugin';
 import { NetworkPlugin } from './plugins/NetworkPlugin';
 import { PerformancePlugin } from './plugins/PerformancePlugin';
 import { PromisePlugin } from './plugins/PromisePlugin';
 import { ResourcePlugin } from './plugins/ResourcePlugin';
+import { WhiteScreenPlugin } from './plugins/WhiteScreenPlugin';
 import type { MonitorClient, MonitorOptions } from './types';
 
 /**
@@ -18,17 +20,21 @@ export function createMonitor(options: MonitorOptions): MonitorClient {
     .use(new ResourcePlugin())
     .use(new NetworkPlugin())
     .use(new PerformancePlugin())
-    .use(new BehaviorPlugin());
+    .use(new BehaviorPlugin())
+    .use(new ConsolePlugin())
+    .use(new WhiteScreenPlugin());
 }
 
 // 同时导出底层类，方便高级调用方按需组合插件（new MonitorCore(options).use(...)），也方便单元测试隔离各层。
 export { MonitorCore } from './core/MonitorCore';
 export { reactErrorHandler, type ReactErrorInfo } from './integrations/react';
 export { BehaviorPlugin } from './plugins/BehaviorPlugin';
+export { ConsolePlugin } from './plugins/ConsolePlugin';
 export { ErrorPlugin } from './plugins/ErrorPlugin';
 export { NetworkPlugin } from './plugins/NetworkPlugin';
 export { PerformancePlugin } from './plugins/PerformancePlugin';
 export { PromisePlugin } from './plugins/PromisePlugin';
 export { ResourcePlugin } from './plugins/ResourcePlugin';
+export { WhiteScreenPlugin } from './plugins/WhiteScreenPlugin';
 export { Transport } from './transport/Transport';
 export type * from './types';
