@@ -1,6 +1,9 @@
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 
-/** 浏览器上下文采集的无状态辅助函数；所有 API 都兼容测试或 SSR 中缺少 window 的情况。 */
+/**
+ * 浏览器上下文采集的无状态辅助函数。除 currentRoute 外都兼容测试或 SSR 中缺少 window 的情况；
+ * currentRoute 只在插件安装之后调用，那时一定在浏览器里。
+ */
 export function createId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();

@@ -5,7 +5,7 @@ import type { CaptureOptions, PluginContext } from '../../src/types';
 
 /**
  * web-vitals 被替换成可手动触发的假实现：指标算法由官方库负责并有它自己的测试，
- * 这里只验证本插件的上报时机、去重与单例注册。
+ * 这里只验证本插件的上报时机、去重、单例注册、指标发生时的页面和归因的精简。
  */
 const webVitals = vi.hoisted(() => ({
   callbacks: new Map<string, (metric: unknown) => void>(),

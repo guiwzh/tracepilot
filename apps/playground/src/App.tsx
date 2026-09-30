@@ -118,7 +118,9 @@ export function App() {
           <p className="eyebrow">What the SDK did</p>
           <h2>Flight recorder</h2>
           <div className="widget" aria-label="Order summary widget">
-            <small>React widget · scenario 08</small>
+            <small>
+              React widget · scenario {scenarios.find((item) => item.id === 'react')?.number}
+            </small>
             <CrashWidget crashes={crashes} />
           </div>
         </div>

@@ -28,7 +28,7 @@ function CheckoutSummary({ order }: { order?: Order }) {
 }
 
 /**
- * 场景 08 的「受害组件」。被错误边界捕获的渲染错误不会触发 window.error，
+ * React 渲染错误场景（id 为 react）的「受害组件」。被错误边界捕获的渲染错误不会触发 window.error，
  * 只有 main.tsx 里接到根节点 onCaughtError 的 reactErrorHandler 能把它交给 SDK。
  */
 export function CrashWidget({ crashes }: { crashes: number }) {

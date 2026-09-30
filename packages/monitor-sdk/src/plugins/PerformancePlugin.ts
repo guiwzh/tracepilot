@@ -19,7 +19,7 @@ import type { MonitorPlugin, PluginContext } from '../types';
  * 这些规则还在演进（2024 年 INP 取代了 FID），跟着官方库走比自己维护可靠。
  *
  * 用的是它的归因（attribution）版本：除了数值，还给出造成指标的元素和拆分后的几段耗时，
- * 「LCP 慢」才能落到「哪张图、慢在下载还是渲染」。代价是接入方的包多约 2 KB gzip。
+ * 「LCP 慢」才能落到「哪张图、慢在下载还是渲染」。代价是接入方的包多约 2.3 KB gzip。
  *
  * web-vitals 的 onXXX 没有注销 API，注册的 PerformanceObserver 和监听器会存活到页面结束。
  * 如果每次 setup 都注册一遍，SPA 里反复 start/destroy 会让它们无限累积。

@@ -12,7 +12,7 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
    `XMLHttpRequest`、`history`、`console`）在销毁时还原；队列长度、单个事件、每批大小都有上限。
 2. **只上报会形成 Issue 的信号**：成功和被取消的请求只记成面包屑；默认忽略无法诊断的噪声；同类信号
    短窗口去重；性能样本不携带面包屑。同一个会话（3 次路由、5 次点击、30 个成功请求、1 个错误）的上报
-   因此从 33 个事件、182,725 字节降到 3 个事件、10,186 字节。
+   因此从 33 个事件、182,725 字节降到 3 个事件、10,186 字节（2026-09-28 实测）。
 3. **默认脱敏**：数据离开页面之前已按与服务端相同的规则处理，`beforeSend` 收到的就是脱敏后的事件。
 4. **投递可靠**：语义是「至少一次」，重复由服务端按 `eventId` 去重。处理了浏览器真实的限制：
    keepalive / beacon 共享 64 KiB 在途配额、`application/json` 跨域需要预检、页面随时可能卸载。
@@ -31,7 +31,7 @@ packages/monitor-sdk/
 │   ├── types.ts                  公开类型：配置、插件接口、投递状况、MonitorClient
 │   ├── core/
 │   │   ├── MonitorCore.ts        生命周期、采样、面包屑、采集管线、页面隐藏通知
-│   │   ├── options.ts            数字配置的默认值与上下界（唯一一份）
+│   │   ├── options.ts            配置规范化：数字项的默认值与上下界（唯一一份）、采样率、失败状态码
 │   │   ├── noise.ts              噪声过滤与去重签名
 │   │   ├── history.ts            watchHistory：包装 pushState / replaceState，得知 SPA 路由变化
 │   │   └── helpers.ts            事件 id、页面与设备上下文、错误描述与 cause 链、会话采样、栈首帧
@@ -48,7 +48,7 @@ packages/monitor-sdk/
 │   │   └── react.ts              reactErrorHandler：接 React 19 根节点的错误回调
 │   └── transport/
 │       └── Transport.ts          队列、批量、重试与退避、页面退出发送
-└── test/                         与 src/ 一一对应的单元测试，setup.ts 为公共替身
+└── test/                         单元测试，目录结构与 src/ 相同；setup.ts 为公共替身
 ```
 
 脱敏规则（`redactSensitive`、`redactStack`、`redactPayload`）和默认值常量不在 SDK 里，而在
@@ -135,22 +135,23 @@ monitor.start();
 
 数字选项在 `core/options.ts` 统一规范化：超出范围的夹到边界并取整，`NaN`、`Infinity` 或缺省时用默认值；
 `sampleRate`、`performanceSampleRate` 同样夹在 0–1 之间（不取整），缺省或非法时为 1。默认值来自
-`packages/shared/src/constants.ts`。`whiteScreen` 里的 `interval`、`checks` 由白屏插件按同样的规则处理。
+`packages/shared/src/constants.ts`。`whiteScreen` 里的 `interval`、`checks` 由白屏插件自己处理：不是有限数字时用默认值，
+取整，`interval` 不低于 100 ms、`checks` 不低于 1，没有上限。
 
 ### 4.3 MonitorClient
 
-| 方法                                         | 说明                                                                          |
-| -------------------------------------------- | ----------------------------------------------------------------------------- |
-| `use(plugin)`                                | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装                      |
-| `start()`                                    | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                        |
-| `setUser(user?)`                             | 之后的事件带上这个用户；服务端据此统计受影响用户数                            |
-| `captureException(error, context?)`          | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`                 |
-| `captureMessage(message, level?)`            | 上报一条消息，`level` 默认 `info`                                             |
-| `captureEvent(eventType, payload, options?)` | 底层采集入口，插件和上面两个方法都经过它；`options.page` 指定信号发生时的页面 |
-| `addBreadcrumb(breadcrumb)`                  | 加一条自定义面包屑                                                            |
-| `flush()`                                    | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回    |
-| `stats()`                                    | 当前投递状况                                                                  |
-| `destroy()`                                  | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()`  |
+| 方法                                         | 说明                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| `use(plugin)`                                | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装（未被采样的会话不装） |
+| `start()`                                    | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                         |
+| `setUser(user?)`                             | 之后的事件带上这个用户；服务端据此统计受影响用户数                             |
+| `captureException(error, context?)`          | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`                  |
+| `captureMessage(message, level?)`            | 上报一条消息，`level` 默认 `info`                                              |
+| `captureEvent(eventType, payload, options?)` | 底层采集入口，插件和上面两个方法都经过它；`options.page` 指定信号发生时的页面  |
+| `addBreadcrumb(breadcrumb)`                  | 加一条自定义面包屑                                                             |
+| `flush()`                                    | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回     |
+| `stats()`                                    | 当前投递状况                                                                   |
+| `destroy()`                                  | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()`   |
 
 `DeliveryStats` 用来判断事件是否真的到了服务端，而不是把 `flush()` resolve 当成「已送达」：
 
@@ -231,7 +232,8 @@ flowchart TD
 
 - `eventId`：优先 `crypto.randomUUID()`；`timestamp`：`Date.now()`，服务端会按 `sentAt` 校正设备时钟。
 - `sampleRate`：这个事件生效的采样率，性能样本是两个采样率的乘积。
-- `page`：`url`（`location.href`）、`route`（路径加 hash）、`title`、`referrer`，整体脱敏。
+- `page`：`url`（`location.href`）、`route`（采集时是路径加 hash）、`title`、`referrer`，整体脱敏。URL 类字段的查询参数
+  和片段都会被去掉，所以上报的 `route` 只剩路径（见第 14 节）。
 - `device`：`userAgent`、`language`、视口宽高。
 - `payload`：按 `redactPayload` 脱敏，堆栈字段保留行列号（见第 8 节）。
 - `breadcrumbs`：性能事件为空数组，其余事件带上当前面包屑的副本。
@@ -401,7 +403,8 @@ Caused by: TypeError: Failed to fetch
 
 ### 8.3 不采集的内容
 
-- 请求和响应的 body、headers：NetworkPlugin 只记方法、地址、状态码和耗时。
+- 请求和响应的 body、headers：NetworkPlugin 只记方法、地址、状态码和耗时；配置了 `detectBusinessError` 时另记它返回的
+  业务码和说明，响应体本身只在页面内存里解析。
 - 用户输入：点击勾选框、单选框只记 `name`，不记选中状态；下拉框只记 `name`，不记选中的值。
 - 容器里的页面文字：点击描述只从按钮、链接这类可交互元素上取文字，标了 `data-tp-mask` 的区域一个字都不记
   （规则见 10.6）。
@@ -428,7 +431,8 @@ Caused by: TypeError: Failed to fetch
 1. 队列已满（`maxQueueSize`）就丢弃**新到的**事件、计入 `queueFull`：事故最早的证据诊断价值最高。容量判断在
    序列化之前，风暴中被拒的事件不付出 `JSON.stringify` 的开销。
 2. 序列化一次并算出字节数，之后切批和拼请求体都复用。超过 32,000 字节时依次：
-   - 截断 payload 里超过 4,000 字符的字符串，标记 `truncated: true`；
+   - 截断 payload 里超过 4,000 字符的字符串，标记 `truncated: true`（保留开头：cause 链接在堆栈尾部，会先被截掉，
+     见第 14 节）；
    - 从最旧的一端每轮丢掉四分之一的面包屑，标记 `trimmedBreadcrumbs`——离报错最近的操作最有诊断价值；
    - 仍然超限就放弃这个事件，计入 `oversize`。
 3. 队列达到 `batchSize` 时触发一次自动发送。采集 API 保持同步，不让业务代码等网络。
@@ -643,7 +647,8 @@ createMonitor({
 - 面包屑：`type: 'network'`、`category: 'http'`，消息形如 `POST https://api.example.com/pay → 503` 或
   `GET /api/slow → aborted`，`data` 是完整的请求记录。地址里的查询参数由核心在加入面包屑时脱敏。
 - 事件：判定为失败且没有被取消时，`captureEvent('network', 请求记录)`。请求记录里的 `success` 表示
-  按上面的规则有没有判为失败，所以一个默认配置下的 404 是 `success: true`。
+  按上面的规则有没有判为失败，所以一个默认配置下的 404 是 `success: true`；被取消的请求也是 `false`，
+  但另带 `aborted: true`，只记面包屑。
 
 **不采集自己**：地址里包含 `dsn` 的请求直接透传。正常情况下 SDK 的上报根本不经过包装（传输层保存的是原生 fetch），
 这道判断兜住的是另一个 SDK 实例在本插件之后创建、因而保存到了包装版本的情况。不用自定义请求头做标记：自定义头会
@@ -765,15 +770,15 @@ createMonitor({
 - **页面在后台时暂停**：后台标签页不绘制，依赖 `requestAnimationFrame` 的渲染也会停下，这时的空白不说明问题。
   检测遇到 `visibilityState === 'hidden'` 就暂停这一轮，回到前台后从头再查，所以从后台打开的标签页切到前台后
   照样会检测。
-- **视口没有尺寸时不判断**：隐藏的 iframe 里 `innerWidth` 为 0，所有采样点都会落在 `html` 上。
+- **视口没有尺寸时不判断**：隐藏的 iframe 里 `innerWidth` 为 0，采样点都取不到元素，会全部被当成空。
 - **同一路由在一次页面访问里只报一次**：用户停在白屏上来回切换，不会重复上报。
 - 配置里写错的选择器被丢掉（在空的文档片段上试解析一次），`interval`、`checks` 不是有限数字时用默认值：
   `interval` 为 `NaN` 时 `setTimeout` 会立即触发，页面还在加载就会误报。
 
 **产出**：`captureEvent('error', …)`，`name: 'WhiteScreen'`、`message: 'Blank page on /checkout/review'`，
 另带 `mechanism: 'white-screen'`、`trigger`（`load` 或 `route`）、空白的采样点数和总数、持续空白的时长。
-消息里是路由（路径加 hash），服务端按消息聚合，每个路由的白屏是一个 Issue；事件带着面包屑，能看到白屏之前
-发生了什么，例如某个接口失败了。
+服务端按消息聚合，每个路由的白屏是一个 Issue（消息里的 hash 会被脱敏去掉，hash 路由的应用按路径聚合，见第 14 节）；
+事件带着面包屑，能看到白屏之前发生了什么，例如某个接口失败了。
 
 ```ts
 createMonitor({
@@ -862,7 +867,8 @@ monitor.use(new CspViolationPlugin());
 
 插件在 setup 中产生的信号会被丢弃（那是安装过程的副作用）。setup、teardown、`onPageHidden` 抛出的异常被核心
 隔离，不影响其他插件和页面。但监听器和包装函数是在浏览器派发事件、业务代码调用时执行的，不在核心的保护范围内：
-处理参数这类可能抛错的代码要自己兜住，否则包装函数里的异常会直接抛给业务代码。包装全局 API 的写法参考 ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
+处理参数这类可能抛错的代码要自己兜住，否则包装函数里的异常会直接抛给业务代码。包装全局 API 的写法参考
+ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 11. 与服务端的约定
 
@@ -938,7 +944,7 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
   随页面一起丢失，不写入本地存储下次补发（原因见 9.5）。
 - **退出发送按字节切块、不限条数**：一块 60 KB，事件平均不到约 590 字节时一块会装进 100 个以上，超过服务端单个
   信封 100 个事件的上限，整块被拒收；beacon 没有重试，这一块就丢了。只有队列里积压了上百个小事件时才会出现
-  （服务端一段时间不可达，或 `batchSize` 配得很大）：一个性能样本连同页面和设备信息约 600–700 字节，
+  （服务端一段时间不可达，或 `batchSize` 配得很大）：一个性能样本连同页面、设备信息和归因约 0.8–1 KB，
   带面包屑的错误大得多；正常情况下队列攒够 10 条就发送。
 - **去重按页面实例**：不跨标签页，也不跨页面加载。
 - **资源失败只覆盖能拿到地址的元素**：`<img>`、`<script>`、`<link>`、`<audio>` / `<video>`。CSS 里的背景图、
@@ -952,11 +958,17 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
 - **白屏只在加载和切换路由之后检测**：页面显示过内容、之后才变空（例如没被错误边界接住的渲染错误卸载了整个
   应用），不会再检测；这种情况下的错误本身由 ErrorPlugin 或 `reactErrorHandler` 上报。
 - **cause 链作为文本接在堆栈后面**：指纹只由最外层错误决定，同一个包装错误、不同的根因会聚到同一个 Issue 里
-  （Sentry 按整条异常链分组，能把它们分开）。
+  （Sentry 按整条异常链分组，能把它们分开）。单个事件超过 32 KB 时，传输层把超长字符串截到 4,000 字符、
+  保留开头，接在尾部的 cause 链会先被截掉。
+- **hash 路由只剩路径**：脱敏规则去掉 URL 的查询参数和片段（片段里也可能带令牌，例如 OAuth 隐式授权回调的
+  `#access_token=…`），`page.route`、导航面包屑和白屏消息里的 hash 因此都会被去掉，服务端按路由统计性能时
+  也只看路径。用 hash 路由（`/#/cart`）的应用，按路由的比较和白屏 Issue 都会并到同一个路径上；检测本身不受
+  影响，路由变化和白屏判断都在脱敏之前进行。
 - **控制台被包装之后**，开发者工具里 warn、error 的来源位置可能显示为 SDK 的包装函数；包装 `console` 的 SDK
   都有这个问题，打包工具把 SDK 列入忽略列表（ignore list）时会跳过它。不需要时设 `consoleBreadcrumbs: false`。
 - **单页应用的指标按整次页面加载计算**：web-vitals 以真正的页面加载为单位，切换路由不会重新计算 LCP；
-  INP、CLS 取整次访问里最差的那次，只是归到它发生时所在的路由（见 10.7）。
+  INP、CLS 也按整次访问计算（INP 取接近最慢的那次交互，CLS 取位移最大的一段窗口），只是归到它发生时
+  所在的路由（见 10.7）。
 - **`web-vitals` 的监听无法注销**：整页只注册一次，页面结束前一直存在。
 - **真实浏览器测试只覆盖 Chromium**：Firefox 与 Safari 的堆栈格式由单元测试覆盖，没有在真实浏览器里跑过。
 - **时间来自设备时钟**：服务端按 `sentAt` 校正，相差不到 1 分钟的偏差不校正。

@@ -139,7 +139,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     const message = error instanceof Error ? error.message : 'Unknown request error';
     return reply.code(status).send({
       error: status === 500 ? 'INTERNAL_SERVER_ERROR' : 'REQUEST_FAILED',
-      // 4xx 是客户端的问题，保留原因方便调用方修正；5xx 只给一句模糊描述。
+      // 4xx 是客户端的问题，保留原因方便调用方修正；500 只给一句模糊描述。
       message: status === 500 ? 'The request could not be completed.' : message,
     });
   });

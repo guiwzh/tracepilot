@@ -72,7 +72,7 @@ test('capture the investigation walkthrough', async ({ page }) => {
 });
 
 test('capture the performance view', async ({ page }) => {
-  // 6. Web Vitals：分位数、按 Release/路由/浏览器的对比与趋势。
+  // 6. Web Vitals 页的首屏：各指标的分位数与评级、分位数对比图；按维度的对比与趋势在下方。
   await page.goto('/projects/demo-project/performance');
   await expect(page.getByRole('heading', { name: 'Performance' })).toBeVisible();
   await expect(page.locator('.vital-card').first()).toBeVisible();
@@ -82,7 +82,7 @@ test('capture the performance view', async ({ page }) => {
 });
 
 test('capture the incident playground', async ({ page }) => {
-  // 7. 演练场：可控地制造运行时错误、Promise、资源、请求、路由、React 渲染错误等 11 种信号。
+  // 7. 演练场：可控地制造运行时错误、Promise、资源、请求、业务码失败、路由、React 渲染错误、白屏等信号。
   await page.goto('http://127.0.0.1:4174/');
   await expect(page.locator('body')).toBeVisible();
   await page.waitForTimeout(500);

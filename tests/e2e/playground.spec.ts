@@ -3,8 +3,8 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 /**
  * Playground 的每个场景都在真实 Chrome 里点一遍，再核对服务端最终收到了什么。
  *
- * SDK 插件的采集行为（window.error、unhandledrejection、资源、fetch / XHR、路由、React 错误边界）
- * 只有在真实浏览器里才看得清。演练场曾经只能手点；这组测试把它变成了这些插件的回归测试。
+ * SDK 插件的采集行为（window.error、unhandledrejection、资源、fetch / XHR 与业务码、路由、React 错误边界、
+ * 白屏、页面退出发送）只有在真实浏览器里才看得清。演练场曾经只能手点；这组测试把它变成了这些插件的回归测试。
  *
  * 每个用例写入一个新建的项目（通过地址参数告诉演练场），不影响其他用例断言的种子数据计数。
  */

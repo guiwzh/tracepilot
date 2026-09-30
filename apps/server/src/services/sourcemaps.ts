@@ -34,6 +34,8 @@ interface StackFrame {
 /** 解析一行堆栈；不是栈帧的行（例如第一行的错误消息）返回 null。 */
 export function parseStackFrame(line: string): StackFrame | null {
   // 匹配 V8（Chrome / Node）格式：「at fn (url:line:column)」和没有函数名的「at url:line:column」。
+  // 正则没有锚定行首，Firefox / Safari 的「fn@url:line:column」也能取到文件和行列，只是取不到函数名，
+  // 还原后用 map 里记录的名字（没有时写 <anonymous>）。
   // 分组依次是：1 函数名（可选）、2 文件 URL、3 行号、4 列号。
   const match = line.match(
     /(?:at\s+([^\s(]+)\s+\()?((?:https?:\/\/|file:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?/,

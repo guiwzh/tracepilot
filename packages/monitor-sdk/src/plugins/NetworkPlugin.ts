@@ -25,7 +25,7 @@ interface RequestRecord {
   url: string;
   status: number;
   duration: number;
-  /** 按失败规则判定的结果；false 的请求会成为事件。 */
+  /** 按失败规则判定的结果；false 且没有被取消的请求会成为事件。被取消的也是 false，另带 aborted。 */
   success: boolean;
   aborted?: boolean;
   error?: string;

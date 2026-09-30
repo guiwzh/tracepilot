@@ -6,7 +6,7 @@ import type { MonitorPlugin, PluginContext, WhiteScreenOptions } from '../types'
  * 白屏检测：页面加载完成、或单页应用切换路由之后，页面在一段时间里始终是空的。
  *
  * 白屏往往没有任何 JS 报错（接口返回了空数据、样式把内容盖住、渲染条件永远不满足），只靠错误监控看不到。
- * 做法与腾讯 Aegis 等国内 SDK 的采样点方案相同：在视口的水平、垂直两条中线上各取 9 个点，用
+ * 做法与腾讯 Aegis 等国内 SDK 的采样点方案类似：在视口的水平、垂直两条中线上各取 9 个点，用
  * elementFromPoint 看每个点最上层的元素。落在 html、body、#root 这类容器上、或者落在骨架屏里，
  * 这个点就是空的；所有点都空才算白屏。
  *

@@ -43,7 +43,10 @@ export interface InvestigationLimits {
   maxSteps: number;
   /** 一轮里最多执行几个工具调用，多出的直接告知模型被跳过。 */
   maxToolCallsPerStep: number;
-  /** 报告被校验驳回后最多允许重交几次。 */
+  /**
+   * 一次调查最多提交几次报告，含第一次。最后一次仍有未核实的引用时，报告形状合法就接受并标出这些引用，
+   * 形状不合法则以 REPORT_INVALID 失败。
+   */
   maxReportAttempts: number;
   /** 累计输入 token 上限；每轮都会重发整段对话，所以这个数增长得比直觉快。 */
   maxInputTokens: number;
@@ -191,7 +194,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
       finalizing = true;
       messages.push({ role: 'user', content: FINALIZE_INSTRUCTION });
     }
-    // 总轮数的硬上限：收集证据的轮数 + 重交报告的机会。
+    // 总轮数的硬上限：收集证据的轮数 + 提交报告的次数。
     if (step > limits.maxSteps + limits.maxReportAttempts) {
       throw new InvestigationError(
         'STEP_LIMIT',

@@ -28,7 +28,8 @@ const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 // 跨周期退避与 Retry-After、按标签页持久化、React 错误回调适配器，产物 +1.8 KB、接入 +2.2 KB gzip，
 // 明细见 docs/reports/performance.md。
 // 2026-09-30 再次设定：web-vitals 换成归因版本（LCP、CLS、INP 的元素与分段耗时），它被 external 化，
-// 接入成本里 web-vitals 从 2.9 KB 变为 5.3 KB gzip；同期请求失败判定与业务码检查使产物 +0.6 KB。
+// 接入成本里 web-vitals 从 2.9 KB 变为 5.3 KB gzip；同期性能单独采样、请求失败判定与业务码、归因精简、
+// 指标的页面归属使产物 +0.7 KB（已扣除删掉 localStorage 保存事件省下的部分）。
 // 2026-09-30 当天再次设定：新增白屏检测（约 0.8 KB）、控制台面包屑（约 0.4 KB）与 cause 链，
 // 产物 +1.4 KB、接入 +1.4 KB gzip。
 const BUDGETS = {

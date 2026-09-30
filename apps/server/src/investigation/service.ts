@@ -12,8 +12,9 @@ import type { InvestigationStore } from './store';
  * 运行与 HTTP 连接解耦——关掉页面不等于取消，调查继续在服务端完成，重新打开页面时
  * 通过事件流回放接上。只有显式的取消请求才会中止它。
  *
- * 「在后台执行」：start() 启动 execute() 后不 await 它就直接返回，HTTP 请求立刻得到 202；
- * 调查在同一个 Node 进程里继续异步推进（等模型响应时不占用 CPU，不影响处理其他请求）。
+ * 「在后台执行」：start() 启动 execute() 后不 await 它就直接返回，HTTP 请求立刻得到响应（新建时 201，
+ * 已有进行中的调查时 200）；调查在同一个 Node 进程里继续异步推进（等模型响应时不占用 CPU，
+ * 不影响处理其他请求）。
  *
  * 取消用的是 AbortController，和前端取消 fetch 是同一个 API：controller.abort(reason) 之后，
  * 所有拿着 controller.signal 的地方（模型请求、Agent 循环）都会收到取消。

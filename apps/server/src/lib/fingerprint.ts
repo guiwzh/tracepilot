@@ -52,8 +52,9 @@ export function normalizeDisplayTitle(input: string): string {
 }
 
 /**
- * 取堆栈里第一个带文件位置的帧。它最接近出错点，比完整堆栈更适合参与指纹：
+ * 取堆栈里第一行带 URL、路径或 .js 文件名的文本，通常就是栈顶帧。它最接近出错点，比完整堆栈更适合参与指纹：
  * 完整堆栈会随调用路径（从哪个页面、哪个按钮进来）变化，同一个 bug 会被拆开。
+ * 注意 V8 堆栈的第一行是错误消息：消息里带 `/`（例如请求地址）时，取到的是消息行而不是栈帧。
  */
 export function topStackFrame(stack?: string): string {
   if (!stack) return 'no-stack';
