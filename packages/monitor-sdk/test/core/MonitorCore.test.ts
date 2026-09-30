@@ -221,18 +221,56 @@ describe('MonitorCore', () => {
     skipped.destroy();
     expect(plugin.teardown).not.toHaveBeenCalled();
 
-    // 同一标签页会话里，刷新后的新实例沿用之前的决定，而不是重新掷骰子。
+    // 同一标签页会话里，刷新后的新实例沿用之前抽到的签，而不是重新抽。
     random.mockReturnValue(0.1);
     const reloaded = core({ sampleRate: 0.5 });
     reloaded.start();
     expect(reloaded.captureMessage('still dropped')).toBeNull();
     reloaded.destroy();
 
-    // 采样率变化后重新决定。
-    const rateChanged = core({ sampleRate: 0.4 });
-    rateChanged.start();
-    expect(rateChanged.captureMessage('now sampled')).toBeTruthy();
-    rateChanged.destroy();
+    // 调整采样率不重新抽签：调高只会多采一些会话，原来采中的会话不会因此掉出去。
+    const raised = core({ sampleRate: 0.95 });
+    raised.start();
+    expect(raised.captureMessage('now sampled')).toBeTruthy();
+    raised.destroy();
+  });
+
+  it('samples performance on its own rate and never drops errors with it', () => {
+    // 抽签值 0.6 落在性能采样的一半之外：这个会话不上报性能样本，错误照常上报。
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.6);
+    const skipped = capturing({ performanceSampleRate: 0.5 });
+    skipped.monitor.start();
+    expect(skipped.monitor.captureEvent('performance', { metric: 'LCP', value: 1_200 })).toBeNull();
+    expect(skipped.monitor.captureException(new Error('still reported'))).toBeTruthy();
+    expect(skipped.events.map((event) => event.eventType)).toEqual(['error']);
+    skipped.monitor.destroy();
+
+    // 另一个标签页会话抽到 0.3：两类都上报，事件带上各自生效的采样率。
+    sessionStorage.clear();
+    random.mockReturnValue(0.3);
+    const sampled = capturing({ sampleRate: 0.8, performanceSampleRate: 0.5 });
+    sampled.monitor.start();
+    sampled.monitor.captureEvent('performance', { metric: 'LCP', value: 1_200 });
+    sampled.monitor.captureException(new Error('reported'));
+    expect(sampled.events.map((event) => [event.eventType, event.sampleRate])).toEqual([
+      ['performance', 0.4],
+      ['error', 0.8],
+    ]);
+    sampled.monitor.destroy();
+  });
+
+  it('touches no storage and reports a full sample rate by default', () => {
+    const getItem = vi.spyOn(sessionStorage, 'getItem');
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.captureException(new Error('boom'));
+    expect(events[0]!.sampleRate).toBe(1);
+    expect(getItem).not.toHaveBeenCalled();
+    monitor.destroy();
+
+    // 对照：有采样率小于 1 时才读取 sessionStorage 里的抽签值。
+    core({ performanceSampleRate: 0.5 }).destroy();
+    expect(getItem).toHaveBeenCalledWith('tracepilot:sampled:test-project');
   });
 
   it('deduplicates Firefox and Safari stacks by their first frame', () => {

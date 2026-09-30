@@ -104,6 +104,8 @@ function eventContext(event: MonitorEvent) {
     payload: event.payload,
     environment: event.environment,
     release: event.release,
+    // 生效的采样率；旧版本 SDK 不上报，按 1（全量）处理。
+    sampleRate: event.sampleRate ?? 1,
   };
 }
 

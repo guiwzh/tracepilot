@@ -17,8 +17,17 @@ export interface MonitorOptions {
   /** 当前构建的版本号，必须与上传 Source Map 时填写的版本一致，服务端才能还原堆栈。 */
   release: string;
   environment: 'development' | 'test' | 'production';
-  /** 0 到 1；按会话采样的比例，1 表示全部采集。同一标签页会话内的决定保持一致。 */
+  /**
+   * 0 到 1；按会话采样的比例，1 表示全部采集。同一标签页会话内的决定保持一致。
+   * 它决定整个会话采不采，错误也包括在内。错误是排障的依据，只发生一次的也要看到，
+   * 一般保持 1；想减少数据量时调低 performanceSampleRate。
+   */
   sampleRate?: number;
+  /**
+   * 0 到 1；被采样的会话里，上报性能样本（Web Vitals）的会话比例，默认 1。
+   * 只作用于性能样本：它们量大、按分位数统计，抽样不影响结论；错误、失败请求、资源失败不受影响。
+   */
+  performanceSampleRate?: number;
   /** 队列达到该数量时立即发送。 */
   batchSize?: number;
   /** 队列未满时的定时发送间隔，单位毫秒；连续发送失败时，自动发送的间隔在此基础上指数退避。 */
@@ -50,7 +59,13 @@ export type ResolvedMonitorOptions = MonitorOptions &
   Required<
     Pick<
       MonitorOptions,
-      'sampleRate' | 'batchSize' | 'flushInterval' | 'maxRetries' | 'dedupeWindow' | 'maxQueueSize'
+      | 'sampleRate'
+      | 'performanceSampleRate'
+      | 'batchSize'
+      | 'flushInterval'
+      | 'maxRetries'
+      | 'dedupeWindow'
+      | 'maxQueueSize'
     >
   >;
 

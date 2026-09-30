@@ -140,3 +140,29 @@ describe('failed request grouping', () => {
     ]);
   });
 });
+
+describe('sample rate', () => {
+  it('keeps the rate an event was sampled at, treating older SDKs as full samples', () => {
+    ingestEnvelope(
+      database,
+      {
+        dsnKey: 'demo-dsn-key',
+        sentAt: RECEIVED_AT,
+        events: [
+          { ...errorAt('sampled', RECEIVED_AT), sampleRate: 0.25 },
+          errorAt('legacy', RECEIVED_AT),
+        ],
+      },
+      RECEIVED_AT,
+    );
+    const rate = (id: string) =>
+      JSON.parse(
+        (
+          database.sqlite.prepare('SELECT context_json FROM events WHERE id = ?').get(id) as {
+            context_json: string;
+          }
+        ).context_json,
+      ).sampleRate;
+    expect([rate('sampled'), rate('legacy')]).toEqual([0.25, 1]);
+  });
+});

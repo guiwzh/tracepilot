@@ -23,7 +23,7 @@ import {
   errorPayload,
   getDeviceContext,
   getPageContext,
-  sessionSampled,
+  sessionDraw,
 } from './helpers';
 import { dedupeSignature, isIgnoredError } from './noise';
 import { resolveOptions } from './options';
@@ -44,6 +44,10 @@ export class MonitorCore implements MonitorClient {
   private installed = false;
   // 本会话是否被采样。未被采样时插件根本不安装，宿主页面不承担任何包装和监听的开销。
   private readonly sampled: boolean;
+  // 本会话是否上报性能样本；只在被采样的会话里才可能为 true。
+  private readonly performanceSampled: boolean;
+  // 事件实际生效的采样率，随事件上报，服务端据此知道看到的是全量还是抽样。
+  private readonly performanceRate: number;
   private user?: MonitorUser;
   // protect() 的重入标志：只负责“同一时刻不嵌套执行插件生命周期代码”。
   private protecting = false;
@@ -65,7 +69,12 @@ export class MonitorCore implements MonitorClient {
   constructor(options: MonitorOptions) {
     this.options = resolveOptions(options);
     this.user = options.user;
-    this.sampled = sessionSampled(options.projectId, this.options.sampleRate);
+    const { sampleRate, performanceSampleRate } = this.options;
+    this.performanceRate = Math.round(sampleRate * performanceSampleRate * 1e6) / 1e6;
+    // 两个采样率都是 1 时不必抽签，也就不碰 sessionStorage。
+    const draw = sampleRate >= 1 && performanceSampleRate >= 1 ? 0 : sessionDraw(options.projectId);
+    this.sampled = draw < sampleRate;
+    this.performanceSampled = draw < this.performanceRate;
     this.transport = new Transport({
       endpoint: options.dsn,
       dsnKey: options.dsnKey ?? options.projectId,
@@ -139,6 +148,8 @@ export class MonitorCore implements MonitorClient {
 
   captureEvent(eventType: MonitorEvent['eventType'], payload: CapturePayload): string | null {
     if (!this.started || this.destroyed || !this.sampled || this.suppressCapture) return null;
+    // 性能样本另有自己的采样率：它们量大、按分位数统计，抽样不影响结论；会形成 Issue 的信号不受影响。
+    if (eventType === 'performance' && !this.performanceSampled) return null;
     // 采集不能自我触发：beforeSend 若在回调里再次调用 captureException，
     // 没有这道闸门就会无限递归下去。
     if (this.capturing) return null;
@@ -152,6 +163,7 @@ export class MonitorCore implements MonitorClient {
         eventId: createId(),
         eventType,
         timestamp: Date.now(),
+        sampleRate: eventType === 'performance' ? this.performanceRate : this.options.sampleRate,
         projectId: this.options.projectId,
         release: this.options.release,
         environment: this.options.environment,

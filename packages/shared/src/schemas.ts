@@ -22,6 +22,11 @@ export const monitorEventSchema = z.object({
   eventId: z.string().min(1).max(100),
   eventType: eventTypeSchema,
   timestamp: z.number().positive(),
+  /**
+   * 这个事件实际生效的采样率（0～1]，性能样本是会话采样率与性能采样率的乘积。
+   * 旧版本 SDK 不带这个字段，按 1 处理。
+   */
+  sampleRate: z.number().gt(0).max(1).optional(),
   projectId: z.string().min(1).max(100),
   release: z.string().min(1).max(120),
   environment: environmentSchema,

@@ -43,30 +43,30 @@ export function errorPayload(error: unknown): Record<string, unknown> {
 }
 
 /**
- * 按会话采样：同一标签页会话内要么全采，要么全不采。
- * 按事件采样会让一条错误被采到、而它之前的请求和性能样本没被采到，证据链因此断裂。
- * 决定写进 sessionStorage，刷新页面后保持一致；采样率变化时重新决定。
+ * 本标签页会话的抽签值：一个 [0, 1) 的随机数，第一次用到时抽出，写进 sessionStorage，刷新页面后沿用。
+ * 各项采样决定都由它和采样率比较得出（抽签值小于采样率即被采中）：
+ * - 按会话而不是按事件抽签：同一会话要么全采、要么全不采，采到的错误不会缺了它之前的请求和操作；
+ * - 存抽签值而不是「采或不采」：调整采样率不必重新抽签，调高只会多采一些会话，原来采到的仍然采到；
+ * - 几个采样率共用一个抽签值，上报性能样本的会话一定是被采样会话的子集。
+ * sessionStorage 不可用时退化为按页面加载抽签。
  */
-export function sessionSampled(projectId: string, rate: number): boolean {
-  if (rate >= 1) return true;
-  if (rate <= 0) return false;
+export function sessionDraw(projectId: string): number {
   const key = `tracepilot:sampled:${projectId}`;
   try {
-    const stored = typeof sessionStorage === 'undefined' ? null : sessionStorage.getItem(key);
-    const [storedRate, decision] = stored?.split('|') ?? [];
-    if (storedRate !== undefined && Number(storedRate) === rate) return decision === '1';
+    const raw = typeof sessionStorage === 'undefined' ? null : sessionStorage.getItem(key);
+    // 旧版本在这里存的是「采样率|0 或 1」，转成数字是 NaN，会重新抽签。
+    const stored = raw ? Number(raw) : Number.NaN;
+    if (stored >= 0 && stored < 1) return stored;
   } catch {
-    // 存储不可用时退化为按页面加载采样。
+    // 存储不可用时退化为按页面加载抽签。
   }
-  const decision = Math.random() < rate;
+  const draw = Math.random();
   try {
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem(key, `${rate}|${decision ? 1 : 0}`);
-    }
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(key, String(draw));
   } catch {
     // 同上。
   }
-  return decision;
+  return draw;
 }
 
 /**

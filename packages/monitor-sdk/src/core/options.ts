@@ -26,15 +26,18 @@ export function clampOption(name: keyof typeof LIMITS, value: number | undefined
   return Math.floor(Math.max(minimum, Math.min(maximum, value)));
 }
 
+/** 采样率夹在 0–1 之间（不取整）；缺省或非法时为 1，即全部采集。 */
+function clampRate(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 1;
+  return Math.max(0, Math.min(1, value));
+}
+
 /** 所有外部数字配置都在边界处夹紧，避免 0 批量、无限重试等配置让 SDK 失控。 */
 export function resolveOptions(options: MonitorOptions): ResolvedMonitorOptions {
-  const sampleRate = options.sampleRate;
   return {
     ...options,
-    sampleRate:
-      sampleRate === undefined || !Number.isFinite(sampleRate)
-        ? 1
-        : Math.max(0, Math.min(1, sampleRate)),
+    sampleRate: clampRate(options.sampleRate),
+    performanceSampleRate: clampRate(options.performanceSampleRate),
     batchSize: clampOption('batchSize', options.batchSize),
     flushInterval: clampOption('flushInterval', options.flushInterval),
     maxRetries: clampOption('maxRetries', options.maxRetries),

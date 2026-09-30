@@ -11,6 +11,7 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
       "eventId": "019...",
       "eventType": "error",
       "timestamp": 1770000000000,
+      "sampleRate": 1,
       "projectId": "demo-project",
       "release": "2.4.1",
       "environment": "production",
@@ -24,6 +25,10 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 ```
 
 权威校验规则在 `packages/shared/src/schemas.ts`，SDK 与服务端共用同一份 Zod 定义。
+
+`sampleRate` 是这个事件实际生效的采样率（大于 0、不超过 1）：性能样本是会话采样率 `sampleRate` 与性能采样率
+`performanceSampleRate` 的乘积，其余事件就是会话采样率。服务端把它存在事件上下文里，旧版本 SDK 不带这个字段，
+按 1（全量）处理。
 
 ## 哪些信号成为事件
 

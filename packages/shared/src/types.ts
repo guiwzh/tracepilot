@@ -53,6 +53,8 @@ export interface StoredEvent {
     payload: Record<string, unknown>;
     environment: string;
     release: string;
+    /** 事件生效的采样率；这一字段出现之前入库的事件没有它，视为 1。 */
+    sampleRate?: number;
   };
   breadcrumbs: Breadcrumb[];
   createdAt: number;
