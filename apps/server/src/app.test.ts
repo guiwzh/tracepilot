@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
+import { SourceMapGenerator } from 'source-map';
 import { buildApp } from './app';
 import type { ServerConfig } from './config';
+import { legacyFingerprint } from './lib/fingerprint';
 import { clearSourceMapCache } from './services/sourcemaps';
 
 // Fastify app.inject 测试真实路由和 SQLite 行为，同时避免监听网络端口。
@@ -51,6 +53,34 @@ afterEach(async () => {
   await app.close();
   await rm(directory, { recursive: true, force: true });
 });
+
+function uploadMapTo(releaseId: string, minifiedFile: string, content: string) {
+  const boundary = '----tracepilot-test';
+  const payload =
+    `--${boundary}\r\nContent-Disposition: form-data; name="minifiedFile"\r\n\r\n${minifiedFile}\r\n` +
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${minifiedFile}.map"\r\n` +
+    `Content-Type: application/json\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+  return app.inject({
+    method: 'POST',
+    url: `/api/v1/releases/${releaseId}/source-maps`,
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  });
+}
+
+function send(...events: MonitorEvent[]) {
+  return app.inject({
+    method: 'POST',
+    url: '/api/v1/envelopes',
+    payload: { dsnKey: 'demo-dsn-key', sentAt: Date.now(), events },
+  });
+}
+
+async function listIssues(): Promise<Array<{ id: string; title: string; eventCount: number }>> {
+  return (
+    await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/issues?pageSize=100' })
+  ).json().items;
+}
 
 describe('telemetry ingestion', () => {
   it('rejects malformed input without crashing', async () => {
@@ -818,5 +848,206 @@ describe('source map failures', () => {
     sqlite.close();
     expect((await ingest('retried', stack)).json()).toMatchObject({ duplicates: 1 });
     expect(await originalStackOf('retried')).toBeNull();
+  });
+});
+
+describe('issue grouping', () => {
+  /** 一份只映射一个位置的 map：压缩文件第 1 行第 column 列 → src/cart.ts 第 line 行。 */
+  function cartMap(file: string, column: number, line: number, source: string): string {
+    const generator = new SourceMapGenerator({ file });
+    generator.setSourceContent('src/cart.ts', source);
+    generator.addMapping({
+      generated: { line: 1, column: column - 1 },
+      original: { line, column: 2 },
+      source: 'src/cart.ts',
+      name: 'calculateTotal',
+    });
+    return generator.toString();
+  }
+
+  function withStack(id: string, stack: string, release = '2.4.1'): MonitorEvent {
+    const base = event(id, '40000001');
+    return { ...base, release, payload: { ...base.payload, stack } };
+  }
+
+  it('keeps one issue across releases when the minifier renames functions', async () => {
+    // 2.4.2 在出错那行前面加了两行代码；重新构建后压缩名从 t 变成 n，列号也变了。
+    const before =
+      'export function calculateTotal(cart) {\n  const subtotal = cart.summary.total;\n}\n';
+    const after = `// totals\nimport { round } from './round';\n${before}`;
+    const next = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/projects/demo-project/releases',
+        payload: { version: '2.4.2' },
+      })
+    ).json().id as string;
+    expect(
+      (
+        await uploadMapTo(
+          'demo-release-2-4-1',
+          'app.11111111.js',
+          cartMap('app.11111111.js', 420, 2, before),
+        )
+      ).statusCode,
+    ).toBe(201);
+    expect(
+      (await uploadMapTo(next, 'app.22222222.js', cartMap('app.22222222.js', 388, 4, after)))
+        .statusCode,
+    ).toBe(201);
+
+    const first = withStack(
+      'r1',
+      'TypeError: x\n    at t (https://shop.test/assets/app.11111111.js:1:420)',
+    );
+    const second = withStack(
+      'r2',
+      'TypeError: x\n    at n (https://shop.test/assets/app.22222222.js:1:388)',
+      '2.4.2',
+    );
+    // 按压缩后的栈顶帧（v1）这是两个不同的指纹，曾经每发一次版就多一个 Issue。
+    expect(legacyFingerprint(first)).not.toBe(legacyFingerprint(second));
+    expect((await send(first)).statusCode).toBe(202);
+    expect((await send(second)).statusCode).toBe(202);
+
+    const issues = await listIssues();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.eventCount).toBe(2);
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issues[0]!.id}/events`,
+    });
+    expect(
+      events.json().items.map((item: { originalStack: string }) => item.originalStack),
+    ).toEqual([
+      expect.stringContaining('src/cart.ts:4:3'),
+      expect.stringContaining('src/cart.ts:2:3'),
+    ]);
+  });
+
+  it('keeps feeding an issue created before the grouping upgrade', async () => {
+    // 升级之前建的 Issue 只登记了 v1 指纹；新事件按 v2 找不到它时，要按 v1 找回来。
+    const old = event('before-upgrade', '50000001');
+    const sqlite = new Database(join(directory, 'test.db'));
+    sqlite
+      .prepare(
+        `INSERT INTO issues (id, project_id, fingerprint, title, status, level, first_seen_at, last_seen_at)
+         VALUES ('legacy-issue', 'demo-project', ?, 'Old title', 'unresolved', 'error', 1, 1)`,
+      )
+      .run(legacyFingerprint(old));
+    sqlite
+      .prepare(
+        `INSERT INTO issue_fingerprints (project_id, fingerprint, issue_id, algorithm, created_at)
+         VALUES ('demo-project', ?, 'legacy-issue', 'v1', 1)`,
+      )
+      .run(legacyFingerprint(old));
+    sqlite.close();
+
+    expect((await send(event('after-upgrade', '50000002'))).statusCode).toBe(202);
+    const issues = await listIssues();
+    expect(issues.map((issue) => [issue.id, issue.eventCount])).toEqual([['legacy-issue', 1]]);
+    const check = new Database(join(directory, 'test.db'));
+    expect(
+      check
+        .prepare(
+          "SELECT algorithm FROM issue_fingerprints WHERE issue_id = 'legacy-issue' ORDER BY algorithm",
+        )
+        .all(),
+    ).toEqual([{ algorithm: 'v1' }, { algorithm: 'v2' }]);
+    check.close();
+  });
+
+  it('groups by a custom fingerprint from the SDK', async () => {
+    const custom = (id: string, message: string, fingerprint: string[]): MonitorEvent => {
+      const base = event(id, '60000001');
+      return { ...base, fingerprint, payload: { ...base.payload, message } };
+    };
+    await send(
+      custom('t1', 'Payment timed out', ['checkout-timeout']),
+      custom('t2', 'Address lookup timed out', ['checkout-timeout']),
+      custom('a', 'Cannot read cart', ['{{ default }}', 'tenant-a']),
+      custom('b', 'Cannot read cart', ['{{ default }}', 'tenant-b']),
+    );
+    const counts = (await listIssues()).map((issue) => issue.eventCount).sort();
+    expect(counts).toEqual([1, 1, 2]);
+  });
+
+  it('merges issues, moving their events, users and fingerprints', async () => {
+    const at = (id: string, user: string, frame: string): MonitorEvent => {
+      const base = withStack(id, `TypeError: x\n    at ${frame}`);
+      return { ...base, user: { id: user } };
+    };
+    await send(
+      at('a1', 'u1', 'submit (https://shop.test/assets/app.js:1:10)'),
+      at('b1', 'u1', 'pay (https://shop.test/assets/pay.js:1:20)'),
+      at('b2', 'u2', 'pay (https://shop.test/assets/pay.js:1:20)'),
+    );
+    const issues = await listIssues();
+    const target = issues.find((issue) => issue.eventCount === 1)!.id;
+    const source = issues.find((issue) => issue.eventCount === 2)!.id;
+
+    const merge = (into: string, issueIds: string[]) =>
+      app.inject({ method: 'POST', url: `/api/v1/issues/${into}/merge`, payload: { issueIds } });
+    expect((await merge(target, [target])).statusCode).toBe(400);
+    expect((await merge(target, ['missing'])).statusCode).toBe(404);
+
+    const merged = await merge(target, [source]);
+    expect(merged.statusCode).toBe(200);
+    // u1 在两个 Issue 里都出现过，只算一个用户。
+    expect(merged.json()).toMatchObject({ id: target, merged: 1, eventCount: 3, userCount: 2 });
+    expect((await app.inject({ method: 'GET', url: `/api/v1/issues/${source}` })).statusCode).toBe(
+      404,
+    );
+
+    // 被合并方的指纹也跟着迁移：同类事件以后直接归入目标。
+    await send(at('b3', 'u3', 'pay (https://shop.test/assets/pay.js:1:20)'));
+    expect((await listIssues()).map((issue) => [issue.id, issue.eventCount])).toEqual([
+      [target, 4],
+    ]);
+  });
+
+  it('refuses merges across projects or under a running investigation', async () => {
+    await send(withStack('m1', 'TypeError: x\n    at a (https://shop.test/assets/a.js:1:1)'));
+    const [first] = await listIssues();
+    const project = (
+      await app.inject({ method: 'POST', url: '/api/v1/projects', payload: { name: 'Other app' } })
+    ).json() as { id: string; dsnKey: string };
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: project.dsnKey,
+        sentAt: Date.now(),
+        events: [{ ...withStack('m2', 'TypeError: y'), projectId: project.id }],
+      },
+    });
+    const other = (
+      await app.inject({ method: 'GET', url: `/api/v1/projects/${project.id}/issues` })
+    ).json().items[0].id as string;
+    const across = await app.inject({
+      method: 'POST',
+      url: `/api/v1/issues/${first!.id}/merge`,
+      payload: { issueIds: [other] },
+    });
+    expect(across.json()).toMatchObject({ error: 'DIFFERENT_PROJECT' });
+    expect(across.statusCode).toBe(409);
+
+    await send(withStack('m3', 'TypeError: x\n    at b (https://shop.test/assets/b.js:1:1)'));
+    const second = (await listIssues()).find((issue) => issue.id !== first!.id)!.id;
+    const sqlite = new Database(join(directory, 'test.db'));
+    sqlite
+      .prepare(
+        `INSERT INTO investigation_runs (id, issue_id, status, engine, model, started_at)
+         VALUES ('run-1', ?, 'running', 'local', 'test', 1)`,
+      )
+      .run(second);
+    sqlite.close();
+    const busy = await app.inject({
+      method: 'POST',
+      url: `/api/v1/issues/${first!.id}/merge`,
+      payload: { issueIds: [second] },
+    });
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json()).toMatchObject({ error: 'INVESTIGATION_RUNNING' });
   });
 });

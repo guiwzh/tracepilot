@@ -143,6 +143,10 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 - **接入路径的写入放大**　`event_count` 原本每条事件都 `COUNT(*)` 重新派生，单 Issue 1 万条事件时
   单批接入 P50 从 1.79 ms 劣化到 12.88 ms。幂等已由 `eventId` 去重保证，改为增量累加后恒定在约 1 ms。
   「该用户是否已出现」必须在事件落库**之前**判定，第一版写反了，被既有测试抓出来。
+- **先还原、再聚合**　压缩后的函数名和列号每次构建都可能变，按它们聚合的话，同一个 bug 发一次版就成了新 Issue，
+  「已解决又出现」的回归检测也跟着失效。改为在聚合之前还原，按「源文件 + 函数名 + 出错那行代码」聚合，不看行列号，
+  并跳过依赖包的帧。旧数据靠指纹映射表衔接：新算法找不到时按旧算法再找一次，找到就把新指纹登记到原 Issue 上。
+  代价是聚合依赖 map 先到，缺 map 的版本会单独成 Issue，所以 map 要在构建时上传，分开的可以手动合并。
 - **Source Map 的行列坐标**　浏览器列号 1 基、`source-map` 库 0 基，两次转换集中在一处；测试刻意避开
   `:1:0`，否则偏移会被「恰好都是 0」掩盖。Release 是隔离边界，`.map` 只存在服务端私有目录。
 - **按会话采样，性能单独抽样**　按事件采样会让一条错误被采到、而它之前的请求没被采到，证据链断裂。
@@ -194,9 +198,9 @@ pnpm evaluate:agent
 
 | 指标                                     |                       结果 | 复现命令                   |
 | ---------------------------------------- | -------------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             |        29,608 / 9,434 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip |       45,747 / 15,135 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals（归因版）                |            5,272 字节 gzip | `pnpm measure:sdk`         |
+| SDK 发布产物 minified / gzip             |        29,676 / 9,469 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |       45,815 / 15,175 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |            5,280 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95¹ |            60 / 190–400 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95¹       |           30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                       0 个 | `pnpm measure:sdk-runtime` |
@@ -207,7 +211,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 197 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 206 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -260,8 +264,9 @@ flowchart LR
 [monitor-sdk.md](docs/monitor-sdk.md)，服务端的分层、数据模型、接入管线与排障 Agent 的实现见
 [server.md](docs/server.md)，关键决策见
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、
-[ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md) 与
-[ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)。
+[ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md)、
+[ADR 0003](docs/decisions/0003-read-only-investigation-agent.md) 与
+[ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)。
 
 ## 已实现
 
@@ -274,9 +279,10 @@ flowchart LR
   连续失败时指数退避并遵守 `Retry-After`、拒收的 4xx 不堵队、队列上限、退出时按 64 KiB 配额分块 beacon、
   服务端故障时退出发送不丢队列、`beforeSend`、完整 teardown。
 - **Fastify 接入服务**：共享 Zod Schema、DSN 校验、事件幂等、Web Vitals 按 metric id 覆盖、二次脱敏、
-  按 `sentAt` 校正设备时钟、SQLite 事务、动态 ID 归一化与 SHA-256 指纹聚合、已解决 Issue 再次发生时
-  重新打开、按编号迁移升级表结构。
-- **调查工作台**：项目、筛选/分页 Issue、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
+  按 `sentAt` 校正设备时钟、SQLite 事务、先还原再聚合（按源码位置、只看应用自己的帧）、指纹映射表
+  （聚合算法升级不打断正在发生的 Issue）、Issue 合并与自定义指纹、已解决 Issue 再次发生时重新打开、
+  按编号迁移升级表结构。
+- **调查工作台**：项目、筛选/分页 Issue（可勾选合并）、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
   证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release，以及实时调查时间线。
 - **Source Map**：私有上传（落盘前完整校验每条映射）、Release 隔离、压缩堆栈还原（解析结果跨请求缓存）、
   读取内联源码片段、map 缺失或损坏时降级为压缩堆栈，接入照常返回 202。
@@ -377,6 +383,7 @@ pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场
 | `GET`   | `/api/v1/projects/:projectId/issues`      | 分页与筛选 Issue                   |
 | `GET`   | `/api/v1/issues/:issueId`                 | Issue 和最新现场                   |
 | `PATCH` | `/api/v1/issues/:issueId/status`          | 更新处理状态                       |
+| `POST`  | `/api/v1/issues/:issueId/merge`           | 合并 Issue                         |
 | `POST`  | `/api/v1/releases/:releaseId/source-maps` | 私有 Source Map 上传               |
 | `POST`  | `/api/v1/issues/:issueId/investigations`  | 开始调查（进行中则复用）           |
 | `GET`   | `/api/v1/investigations/:runId/events`    | SSE 事件流，支持 Last-Event-ID     |

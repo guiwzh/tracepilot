@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowDown, ChevronLeft, ChevronRight, Route, Rows3, Search } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowDown,
+  ChevronLeft,
+  ChevronRight,
+  GitMerge,
+  Route,
+  Rows3,
+  Search,
+  X,
+} from 'lucide-react';
+import type { Issue } from '@trace-pilot/shared';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Chart, type ChartOption } from '../components/Chart';
 import { PageHeader } from '../components/PageHeader';
@@ -65,6 +75,46 @@ export function IssuesPage() {
     queryFn: () => api.releases(projectId),
   });
   const project = projects.data?.items.find((item) => item.id === projectId);
+
+  // 勾选的 Issue（跨分页保留），以及最近一次合并的结果。
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<ReadonlyMap<string, Issue>>(new Map());
+  const [mergedNote, setMergedNote] = useState('');
+  // 合并进事件最多的那个（一样多时取最早出现的）：它通常是最早被发现、讨论最多的那个。
+  const mergeTarget = useMemo(
+    () =>
+      [...selected.values()].sort(
+        (left, right) => right.eventCount - left.eventCount || left.firstSeenAt - right.firstSeenAt,
+      )[0],
+    [selected],
+  );
+  const merge = useMutation({
+    mutationFn: (target: Issue) =>
+      api.mergeIssues(
+        target.id,
+        [...selected.keys()].filter((id) => id !== target.id),
+      ),
+    onSuccess: async (result) => {
+      setSelected(new Map());
+      setMergedNote(
+        `Merged ${result.merged + 1} issues into “${result.title}” · ${formatNumber(result.eventCount)} events`,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['issues', projectId] }),
+        queryClient.invalidateQueries({ queryKey: ['overview', projectId] }),
+      ]);
+    },
+  });
+
+  function toggleSelected(issue: Issue) {
+    setMergedNote('');
+    setSelected((previous) => {
+      const next = new Map(previous);
+      if (next.has(issue.id)) next.delete(issue.id);
+      else next.set(issue.id, issue);
+      return next;
+    });
+  }
 
   // 浏览器前进/后退或全局搜索进入列表时，同步 URL 中已经提交的筛选值。
   // 在渲染期间与上一次的参数比较并调整输入框状态，而不是在 effect 里 setState 多渲染一轮。
@@ -288,6 +338,42 @@ export function IssuesPage() {
           </button>
         </div>
 
+        {selected.size > 0 ? (
+          <div className="selection-bar" role="region" aria-label="Selected issues">
+            <span>
+              <strong>{selected.size}</strong> selected
+            </span>
+            <span className="selection-hint">
+              {selected.size > 1 && mergeTarget
+                ? `Merges into “${mergeTarget.title}”, the one with the most events`
+                : 'Select another issue to merge them'}
+            </span>
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={selected.size < 2 || !mergeTarget || merge.isPending}
+              onClick={() => mergeTarget && merge.mutate(mergeTarget)}
+            >
+              <GitMerge size={14} /> {selected.size > 1 ? `Merge ${selected.size} issues` : 'Merge'}
+            </button>
+            <button
+              type="button"
+              className="button button-quiet"
+              onClick={() => {
+                merge.reset();
+                setSelected(new Map());
+              }}
+            >
+              <X size={14} /> Clear
+            </button>
+            {merge.error ? <p className="form-error">{merge.error.message}</p> : null}
+          </div>
+        ) : mergedNote ? (
+          <p className="selection-note" aria-live="polite">
+            {mergedNote}
+          </p>
+        ) : null}
+
         {issues.isLoading ? (
           <LoadingState />
         ) : issues.error ? (
@@ -308,15 +394,24 @@ export function IssuesPage() {
               <span>Last seen</span>
             </div>
             {issues.data?.items.map((issue) => (
-              <Link
-                to={`/projects/${projectId}/issues/${issue.id}`}
-                className="issue-row"
+              // 整行可点：标题链接的 ::after 铺满整行；勾选框叠在它上面，点它不会跳转。
+              <div
+                className={`issue-row ${selected.has(issue.id) ? 'is-selected' : ''}`}
                 key={issue.id}
               >
                 <span className="issue-identity">
+                  <input
+                    type="checkbox"
+                    className="issue-select"
+                    aria-label={`Select ${issue.title}`}
+                    checked={selected.has(issue.id)}
+                    onChange={() => toggleSelected(issue)}
+                  />
                   <LevelMark level={issue.level} />
                   <span>
-                    <strong>{issue.title}</strong>
+                    <Link to={`/projects/${projectId}/issues/${issue.id}`} className="issue-link">
+                      <strong>{issue.title}</strong>
+                    </Link>
                     <small>
                       <code>{issue.fingerprint.slice(0, 8)}</code>
                       <i />
@@ -329,7 +424,7 @@ export function IssuesPage() {
                 <span className="numeric-cell">{formatNumber(issue.userCount)}</span>
                 <Sparkline values={issue.trend ?? []} />
                 <span className="last-seen">{relativeTime(issue.lastSeenAt)}</span>
-              </Link>
+              </div>
             ))}
           </div>
         )}

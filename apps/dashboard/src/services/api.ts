@@ -64,6 +64,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  mergeIssues: (targetId: string, issueIds: string[]) =>
+    request<{ id: string; title: string; merged: number; eventCount: number; userCount: number }>(
+      `/api/v1/issues/${targetId}/merge`,
+      { method: 'POST', body: JSON.stringify({ issueIds }) },
+    ),
   performance: (projectId: string) =>
     request<PerformanceOverview>(`/api/v1/projects/${projectId}/performance`),
   releases: (projectId: string) =>

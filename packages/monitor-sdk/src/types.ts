@@ -125,13 +125,19 @@ export interface CapturePayload {
   [key: string]: unknown;
 }
 
-/** captureEvent 的可选项。 */
+/** captureEvent、captureException 的可选项。 */
 export interface CaptureOptions {
   /**
    * 信号发生时所在的页面，缺省时取采集这一刻的页面。信号先发生、稍后才上报时要传入它：
    * 页面隐藏时才提交的 LCP、CLS、INP，单页应用里那时可能已经换了路由。
    */
   page?: MonitorEvent['page'];
+  /**
+   * 自定义聚合键，服务端按它归入 Issue，而不是按默认指纹。'{{ default }}' 代表默认指纹：
+   * ['{{ default }}', tenantId] 在默认结果上再按租户细分；['checkout-timeout'] 把不同位置抛出的同一类错误并成一个。
+   * 最多 10 项，每项 1～200 个字符。
+   */
+  fingerprint?: string[];
 }
 
 /** addBreadcrumb 的入参：id 由 SDK 生成，时间缺省为当前时刻。 */
@@ -194,7 +200,12 @@ export interface MonitorClient {
   use(plugin: MonitorPlugin): MonitorClient;
   start(): void;
   setUser(user?: MonitorUser): void;
-  captureException(error: unknown, context?: CapturePayload): string | null;
+  /** context 是附加到 payload 的字段；options.fingerprint 可以自定义聚合键。 */
+  captureException(
+    error: unknown,
+    context?: CapturePayload,
+    options?: CaptureOptions,
+  ): string | null;
   captureMessage(message: string, level?: 'error' | 'warning' | 'info'): string | null;
   captureEvent(
     eventType: MonitorEvent['eventType'],

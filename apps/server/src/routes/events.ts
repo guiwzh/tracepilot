@@ -3,14 +3,13 @@ import { z } from 'zod';
 import { envelopeSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { IngestError, ingestEnvelope } from '../services/events';
-import { symbolicateEvents } from '../services/sourcemaps';
 
 function invalidJson(): Error {
   return Object.assign(new Error('The telemetry envelope is not valid JSON.'), { statusCode: 400 });
 }
 
 /**
- * 浏览器遥测入口：运行时校验 → 授权/入库 → 可选 Source Map 还原。
+ * 浏览器遥测入口：运行时校验 → 授权 → Source Map 还原 → 聚合与入库（见 services/events.ts）。
  *
  * 授权靠 DSN Key：SDK 初始化时配置的公开接入键，服务端据此确认事件属于哪个项目。
  * 它必然出现在浏览器代码里，所以不是密钥——它能挡住配错项目的上报，挡不住有人故意伪造上报。
@@ -50,12 +49,12 @@ function registerEnvelopeRoute(app: FastifyInstance, database: TraceDatabase): v
       });
     }
     try {
-      const { result, stacks } = ingestEnvelope(database, parsed.data);
-      // 先完成事务入库，再对新写入的事件做源码还原（读 map 文件是异步的）。
-      // 还原失败或找不到 map 都只是少了原始栈：symbolicateEvents 不会抛错，事件已经被接收。
-      const { failed } = await symbolicateEvents(database, stacks);
-      if (failed > 0) request.log.warn({ failed }, 'source map symbolication failed');
-      // 202 表示服务端已经接收并处理该遥测批次，不要求浏览器等待后续调查动作。
+      // 还原在入库之前、事务之外进行（聚合要用还原后的栈帧）。还原失败或找不到 map 都只是少了原始栈，
+      // 事件照常入库：这里绝不能返回 500，否则 SDK 会把已经收下的一批反复重发。
+      const { result, symbolicationFailures } = await ingestEnvelope(database, parsed.data);
+      if (symbolicationFailures > 0) {
+        request.log.warn({ failed: symbolicationFailures }, 'source map symbolication failed');
+      }
       return reply.code(202).send(result);
     } catch (error) {
       // DSN Key 不存在，或事件声明的项目与 Key 不符：凭据问题，返回 403，SDK 不会重试。

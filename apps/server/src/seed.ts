@@ -10,10 +10,11 @@ import { ingestEnvelope } from './services/events';
 import { saveSourceMap } from './services/sourcemaps';
 
 /**
- * 演示数据脚本（pnpm seed）：清空并重建 demo-project 的虚构数据，外加两份 Source Map。
+ * 演示数据脚本（pnpm seed）：清空并重建 demo-project 的虚构数据和两个版本的 Source Map。
  *
- * 通过正式的 ingestEnvelope 写入虚构事件，而不是直接往 issues 表插最终结果，
- * 因此演示数据也会经过指纹、脱敏、聚合和计数的真实生产代码。
+ * 通过正式的 saveSourceMap 和 ingestEnvelope 写入，而不是直接往 issues 表插最终结果，
+ * 因此演示数据也会经过还原、指纹、脱敏、聚合和计数的真实生产代码。
+ * 顺序与推荐的接入方式一致：先上传 map（构建时上传），再有线上流量，聚合才能用上还原后的栈帧。
  */
 
 const browsers = [
@@ -98,7 +99,10 @@ function baseEvent(
   };
 }
 
-export function seedDemoData(database: TraceDatabase): { events: number } {
+export async function seedDemoData(
+  database: TraceDatabase,
+  sourceMapDir: string,
+): Promise<{ events: number; sourceMaps: number }> {
   ensureDemoProject(database);
   // 删除 releases 会级联清掉 source_maps 表行，但磁盘上的 .map 文件不会跟着消失。
   // 先取出待删记录的路径，删完表数据后逐个删除文件，避免反复 seed 在私有目录里堆积孤儿文件。
@@ -258,36 +262,39 @@ export function seedDemoData(database: TraceDatabase): { events: number } {
     }
   }
 
+  const sourceMaps = await seedDemoSourceMaps(database, sourceMapDir);
   for (let start = 0; start < events.length; start += 100) {
     // 公共 Schema 规定单个 envelope 最多 100 条，所以按真实限制切批。
-    ingestEnvelope(database, {
+    await ingestEnvelope(database, {
       dsnKey: 'demo-dsn-key',
       sentAt: now,
       events: events.slice(start, start + 100),
     });
   }
-  return { events: events.length };
+  return { events: events.length, sourceMaps };
 }
 
 /**
- * 只给 2.4.1 上传 Source Map，2.3.9 故意不传：调查时既能看到还原后的源码，
- * 也能遇到「该版本缺少 map」这种真实会发生的证据缺口。
- * 上传走正式的 saveSourceMap，会顺带回填该 Release 里引用了这个文件的已有事件的原始堆栈。
+ * 两个版本都上传 Source Map。聚合在还原之后进行：某个版本缺 map 时，它的事件只能按压缩后的栈帧聚合，
+ * 和有 map 的版本里的同一个 bug 分成两个 Issue（与 Sentry 等产品的行为相同，所以要在构建时上传 map）。
+ * 「缺少 map」这种证据缺口由评测集里的 missing-source-map 用例覆盖。
+ * 演示数据是虚构的，两个版本的压缩文件同名、内容相同，所以用同一份 map。
  */
-export async function seedDemoSourceMaps(
-  database: TraceDatabase,
-  sourceMapDir: string,
-): Promise<number> {
-  for (const fixture of DEMO_SOURCE_MAPS) {
-    await saveSourceMap(
-      database,
-      sourceMapDir,
-      'demo-release-2-4-1',
-      fixture.minifiedFile,
-      Buffer.from(buildSourceMap(fixture)),
-    );
+async function seedDemoSourceMaps(database: TraceDatabase, sourceMapDir: string): Promise<number> {
+  let uploaded = 0;
+  for (const releaseId of ['demo-release-2-3-9', 'demo-release-2-4-1']) {
+    for (const fixture of DEMO_SOURCE_MAPS) {
+      await saveSourceMap(
+        database,
+        sourceMapDir,
+        releaseId,
+        fixture.minifiedFile,
+        Buffer.from(buildSourceMap(fixture)),
+      );
+      uploaded += 1;
+    }
   }
-  return DEMO_SOURCE_MAPS.length;
+  return uploaded;
 }
 
 // 既允许测试 import seedDemoData，也允许 pnpm seed 直接执行；只有后者进入 CLI 分支。
@@ -295,10 +302,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const config = loadConfig();
   const database = createDatabase(config.databasePath);
   try {
-    const result = seedDemoData(database);
-    const maps = await seedDemoSourceMaps(database, config.sourceMapDir);
+    const result = await seedDemoData(database, config.sourceMapDir);
     process.stdout.write(
-      `Seeded ${result.events} fictional browser events and ${maps} source maps for demo-project.\n`,
+      `Seeded ${result.events} fictional browser events and ${result.sourceMaps} source maps for demo-project.\n`,
     );
   } finally {
     database.close();

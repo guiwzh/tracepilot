@@ -16,8 +16,9 @@ import { SourceMapCache } from './sourceMapCache';
  *
  * 流程：
  * 1. 发布时，CI 把 .map 上传到服务端（routes/sourcemaps.ts → saveSourceMap），按 Release 版本隔离保存。
- * 2. 浏览器上报压缩堆栈；服务端按「事件的 Release + 堆栈里的文件名」找到对应的 map，
- *    逐帧换算出源码位置（symbolicateStack），结果存进 events.original_stack。
+ * 2. 浏览器上报压缩堆栈；接入时、聚合之前，服务端按「事件的 Release + 堆栈里的文件名」找到对应的 map，
+ *    逐帧换算出源码位置（resolveStack）。聚合用还原后的栈帧，还原后的堆栈存进 events.original_stack。
+ * 3. map 晚于事件上传时，回填已有事件的 original_stack（symbolicateReleaseEvents），但不重新聚合。
  *
  * .map 往往内联了完整源码（sourcesContent），所以只存在服务端、不部署到 CDN，也不提供下载接口。
  */
@@ -225,6 +226,28 @@ interface OriginalPosition {
   name: string | null;
 }
 
+/**
+ * 每份 map 里已经按行拆开的源码（sourcesContent），按 Consumer 缓存：同一个文件的出错行在接入、
+ * 聚合和读源码时会被反复查询，每次都把整个文件 split 一遍太浪费。Consumer 被缓存淘汰、
+ * 不再被引用之后，这里的条目随之被垃圾回收（WeakMap 不阻止回收）。
+ */
+const sourceLines = new WeakMap<SourceMapConsumer, Map<string, string[] | null>>();
+
+function linesOf(consumer: SourceMapConsumer, rawSource: string): string[] | null {
+  let byFile = sourceLines.get(consumer);
+  if (!byFile) {
+    byFile = new Map();
+    sourceLines.set(consumer, byFile);
+  }
+  let lines = byFile.get(rawSource);
+  if (lines === undefined) {
+    const content = consumer.sourceContentFor(rawSource, true);
+    lines = content ? content.split('\n') : null;
+    byFile.set(rawSource, lines);
+  }
+  return lines;
+}
+
 function originalPosition(consumer: SourceMapConsumer, frame: StackFrame): OriginalPosition | null {
   // 第 0 行的帧（eval 出来的代码等会产生）source-map 会直接抛错。这不是 map 损坏，只是这一帧映射不到；
   // 让它抛出去，缓存会把整份 map 当成损坏，之后所有事件都不再还原。
@@ -244,41 +267,99 @@ function originalPosition(consumer: SourceMapConsumer, frame: StackFrame): Origi
   };
 }
 
+/** 一帧的还原结果：压缩位置，以及能映射时的源码位置。聚合和展示都从这里取。 */
+export interface ResolvedFrame {
+  /** 堆栈里的原始一行（去掉首尾空白）。 */
+  raw: string;
+  /** 压缩文件的地址。 */
+  file: string;
+  functionName?: string;
+  original?: {
+    source: string;
+    line: number;
+    /** 1 基，和浏览器一致。 */
+    column: number;
+    name: string | null;
+    /** 出错那一行源码，去掉首尾空白；map 没有内联源码时为 null。 */
+    contextLine: string | null;
+  };
+}
+
+export interface ResolvedStack {
+  /** 堆栈里每一个栈帧，按出现顺序；不是栈帧的行（错误消息、Caused by:）不在其中。 */
+  frames: ResolvedFrame[];
+  /** 还原后的完整堆栈；一帧都没映射到时为 null，调用方保留压缩堆栈。 */
+  text: string | null;
+}
+
 /**
- * 把整段压缩堆栈逐帧翻译成源码位置。找不到 map 或映射不到的帧原样保留，
- * 所以结果可能一部分是源码位置、一部分仍是压缩位置。
+ * 逐帧把压缩堆栈翻译成源码位置。找不到 map 或映射不到的帧原样保留，
+ * 所以结果可能一部分是源码位置、一部分仍是压缩位置。releaseId 为 null（版本还没登记）时只解析栈帧。
  */
+export async function resolveStack(
+  database: TraceDatabase,
+  releaseId: string | null,
+  stack: string,
+): Promise<ResolvedStack> {
+  const findMap = database.sqlite.prepare(
+    'SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?',
+  );
+  const frames: ResolvedFrame[] = [];
+  const lines: string[] = [];
+  let mapped = 0;
+  for (const line of stack.split('\n')) {
+    const frame = parseStackFrame(line);
+    if (!frame) {
+      lines.push(line);
+      continue;
+    }
+    const row = releaseId
+      ? (findMap.get(releaseId, normalizeMinifiedFile(frame.file)) as
+          { map_path: string } | undefined)
+      : undefined;
+    // 同一份 map 在缓存里只解析一次；同一堆栈的多帧、同一批的多个事件都复用它。
+    const original = row
+      ? await consumers.use(row.map_path, (consumer) => {
+          const position = originalPosition(consumer, frame);
+          if (!position) return null;
+          const code = linesOf(consumer, position.rawSource)?.[position.line - 1]?.trim();
+          return { ...position, contextLine: code ? code.slice(0, 300) : null };
+        })
+      : null;
+    frames.push({
+      raw: line.trim(),
+      file: frame.file,
+      ...(frame.functionName ? { functionName: frame.functionName } : {}),
+      ...(original
+        ? {
+            original: {
+              source: original.source,
+              line: original.line,
+              column: original.column + 1,
+              name: original.name,
+              contextLine: original.contextLine,
+            },
+          }
+        : {}),
+    });
+    if (original) {
+      const fn = original.name ?? frame.functionName ?? '<anonymous>';
+      lines.push(`    at ${fn} (${original.source}:${original.line}:${original.column + 1})`);
+      mapped += 1;
+    } else {
+      lines.push(line);
+    }
+  }
+  return { frames, text: mapped > 0 ? lines.join('\n') : null };
+}
+
+/** 只要还原后的堆栈文本（回填和测试用）；一帧都未命中时返回 null。 */
 export async function symbolicateStack(
   database: TraceDatabase,
   releaseId: string,
   stack: string,
 ): Promise<string | null> {
-  const findMap = database.sqlite.prepare(
-    'SELECT map_path FROM source_maps WHERE release_id = ? AND minified_file = ?',
-  );
-  let mapped = 0;
-  const result: string[] = [];
-  for (const line of stack.split('\n')) {
-    const frame = parseStackFrame(line);
-    const row = frame
-      ? (findMap.get(releaseId, normalizeMinifiedFile(frame.file)) as
-          { map_path: string } | undefined)
-      : undefined;
-    // 同一份 map 在缓存里只解析一次；同一堆栈的多帧、同一批的多个事件都复用它。
-    const original =
-      frame && row
-        ? await consumers.use(row.map_path, (consumer) => originalPosition(consumer, frame))
-        : null;
-    if (frame && original) {
-      const fn = original.name ?? frame.functionName ?? '<anonymous>';
-      result.push(`    at ${fn} (${original.source}:${original.line}:${original.column + 1})`);
-      mapped += 1;
-    } else {
-      result.push(line);
-    }
-  }
-  // 一帧都未命中时返回 null，调用方会明确保留压缩堆栈作为降级证据。
-  return mapped > 0 ? result.join('\n') : null;
+  return (await resolveStack(database, releaseId, stack)).text;
 }
 
 export type SourceContextResult =
@@ -321,9 +402,8 @@ export async function sourceContext(
   const result = await consumers.use(row.map_path, (consumer): SourceContextResult => {
     const original = originalPosition(consumer, frame);
     if (!original) return { ok: false, reason: 'FRAME_NOT_MAPPED' };
-    const content = consumer.sourceContentFor(original.rawSource, true);
-    if (!content) return { ok: false, reason: 'NO_SOURCES_CONTENT' };
-    const lines = content.split('\n');
+    const lines = linesOf(consumer, original.rawSource);
+    if (!lines) return { ok: false, reason: 'NO_SOURCES_CONTENT' };
     const first = Math.max(1, original.line - radius);
     const last = Math.min(lines.length, original.line + radius);
     const snippet = lines
@@ -344,7 +424,7 @@ export async function sourceContext(
   return result ?? { ok: false, reason: 'NO_SOURCE_MAP' };
 }
 
-/** 一个等待还原的事件：入库时刚写入的，或上传 map 后要回填的。 */
+/** 上传 map 后要回填的一个事件。 */
 export interface StoredStack {
   eventId: string;
   releaseId: string;
@@ -352,11 +432,12 @@ export interface StoredStack {
 }
 
 /**
- * 逐个还原并写回 events.original_stack，返回还原成功和失败的条数。
+ * 逐个还原并写回 events.original_stack，返回还原成功和失败的条数。上传 map 后回填已有事件时使用；
+ * 新接入的事件在入库之前就还原了（services/events.ts）。
  *
- * 单个事件还原失败只计数、不抛出：还原是附加信息，它的失败不能让接入返回 500。
+ * 单个事件还原失败只计数、不抛出：还原是附加信息，它的失败不能让上传或接入返回 500。
  * 曾经这里一抛错，接入就返回 500，而事件其实已经提交；SDK 把 500 当作可重试，
- * 同一批反复重发、反复失败，这个浏览器之后的事件全部堵在它后面。
+ * 同一批反复重发、反复失败，这个浏览器之后的事件全部堵在它身后。
  */
 export async function symbolicateEvents(
   database: TraceDatabase,

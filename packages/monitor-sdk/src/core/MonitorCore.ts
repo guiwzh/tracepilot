@@ -156,8 +156,16 @@ export class MonitorCore implements MonitorClient {
     return this.breadcrumbs.map((item) => ({ ...item }));
   }
 
-  captureException(error: unknown, context: CapturePayload = {}): string | null {
-    return this.captureEvent('error', { ...errorPayload(error), ...context, level: 'error' });
+  captureException(
+    error: unknown,
+    context: CapturePayload = {},
+    options: CaptureOptions = {},
+  ): string | null {
+    return this.captureEvent(
+      'error',
+      { ...errorPayload(error), ...context, level: 'error' },
+      options,
+    );
   }
 
   captureMessage(message: string, level: 'error' | 'warning' | 'info' = 'info'): string | null {
@@ -196,6 +204,7 @@ export class MonitorCore implements MonitorClient {
         // 面包屑是 Issue 的证据链，只随会形成 Issue 的事件发送。指标样本不属于任何 Issue，
         // 带上 50 条面包屑只会让每个样本的体积大几十倍。
         breadcrumbs: eventType === 'performance' ? [] : this.getBreadcrumbs(),
+        ...(options.fingerprint?.length ? { fingerprint: [...options.fingerprint] } : {}),
       };
       // beforeSend 是业务方最后一次删除字段或取消事件的机会。
       const processed = this.options.beforeSend ? this.options.beforeSend(event) : event;

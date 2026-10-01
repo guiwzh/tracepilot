@@ -40,14 +40,15 @@ apps/server/
 │   │   ├── diagnosis.ts         单次诊断（评测里的对照组）
 │   │   └── investigations.ts    调查：发起、查询、取消、SSE 事件流
 │   ├── services/                业务逻辑，读写数据库
-│   │   ├── events.ts            ingestEnvelope：时钟校正、幂等、脱敏、Release、Issue 归并、计数
+│   │   ├── events.ts            ingestEnvelope：规范化 → 还原 → 聚合入库；幂等、时钟校正、计数
 │   │   ├── queries.ts           工作台的全部读查询
 │   │   ├── sourcemaps.ts        map 校验与保存、逐帧还原、回填、源码片段
 │   │   ├── sourceMapCache.ts    已解析 map 的 LRU 缓存：借出与归还、手动释放 WebAssembly 内存
+│   │   ├── issues.ts            Issue 合并
 │   │   └── diagnosis.ts         单次诊断：证据快照、缓存、规则引擎、结构化输出的降级
 │   ├── investigation/           排障 Agent，见第 10 节
 │   ├── lib/
-│   │   ├── fingerprint.ts       错误指纹、展示标题
+│   │   ├── fingerprint.ts       错误指纹（还原后按应用帧聚合）、展示标题
 │   │   ├── userAgent.ts         浏览器分类（同时注册为 SQL 函数）
 │   │   └── json.ts              JSON 列的容错解析、分位数
 │   ├── demo/sourceMaps.ts       虚构的结账应用源码与 Source Map，种子数据、评测和截图共用
@@ -118,9 +119,10 @@ flowchart LR
 | 服务 | `services/`、`investigation/` | 业务逻辑，读写数据库；不感知 HTTP                              |
 | 存储 | `db/`                         | SQLite 连接、表结构与迁移                                      |
 
-两条链路不在「收到请求、处理、返回」的直线上：
+两处值得单独说明：
 
-- **Source Map 还原**在接入事务提交之后执行。它仍在同一个请求里，但失败只计数、不影响 202。
+- **Source Map 还原在聚合之前**：接入请求里先还原、再在一个事务里聚合入库，聚合用的是源码位置（6.6）。还原失败只计数，
+  事件照常入库，不影响 202。
 - **排障 Agent** 在后台运行：发起调查的请求立即返回运行记录，调查在同一个 Node 进程里异步推进（等模型响应时不占用
   CPU），进度通过 SSE 推给浏览器。
 
@@ -234,22 +236,24 @@ erDiagram
   projects ||--o{ issues : "问题"
   releases ||--o{ source_maps : "map 登记"
   releases |o--o{ events : "release_id"
+  issues ||--o{ issue_fingerprints : "指纹"
   issues |o--o{ events : "issue_id（可空）"
   issues ||--o{ diagnoses : "诊断缓存"
   issues ||--o{ investigation_runs : "调查"
   investigation_runs ||--o{ investigation_events : "事件日志"
 ```
 
-| 表                     | 一行是什么                                  | 键与约束                                                       |
-| ---------------------- | ------------------------------------------- | -------------------------------------------------------------- |
-| `projects`             | 一个接入 SDK 的前端应用                     | `dsn_key` 唯一                                                 |
-| `releases`             | 应用的一个发布版本，Source Map 的隔离边界   | `UNIQUE(project_id, version)`                                  |
-| `issues`               | 按指纹聚合出的一类问题，列表页的一行        | `UNIQUE(project_id, fingerprint)`；`resolved_at` 由迁移 2 添加 |
-| `events`               | 一次具体发生，也就是一条浏览器上报          | `issue_id`、`release_id` 可空                                  |
-| `source_maps`          | 一份已上传 map 的登记，文件本体在磁盘上     | `UNIQUE(release_id, minified_file)`                            |
-| `diagnoses`            | 单次诊断的结果缓存                          | `UNIQUE(issue_id, input_hash)`                                 |
-| `investigation_runs`   | 排障 Agent 的一次调查：状态、用量、最终报告 |                                                                |
-| `investigation_events` | 调查中发生的一件事                          | 主键 `(run_id, seq)`                                           |
+| 表                     | 一行是什么                                   | 键与约束                                                       |
+| ---------------------- | -------------------------------------------- | -------------------------------------------------------------- |
+| `projects`             | 一个接入 SDK 的前端应用                      | `dsn_key` 唯一                                                 |
+| `releases`             | 应用的一个发布版本，Source Map 的隔离边界    | `UNIQUE(project_id, version)`                                  |
+| `issues`               | 按指纹聚合出的一类问题，列表页的一行         | `fingerprint` 记建 Issue 时的指纹；`resolved_at` 由迁移 2 添加 |
+| `issue_fingerprints`   | 一个指向 Issue 的指纹，一个 Issue 可以有多个 | 主键 `(project_id, fingerprint)`；由迁移 3 添加                |
+| `events`               | 一次具体发生，也就是一条浏览器上报           | `issue_id`、`release_id` 可空                                  |
+| `source_maps`          | 一份已上传 map 的登记，文件本体在磁盘上      | `UNIQUE(release_id, minified_file)`                            |
+| `diagnoses`            | 单次诊断的结果缓存                           | `UNIQUE(issue_id, input_hash)`                                 |
+| `investigation_runs`   | 排障 Agent 的一次调查：状态、用量、最终报告  |                                                                |
+| `investigation_events` | 调查中发生的一件事                           | 主键 `(run_id, seq)`                                           |
 
 `events` 是最大的表，各列的含义：
 
@@ -288,8 +292,9 @@ erDiagram
 | `events(issue_id, user_id)`                | 接入时判定「该用户是否已在这个 Issue 出现过」 |
 | `diagnoses(issue_id, created_at)`          | 诊断历史                                      |
 | `investigation_runs(issue_id, started_at)` | 调查历史、找进行中的调查                      |
+| `issue_fingerprints(issue_id)`             | 合并时迁移某个 Issue 的全部指纹               |
 
-唯一约束本身也带索引：`projects(dsn_key)` 用于接入时找项目，`issues(project_id, fingerprint)` 用于归并，
+唯一约束和主键本身也带索引：`projects(dsn_key)` 用于接入时找项目，`issue_fingerprints(project_id, fingerprint)` 用于归并，
 `source_maps(release_id, minified_file)` 用于还原时找 map，`diagnoses(issue_id, input_hash)` 用于诊断缓存，
 `investigation_events(run_id, seq)` 用于回放。
 
@@ -307,6 +312,17 @@ export const MIGRATIONS: readonly Migration[] = [
       sqlite.exec("UPDATE issues SET resolved_at = last_seen_at WHERE status = 'resolved'");
     },
   },
+  {
+    description: 'issue_fingerprints',
+    up: (sqlite) => {
+      sqlite.exec(`
+        CREATE TABLE issue_fingerprints (…);
+        CREATE INDEX issue_fingerprints_issue ON issue_fingerprints(issue_id);
+        INSERT INTO issue_fingerprints (project_id, fingerprint, issue_id, algorithm, created_at)
+          SELECT project_id, fingerprint, id, 'v1', first_seen_at FROM issues;
+      `);
+    },
+  },
 ];
 ```
 
@@ -319,6 +335,8 @@ export const MIGRATIONS: readonly Migration[] = [
    版本号记为 1，再接着执行后面的迁移。
 5. 2 号迁移给 `issues` 加上标记解决的时间（用于回归判断，见 6.7）。之前已解决的 Issue 不知道确切的解决时间，取它最后
    一次出现的时间：在那之后再发生，就是回归。
+6. 3 号迁移新建 `issue_fingerprints`，让指纹与 Issue 多对一（合并、算法升级，见 6.7），并把已有 Issue 的指纹原样搬进来、
+   标为 v1：聚合算法升级到 v2 之后，正在发生的问题仍能按 v1 指纹找回原来的 Issue。
 
 ## 6. 接入管线
 
@@ -329,19 +347,21 @@ sequenceDiagram
   participant SDK as 浏览器 SDK
   participant R as routes/events
   participant I as ingestEnvelope
+  participant M as Source Map 缓存
   participant DB as SQLite
-  participant S as symbolicateEvents
   SDK->>R: POST /api/v1/envelopes（text/plain 的 JSON）
   R->>R: envelopeSchema 校验，失败返回 400
   R->>I: 通过校验的信封
   I->>DB: 按 dsn_key 找项目，找不到返回 403
+  I->>I: 规范化：项目校验、时钟换算、脱敏（项目不符返回 403）
+  loop 带堆栈、尚未入库的事件
+    I->>M: 逐帧还原（事务之外）
+  end
   I->>DB: BEGIN
   loop 每个事件
-    I->>DB: 幂等检查、写事件、归并 Issue、计数
+    I->>DB: 幂等检查、用还原后的栈帧算指纹、归并 Issue、写事件、计数
   end
-  I->>DB: COMMIT（任何一个事件的项目不符则 ROLLBACK 并返回 403）
-  R->>S: 本批新写入、带堆栈的事件
-  S->>DB: 写回 original_stack（一个事务）
+  I->>DB: COMMIT
   R-->>SDK: 202 accepted、duplicates、metricUpdates、issueIds
 ```
 
@@ -350,9 +370,8 @@ sequenceDiagram
   解析器：只影响接入路由，其他路由不受影响。`application/json` 照常可用。JSON 不合法返回 400。
 - **校验**：`envelopeSchema` 要求 `dsnKey`、`sentAt` 和 1～100 个事件，每个事件的字段长度、枚举、面包屑上限（100 条）见
   [event-schema.md](event-schema.md)。失败返回 400 `INVALID_ENVELOPE` 和逐字段的 `details`。
-- **入库**：`ingestEnvelope`，同步执行、一个事务。凭据问题抛 `IngestError`，路由返回 403 `INVALID_DSN` 或
-  `PROJECT_DSN_MISMATCH`；其余错误交给统一错误处理，返回 500。
-- **还原**：事务提交之后，对本批新写入、带堆栈的事件做 Source Map 还原（读 map 文件是异步的）。失败只记一条 warn 日志。
+- **接入**：`ingestEnvelope`，分规范化、还原、入库三段（见 6.2）。凭据问题抛 `IngestError`，路由返回 403 `INVALID_DSN`
+  或 `PROJECT_DSN_MISMATCH`；其余错误交给统一错误处理，返回 500。还原出错的事件照常入库，只记一条 warn 日志。
 - **响应**：202 `{ accepted, duplicates, metricUpdates, issueIds }`。
 
 状态码要与 SDK 的重试语义配合：SDK 对 5xx 和网络错误重试，对 408 / 429 以外的 4xx 直接丢弃这一批。凭据错误重试也没用，
@@ -364,25 +383,33 @@ sequenceDiagram
 ```text
 按 dsn_key 找项目 ── 找不到 → INVALID_DSN
 按 sentAt 估计设备时钟偏差（整个信封一个值）
-BEGIN
-  对每个事件：
-    事件声明的 projectId 与项目不符 → PROJECT_DSN_MISMATCH，整批回滚
-    时间换算到服务端时钟
-    行 id = eventId；Web Vitals 为 metric:<项目 id>:<metricId>
-    这一行已存在？ Web Vitals → 采集时间不早于已存的就覆盖，metricUpdates + 1
-                   其他        → duplicates + 1，跳过
-    脱敏（payload 里的堆栈字段按栈帧规则，保留行列号）
-    找到或创建 Release
-    会形成 Issue 的事件 → 按指纹归并 Issue
-    判定该用户是否第一次出现在这个 Issue（必须在写入本条事件之前）
-    INSERT 事件
-    Issue 的事件数 + 1；用户第一次出现时影响用户数 + 1
-    带堆栈 → 加入待还原列表
-COMMIT
+
+1. 规范化（同步，只读）
+   对每个事件：projectId 与项目不符 → PROJECT_DSN_MISMATCH，整个信封被拒绝，什么都还没写
+               时间换算到服务端时钟；行 id = eventId（Web Vitals 为 metric:<项目 id>:<metricId>）
+               脱敏（payload 里的堆栈字段按栈帧规则，保留行列号）
+
+2. 还原（异步，事务之外）
+   对带堆栈、尚未入库的事件：按版本和文件名找 map，逐帧换算成源码位置；出错只计数
+
+3. 入库（同步，一个事务）
+   BEGIN
+     对每个事件：
+       这一行已存在？ Web Vitals → 采集时间不早于已存的就覆盖，metricUpdates + 1
+                      其他        → duplicates + 1，跳过
+       找到或创建 Release
+       会形成 Issue 的事件 → 用还原后的栈帧算指纹，经指纹表找到或新建 Issue
+       判定该用户是否第一次出现在这个 Issue（必须在写入本条事件之前）
+       INSERT 事件（连同还原后的堆栈）
+       Issue 的事件数 + 1；用户第一次出现时影响用户数 + 1
+   COMMIT
 ```
 
-整批包在一个事务里有两个作用：信封里第 7 个事件声明了别的项目，前 6 个的写入也会撤回，数据库里不会留下半个信封；
-一批写入只需落盘一次，比逐条提交快得多。
+还原放在事务之外，是因为读 map 文件是异步的，而 better-sqlite3 的事务必须同步执行完。第 2 段之前先查一次重复，重复送达的
+事件不再还原；第 3 段在事务里再查一次，两个并发请求送来同一个事件时也只写入一次。
+
+整批写入包在一个事务里有两个作用：要么全部生效、要么全部撤销，数据库里不会留下半个信封；一批写入只需落盘一次，
+比逐条提交快得多。
 
 **脱敏**用 shared 的同一套规则（SDK 发出之前已经做过一次，服务端把客户端数据视为不可信再做一遍）：遮蔽 `token`、
 `password`、`authorization`、`cookie` 等键的值，去掉 URL 的查询参数和片段（`#/cart` 这样的 hash 路由保留路由本身）。
@@ -416,36 +443,50 @@ Web Vitals 是例外。web-vitals 为每个页面加载中的每个指标分配�
 
 ### 6.5 哪些事件形成 Issue
 
-| `eventType`   | 形成 Issue                                                      | 标题                                                  | 默认级别                                                                   |
-| ------------- | --------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------- |
-| `error`       | 是                                                              | 错误消息（或错误名），动态 ID 换成占位符，最长 500 字 | error                                                                      |
-| `resource`    | 是                                                              | `Resource failed: <去掉查询参数的地址>`               | error                                                                      |
-| `network`     | 只有失败的：`success === false`、状态码 ≥ 400 或带 `error` 字段 | `POST <地址> → 503`；业务码失败为 `→ code 40012`      | 带业务码为 error；状态码低于 500（含拿不到响应的 0）为 warning；其余 error |
-| `performance` | 否，只进入指标流                                                | `LCP sample` 等                                       | info                                                                       |
+| `eventType`   | 形成 Issue                                                      | 标题                                                  | 默认级别                                                        |
+| ------------- | --------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------- |
+| `error`       | 是                                                              | 错误消息（或错误名），动态 ID 换成占位符，最长 500 字 | error                                                           |
+| `resource`    | 是                                                              | `Resource failed: <去掉查询参数的地址>`               | error                                                           |
+| `network`     | 只有失败的：`success === false`、状态码 ≥ 400 或带 `error` 字段 | `POST <地址> → 503`；业务码失败为 `→ code 40012`      | 4xx 为 warning；5xx、拿不到响应（状态码 0）和业务码失败为 error |
+| `performance` | 否，只进入指标流                                                | `LCP sample` 等                                       | info                                                            |
 
 - 事件自己声明的 `payload.level`（`error`、`warning`、`info`）优先于上表。
+- 拿不到响应的请求（断网、超时、跨域被拦）曾经因为「状态码低于 500」被定成 warning；SDK 默认把它和 5xx 一样判为失败，
+  服务端现在也一样定成 error。
 - 级别在建 Issue 时确定，之后不随新事件改变；标题随最新发生的事件更新（见 6.7）。
 - 不形成 Issue 的事件照样写入 `events`，`issue_id` 为 NULL。
 
 ### 6.6 指纹
 
-指纹决定「哪些错误算同一个 Issue」：
+指纹决定「哪些错误算同一个 Issue」。现行算法（v2）在 Source Map 还原**之后**计算：
 
 ```text
-fingerprint = SHA-256( 归一化(类型) | 归一化(消息) | 栈顶帧 [| code:业务码] )
+fingerprint = SHA-256( v2 | 归一化(类型) | 归一化(消息) | 聚合帧 [| code:业务码] )
+聚合帧 = 第一个应用自己的帧（都不是就取栈顶帧）
+       映射到源码 → 源文件 + 函数名 + 出错那行代码（没有内联源码时用行号代替）
+       映射不到   → 压缩后的这一行（归一化，与 v1 相同）
 ```
 
 - **类型**：`payload.name ?? payload.errorType ?? eventType`，例如 `TypeError`。
 - **消息**：失败的请求没有错误消息，用「方法 + 地址 + 状态码」：同一个地址上的 GET 404、POST 503 和连不上服务器是不同
   的问题，与 Issue 标题口径一致。曾经只用地址，三者被并成一个 Issue：标题随最新一条变化，级别停留在第一条的 warning，
   503 故障藏在一个「警告」里。其他事件用 `payload.message ?? payload.url ?? payload.metric`。
-- **栈顶帧**：堆栈里第一个以 `:行:列` 结尾的行（V8 的 `at fn (url:1:2)`、Firefox / Safari 的 `fn@url:1:2`），与 SDK
-  去重签名取首帧是同一条规则；没有这样的行时取第一行，没有堆栈时为 `no-stack`。只取一帧：完整堆栈随调用路径（从哪个
-  页面、哪个按钮进来）变化，同一个 bug 会被拆开。曾经把「第一行带 URL 或路径的文本」当作栈帧，V8 堆栈的第一行是错误
-  消息，消息里带 `/` 时取到的是消息行，同一条消息、不同出错位置的错误被并成了一个 Issue。
+- **先还原、再聚合**：压缩后的函数名和列号每次构建都可能变（`at t (app.a1.js:1:420)` 下一版成了
+  `at n (app.b2.js:1:388)`），按它们聚合的话，同一个 bug 发一次版就成了新 Issue，「已解决又出现」的回归检测也随之失效。
+  源码里的位置则稳定得多。聚合帧刻意不看行列号：前面加了几行代码，出错那行的行号就变了，出错的代码本身没变。
+  Sentry 等产品也是先还原再聚合，并且只看应用自己的帧。取舍见 [ADR 0004](decisions/0004-grouping-after-symbolication.md)。
+- **应用自己的帧**：跳过依赖包（路径含 `node_modules`，包括 Vite 开发时的 `/node_modules/.vite/deps/`）、浏览器扩展和
+  打包器运行时的帧。崩在 React 内部的错误，栈顶是 react-dom 的帧，按它聚合会把所有「渲染时出错」并成一个 Issue。
+- **只取一帧**：完整堆栈随调用路径（从哪个页面、哪个按钮进来）变化，同一个 bug 会被拆开。没有可解析的栈帧时，退回堆栈
+  文本里第一个以 `:行:列` 结尾的行（V8 的 `at fn (url:1:2)`、Firefox / Safari 的 `fn@url:1:2`），再没有就取第一行；
+  没有堆栈时为 `no-stack`。曾经把「第一行带 URL 或路径的文本」当作栈帧，V8 堆栈的第一行是错误消息，消息里带 `/` 时
+  取到的是消息行，同一条消息、不同出错位置的错误被并成了一个 Issue。
 - **业务码**原样附加、不归一化：它们常是 4～6 位数字，会被当成业务 ID 换成占位符，同一个接口上的「优惠券过期」和
   「库存变化」就被并成一个 Issue。
-- 存 64 个十六进制字符的哈希而不是原文：长度固定，适合作唯一键。
+- **自定义指纹**：SDK 可以在事件上带 `fingerprint`（`captureException(error, context, { fingerprint })` 或在
+  `beforeSend` 里设置），服务端就按它聚合；其中的 `'{{ default }}'` 换成默认指纹。`['{{ default }}', tenantId]` 在默认
+  结果上再按租户细分，`['checkout-timeout']` 把不同位置抛出的同一类错误并成一个。
+- 存 64 个十六进制字符的哈希而不是原文：长度固定，适合作唯一键。开头的 `v2` 让新旧算法的指纹不会相撞。
 
 归一化把每次发生都不一样的片段换成占位符，同一根因的所有发生才得到同一个指纹：
 
@@ -459,16 +500,20 @@ fingerprint = SHA-256( 归一化(类型) | 归一化(消息) | 栈顶帧 [| code
 | URL 的查询参数与片段                              | `app.js?token=abc#/cart?x=1`           | `app.js#/cart`（只留 hash 路由） |
 | 空白与大小写                                      |                                        | 连续空白合并为一个空格，转小写   |
 
-演示数据里的主问题，三个部分归一化后是：
+演示数据里的主问题，类型、消息和聚合帧归一化后是：
 
 ```text
 typeerror
 cannot read properties of undefined (reading 'total') — order :id
-at calculatetotal (https://shop.example/assets/checkout.:hash.js:1:420)
+src/checkout/total.ts:calculatetotal:const subtotal = cart.summary.total;
 ```
 
-取舍：归一化不足会把一个问题拆成很多个 Issue，过度归一化会把不同问题并在一起。压缩文件的列号常有 4 位以上，也会被换成
-`:id`，所以同一个压缩文件里不同位置的错误要靠类型和消息区分。
+取舍：归一化不足会把一个问题拆成很多个 Issue，过度归一化会把不同问题并在一起。同一个函数里同一行代码抛出的不同错误
+靠类型和消息区分。
+
+**代价**：聚合依赖 map 在流量到来之前就位。某个版本没有 map 时，它的事件按压缩帧聚合，和有 map 的版本里的同一个 bug
+分成两个 Issue；事后补传的 map 只回填 `original_stack`，不会重新聚合已经入库的事件（Sentry 同样如此）。所以 map 应在
+构建时上传，分开了的 Issue 可以手动合并（6.7）。
 
 展示用的标题由 `normalizeDisplayTitle` 生成：同样替换 UUID、时间戳和长数字，但用 `{uuid}`、`{timestamp}`、`{id}`，
 保留大小写，也不替换文件哈希（排查时需要看到具体文件）。主问题的标题是：
@@ -477,31 +522,42 @@ at calculatetotal (https://shop.example/assets/checkout.:hash.js:1:420)
 Cannot read properties of undefined (reading 'total') — order {id}
 ```
 
-### 6.7 Issue 归并与回归
+### 6.7 Issue 归并、合并与回归
 
-一条语句完成「有则更新、无则插入」：
+指纹与 Issue 是多对一，关系存在 `issue_fingerprints` 表里（主键 `(project_id, fingerprint)`）。归并一个事件：
+
+1. 按指纹在 `issue_fingerprints` 里找 Issue；
+2. 找不到、且不是自定义指纹时，按旧算法（v1：压缩后的栈顶帧）再算一次指纹去找。升级之前建的 Issue 只登记了 v1 指纹，
+   找到了就把 v2 指纹也登记到它上面：正在发生的问题不会因为算法升级突然变成新 Issue。这是 Sentry 升级聚合配置时
+   同时计算新旧两个哈希的做法。自定义指纹不走这一步，自定义正是为了改变聚合结果；
+3. 找到就更新这个 Issue，找不到就新建 Issue 并登记指纹。
+
+更新用一条 UPDATE：
 
 ```sql
-INSERT INTO issues (id, project_id, fingerprint, title, status, level, first_seen_at, last_seen_at)
-VALUES (@id, @projectId, @fingerprint, @title, 'unresolved', @level, @timestamp, @timestamp)
-ON CONFLICT(project_id, fingerprint) DO UPDATE SET
-  first_seen_at = MIN(first_seen_at, excluded.first_seen_at),
-  last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
-  title = CASE WHEN excluded.last_seen_at >= last_seen_at THEN excluded.title ELSE title END,
-  status = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
+UPDATE issues SET
+  first_seen_at = MIN(first_seen_at, @timestamp),
+  last_seen_at = MAX(last_seen_at, @timestamp),
+  title = CASE WHEN @timestamp >= last_seen_at THEN @title ELSE title END,
+  status = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
     THEN 'unresolved' ELSE status END,
-  resolved_at = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
+  resolved_at = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
     THEN NULL ELSE resolved_at END
-RETURNING id
+WHERE id = @id
 ```
 
-- `UNIQUE(project_id, fingerprint)` 冲突时走更新分支。`excluded.列` 是这次本想插入的值；`SET` 右边读到的都是更新之前
-  的旧值，所以几个 `CASE` 判断的是同一个旧状态。
+- `SET` 右边读到的都是更新之前的旧值，所以几个 `CASE` 判断的是同一个旧状态。
 - **出现时间**取最早和最晚：事件乱序到达（重试、beacon）也不会把时间改错。只有不早于已知最晚一次的事件才改写标题。
 - **回归**：已解决的 Issue 又发生了新事件——发生时间晚于标记解决的时间——重新打开为 unresolved。只看发生时间，所以
   解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）不会把它重新打开。已忽略的 Issue 保持忽略。
   标记解决的时间由 `PATCH /issues/:issueId/status` 写入。
-- 曾经是「先查一次、再改一次」两条语句，合成一条后接入快约 10%。
+- 查找、更新和新建都在接入事务里；SQLite 同一时刻只有一个写事务，不会有两个请求同时为同一个指纹建 Issue。
+
+**合并**（`POST /api/v1/issues/:issueId/merge`，工作台的 Issue 列表可以勾选后合并）：聚合算法再好也会把同一个问题拆开
+（消息里有没归一化掉的动态内容、同一个 bug 从两个入口触发、缺 map 的版本）。合并在一个事务里把被合并方的指纹、事件和
+调查记录都改指向目标，按迁移后的事件重新统计事件数和影响用户数（同一个用户在两边都出现过只算一次），首末次出现取最早
+和最晚，然后删除被合并方。指纹一并迁移，所以之后再来的同类事件直接归入目标，不会重新长出被合并掉的 Issue。任何一方
+有进行中的调查时拒绝（409）：调查的工具绑定在原来的 Issue 上。
 
 ### 6.8 计数
 
@@ -592,11 +648,13 @@ TypeError: Cannot read properties of undefined (reading 'total') — order 83000
 
 ### 7.4 接入时还原与上传后回填
 
-- **接入时**：`symbolicateEvents` 逐个还原本批新写入、带堆栈的事件。单个事件失败只计数、不抛出：还原是附加信息，它的
-  失败不能让接入返回 500（原因见 6.1）。结果在一个事务里写回，逐条自动提交的话每条 UPDATE 都要单独落盘一次。
+- **接入时**：在聚合之前，`resolveStack` 逐个还原本批带堆栈、尚未入库的事件，返回每一帧的源码位置（连同出错那行代码，
+  供聚合使用）和还原后的堆栈文本，后者随事件一起写入。单个事件失败只计数、不抛出：还原是附加信息，它的失败不能让接入
+  返回 500（原因见 6.1），出错的事件按压缩堆栈聚合。
 - **上传后**：常见顺序是「先发版、线上报错、再补传 map」。上传完成后立即用新 map 回填这个版本里的已有事件，不必等新的
   错误发生才能看到源码栈。只处理堆栈里出现过这个文件名的事件（`instr(stack, ?) > 0`）；曾经上传任何一个 map 都会把整个
-  版本的事件重新还原一遍。
+  版本的事件重新还原一遍。回填只更新 `original_stack`，不重新聚合（6.6 的「代价」）。结果在一个事务里写回，逐条自动提交的话
+  每条 UPDATE 都要单独落盘一次。
 
 ### 7.5 解析结果缓存：SourceMapCache
 
@@ -663,6 +721,8 @@ map → 映射到源码位置 → `sourceContentFor` 取内联源码 → 前后�
   让人误以为「没有事件」的空列表。
 - `PATCH /api/v1/issues/:issueId/status`：`unresolved`、`resolved` 或 `ignored`。标记为已解决时写入 `resolved_at`（回归
   判断的基准），改成其他状态时清空。一条 UPDATE 同时完成「是否存在」和「修改」：受影响 0 行即 404。
+- `POST /api/v1/issues/:issueId/merge`：把 `issueIds` 里的 Issue 合并进路径里的这个（最多 50 个，同一项目），见 6.7。
+  返回合并后的标题、事件数和影响用户数。
 
 ### 8.3 项目概览
 
@@ -1247,10 +1307,11 @@ Agent。结果与全部限制见[诊断评测报告](reports/agent-evaluation.md
 | 库存响应缺字段（声明为 warning）                         |     11 | 1                                            |
 | Web Vitals：5 个指标 × 28 个样本，LCP / CLS / INP 带元素 |    140 | 不形成 Issue                                 |
 
-合计 307 个事件、16 个 Issue，分布在 2.4.1 和 2.3.9 两个版本（大约每 7 个事件有 1 个属于 2.3.9）。随后只给 2.4.1 上传两份
-map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），2.3.9 故意不传：调查时既能看到还原后的源码，也会遇到「该版本
-缺少 map」这种真实会发生的证据缺口。上传走正式的 `saveSourceMap`，顺带回填已有事件。删除旧数据前先取出 map 文件路径，
-删完表数据再删文件，反复 seed 不会在私有目录里堆积孤儿文件。
+合计 307 个事件、16 个 Issue，分布在 2.4.1 和 2.3.9 两个版本（大约每 7 个事件有 1 个属于 2.3.9）。顺序和推荐的接入方式
+一致：先为两个版本上传 map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），再接入事件，聚合才能用上还原后的栈帧。
+某个版本缺 map 时，同一个 bug 会在两个版本里分成两个 Issue（6.6 的「代价」），所以两个版本都传；「缺少 map」这种证据缺口
+由评测集的 `missing-source-map` 用例覆盖。上传走正式的 `saveSourceMap`。删除旧数据前先取出 map 文件路径，删完表数据再删
+文件，反复 seed 不会在私有目录里堆积孤儿文件。
 
 **`demo/sourceMaps.ts`**：虚构结账应用的源码与 map。种子事件的压缩栈指向固定的列号（例如 `checkout.a81e93bd.js:1:420`），
 原始行列不是手写的，而是在源码文本里定位关键片段自动算出，源码改动后映射仍然正确。map 内联了 `sourcesContent`，Agent
@@ -1276,6 +1337,7 @@ map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），2.3.9 故意不传�
 | `GET`   | `/api/v1/issues/:issueId`                 | 200 Issue 详情                                          | 404 `ISSUE_NOT_FOUND`                                                                                              |
 | `GET`   | `/api/v1/issues/:issueId/events`          | 200 `{ items }`                                         | 404 `ISSUE_NOT_FOUND`                                                                                              |
 | `PATCH` | `/api/v1/issues/:issueId/status`          | 200 `{ id, status }`                                    | 400 `INVALID_ISSUE_STATUS`；404 `ISSUE_NOT_FOUND`                                                                  |
+| `POST`  | `/api/v1/issues/:issueId/merge`           | 200 `{ id, title, merged, eventCount, userCount }`      | 400 `INVALID_MERGE`；404 `ISSUE_NOT_FOUND`；409 `DIFFERENT_PROJECT`、`INVESTIGATION_RUNNING`                       |
 | `GET`   | `/api/v1/releases/:releaseId/source-maps` | 200 `{ items }`                                         | 404 `RELEASE_NOT_FOUND`                                                                                            |
 | `POST`  | `/api/v1/releases/:releaseId/source-maps` | 201 map 登记                                            | 400 `SOURCE_MAP_REQUIRED`、`MINIFIED_FILE_REQUIRED`、`INVALID_SOURCE_MAP`；404；413；415 `INVALID_SOURCE_MAP_FILE` |
 | `GET`   | `/api/v1/issues/:issueId/diagnoses`       | 200 `{ items }`                                         | 404 `ISSUE_NOT_FOUND`                                                                                              |
@@ -1292,22 +1354,22 @@ map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），2.3.9 故意不传�
 
 ## 14. 测试
 
-服务端 94 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 102 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
-| 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------- | ---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.test.ts`                         |   28 | 经完整路由栈：非法输入、聚合与脱敏与幂等、用户去重计数、乱序到达、回归重开与忽略、hash 路由、性能样本不进 Issue、元素归因、概览口径、趋势窗口、浏览器筛选与分布一致、5xx 不外露、`Retry-After` 可读、Web Vitals 覆盖、text/plain、分页夹紧、单次诊断与缓存；Source Map 损坏、字段顺序、文件丢失、带查询参数的帧、重试批次不再还原 |
-| `services/events.test.ts`             |    7 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开、采样率、业务码归并                                                                                                                                                                                                                                            |
-| `lib/fingerprint.test.ts`             |    5 | 动态 ID 与哈希归一化、Vite 哈希与普通单词、展示标题、取真正的栈顶帧、失败请求按方法和状态码分开                                                                                                                                                                                                                                   |
-| `db/migrations.test.ts`               |    5 | 新库、引入迁移之前的旧库升级且数据保留、每个迁移只跑一次、失败回滚并写明是哪一个、拒绝打开更新的库                                                                                                                                                                                                                                |
-| `services/sourcemaps.test.ts`         |   10 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失                                                                                                                                                                                                  |
-| `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                      |
-| `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                            |
-| `investigation/investigation.test.ts` |    9 | 离线调查端到端且引用全部核实、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                            |
-| `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                          |
-| `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                               |
-| `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                          |
+| 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------- | ---: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.test.ts`                         |   33 | 经完整路由栈：非法输入、聚合与脱敏与幂等、用户去重计数、乱序到达、回归重开与忽略、hash 路由、性能样本不进 Issue、元素归因、概览口径、趋势窗口、浏览器筛选与分布一致、5xx 不外露、`Retry-After` 可读、Web Vitals 覆盖、text/plain、分页夹紧、单次诊断与缓存；Source Map 损坏、字段顺序、文件丢失、带查询参数的帧、重试批次不再还原；聚合：压缩名变了仍是同一个 Issue、升级前的 Issue 继续接收事件、自定义指纹、合并与拒绝合并 |
+| `services/events.test.ts`             |    7 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开（拿不到响应定为 error）、采样率、业务码归并                                                                                                                                                                                                                                                                                                               |
+| `lib/fingerprint.test.ts`             |    8 | 动态 ID 与哈希归一化、Vite 哈希与普通单词、展示标题、取真正的栈顶帧、失败请求按方法和状态码分开；按源码位置而不是压缩名和行列号聚合、跳过依赖包的帧、自定义指纹                                                                                                                                                                                                                                                              |
+| `db/migrations.test.ts`               |    5 | 新库、引入迁移之前的旧库升级且数据保留（指纹搬进指纹表）、每个迁移只跑一次、失败回滚并写明是哪一个、拒绝打开更新的库                                                                                                                                                                                                                                                                                                         |
+| `services/sourcemaps.test.ts`         |   10 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失                                                                                                                                                                                                                                                                                             |
+| `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                                                                                                                 |
+| `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                                                                                                                       |
+| `investigation/investigation.test.ts` |    9 | 离线调查端到端且引用全部核实、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                       |
+| `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                     |
+| `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                          |
+| `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                     |
 
 跨进程的行为由仓库根目录的 E2E 覆盖：`tests/e2e/tracepilot.spec.ts` 验证调查流式推进并以全部核实的引用结束、调查进行中刷新
 页面接回同一次运行且没有重复步骤、通过 API 上传 map 后新接入的浏览器堆栈被还原；演练场和 SDK 送达两组 E2E 核对服务端最终
@@ -1342,6 +1404,8 @@ map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），2.3.9 故意不传�
   请求要等。
 - **查询的扩展性**：Issue 列表为每个 Issue 单独查一次趋势（换网络数据库要改成一条查询）；性能接口把 7 天的样本全部读进
   内存计算分位数，数据量大时应在数据库里聚合或改用列式存储；Source Map 缓存常驻内存（按原始大小计 32 MB，约合 150 MB）。
+- **聚合依赖 map 先到**：先还原再聚合，缺 map 的版本按压缩帧单独聚合，事后补传 map 也不重新聚合；要靠构建时上传 map，
+  分开了的 Issue 只能手动合并。合并不可撤销，没有「拆分」。
 - **调查不能跨进程恢复**：进程重启时进行中的调查被标记为 `SERVER_RESTARTED`，需要重新发起。工具超时只是不再等它，工具本身
   不会被中断。
 - **引用核验的边界**：能抓住编造的调用和改写过的原文，抓不住「原文属实但推理错误」。被截断的工具结果不是合法 JSON，只能按

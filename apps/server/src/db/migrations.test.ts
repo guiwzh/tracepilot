@@ -53,6 +53,17 @@ describe('database migrations', () => {
       { id: 'fixed', status: 'resolved', resolved_at: 500 },
       { id: 'open', status: 'unresolved', resolved_at: null },
     ]);
+    // 已有 Issue 的指纹原样搬进指纹表，标为 v1：新算法找不到时按它找回原来的 Issue。
+    expect(
+      database.sqlite
+        .prepare(
+          'SELECT fingerprint, issue_id, algorithm FROM issue_fingerprints ORDER BY issue_id',
+        )
+        .all(),
+    ).toEqual([
+      { fingerprint: 'f1', issue_id: 'fixed', algorithm: 'v1' },
+      { fingerprint: 'f2', issue_id: 'open', algorithm: 'v1' },
+    ]);
     database.close();
   });
 

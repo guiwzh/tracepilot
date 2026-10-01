@@ -8,7 +8,7 @@ import { buildApp, type BuildAppOptions } from '../app';
 import type { ServerConfig } from '../config';
 import { createDatabase } from '../db/client';
 import { buildDiagnosisContext } from '../services/diagnosis';
-import { seedDemoData, seedDemoSourceMaps } from '../seed';
+import { seedDemoData } from '../seed';
 import type { ModelClient, ModelRequest, ModelTurn } from './model';
 import { runTool } from './tools';
 
@@ -38,8 +38,7 @@ beforeEach(async () => {
   };
   // 种子数据先写入同一个库文件，再由 buildApp 打开。
   const database = createDatabase(config.databasePath);
-  seedDemoData(database);
-  await seedDemoSourceMaps(database, config.sourceMapDir);
+  await seedDemoData(database, config.sourceMapDir);
   database.close();
 });
 

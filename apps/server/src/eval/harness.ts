@@ -40,7 +40,7 @@ export interface PreparedCase {
 }
 
 /**
- * 为一个用例建一个独立的 SQLite 文件，走正式的接入和 Source Map 上传代码写入数据，
+ * 为一个用例建一个独立的 SQLite 文件，走正式的 Source Map 上传和接入代码写入数据，
  * 再找出目标 Issue。每个用例一个库，用例之间互不干扰。
  */
 export async function prepareCase(evalCase: EvalCase, directory: string): Promise<PreparedCase> {
@@ -60,13 +60,7 @@ export async function prepareCase(evalCase: EvalCase, directory: string): Promis
         now - release.deployedMinutesAgo * 60_000,
       );
   }
-  for (let start = 0; start < evalCase.events.length; start += 100) {
-    ingestEnvelope(database, {
-      dsnKey: 'demo-dsn-key',
-      sentAt: now,
-      events: evalCase.events.slice(start, start + 100),
-    });
-  }
+  // 先上传 map、再接入事件，和推荐的接入方式一致：聚合用的是还原后的栈帧。
   for (const map of evalCase.sourceMaps) {
     await saveSourceMap(
       database,
@@ -75,6 +69,13 @@ export async function prepareCase(evalCase: EvalCase, directory: string): Promis
       map.fixture.minifiedFile,
       Buffer.from(buildSourceMap(map.fixture)),
     );
+  }
+  for (let start = 0; start < evalCase.events.length; start += 100) {
+    await ingestEnvelope(database, {
+      dsnKey: 'demo-dsn-key',
+      sentAt: now,
+      events: evalCase.events.slice(start, start + 100),
+    });
   }
   const issue = database.sqlite
     .prepare(

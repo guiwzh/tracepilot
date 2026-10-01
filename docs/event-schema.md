@@ -30,6 +30,10 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 `performanceSampleRate` 的乘积，其余事件就是会话采样率。服务端把它存在事件上下文里，旧版本 SDK 不带这个字段，
 按 1（全量）处理。
 
+可选的 `fingerprint`（1～10 个字符串，每个 1～200 个字符）是自定义聚合键：有它时服务端按它归入 Issue，而不是按默认
+指纹。其中的 `"{{ default }}"` 代表默认指纹，`["{{ default }}", "tenant-a"]` 在默认结果上再细分；
+`["checkout-timeout"]` 把不同位置抛出的同一类错误并成一个。SDK 通过 `captureException` 的第三个参数或 `beforeSend` 设置。
+
 ## 哪些信号成为事件
 
 - `error`：运行时异常、未处理的 Promise rejection、React 根节点错误回调（`reactErrorHandler`）
@@ -84,11 +88,14 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - 整个信封在一个事务里写入；格式错误的信封整体拒绝（400），DSN 与项目不匹配返回 403。
 - 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）；
   `stack` 与 `componentStack` 只删帧里的查询参数，保留行列号。
-- **聚合**：错误按「类型 + 归一化后的消息 + 栈顶帧」的指纹归入 Issue，资源加载失败按地址，失败的请求按
-  「方法 + 地址 + 状态码」，业务失败再加上原样的业务码；地址都去掉查询参数、把业务 ID 归一。栈顶帧是堆栈里
-  第一个以「:行:列」结尾的帧（V8 的 `at fn (url:1:2)`、Firefox / Safari 的 `fn@url:1:2`），与 SDK 去重用的
-  是同一条规则。已解决的 Issue 收到发生时间晚于解决时间的新事件时重新打开为未解决；已忽略的保持忽略。
-- 带堆栈的新事件在入库之后按所在 Release 的 Source Map 还原，结果存为 `originalStack`；
-  map 缺失、损坏或还原失败只会少这一项，不影响 202。
+- **还原**：带堆栈的新事件在**聚合之前**按所在 Release 的 Source Map 还原，结果存为 `originalStack`；
+  map 缺失、损坏或还原失败只会少这一项，事件照常入库，不影响 202。
+- **聚合**：错误按「类型 + 归一化后的消息 + 聚合帧」的指纹归入 Issue。聚合帧是第一个应用自己的帧（跳过
+  `node_modules`、浏览器扩展里的帧）：还原到源码时取「源文件 + 函数名 + 出错那行代码」，不看行列号，重新构建不会让
+  同一个 bug 变成新 Issue；没有 map 时取压缩后的这一帧（第一个以「:行:列」结尾的行，与 SDK 去重用的是同一条规则）。
+  资源加载失败按地址，失败的请求按「方法 + 地址 + 状态码」，业务失败再加上原样的业务码；地址都去掉查询参数、
+  把业务 ID 归一。带 `fingerprint` 的事件按它聚合。已解决的 Issue 收到发生时间晚于解决时间的新事件时重新打开为
+  未解决；已忽略的保持忽略。聚合依赖 map 先于事件到达：缺 map 的版本按压缩帧单独聚合，事后补传 map 不会重新聚合。
+- **级别**：失败的请求里 4xx 为 warning，5xx、拿不到响应和业务码失败为 error；`payload.level` 优先。
 
 响应示例：`{ "accepted": 9, "duplicates": 1, "metricUpdates": 0, "issueIds": ["..."] }`（HTTP 202）。

@@ -55,10 +55,10 @@ function stored(id: string) {
 }
 
 describe('event time', () => {
-  it('moves events from a device whose clock is a year ahead onto the server clock', () => {
+  it('moves events from a device whose clock is a year ahead onto the server clock', async () => {
     const skew = 365 * 24 * HOUR;
     const sentAt = RECEIVED_AT + skew;
-    ingestEnvelope(
+    await ingestEnvelope(
       database,
       { dsnKey: 'demo-dsn-key', sentAt, events: [errorAt('ahead', sentAt - 5_000)] },
       RECEIVED_AT,
@@ -69,8 +69,8 @@ describe('event time', () => {
     expect(issue).toEqual({ last_seen_at: RECEIVED_AT - 5_000 });
   });
 
-  it('uses the receive time for an event dated in the future of its own envelope', () => {
-    ingestEnvelope(
+  it('uses the receive time for an event dated in the future of its own envelope', async () => {
+    await ingestEnvelope(
       database,
       {
         dsnKey: 'demo-dsn-key',
@@ -82,9 +82,9 @@ describe('event time', () => {
     expect(stored('future')).toEqual({ createdAt: RECEIVED_AT, clickBefore: 3_000 });
   });
 
-  it('leaves the time of a device with an accurate clock alone', () => {
+  it('leaves the time of a device with an accurate clock alone', async () => {
     // 几秒的网络耗时不是时钟偏差；重试后才送达的旧事件本来就发生在过去。
-    ingestEnvelope(
+    await ingestEnvelope(
       database,
       {
         dsnKey: 'demo-dsn-key',
@@ -97,53 +97,60 @@ describe('event time', () => {
     expect(stored('replayed').createdAt).toBe(RECEIVED_AT - 48 * HOUR);
   });
 
-  it('rejects envelopes whose DSN does not match with a typed error', () => {
-    expect(() =>
+  it('rejects envelopes whose DSN does not match with a typed error', async () => {
+    await expect(
       ingestEnvelope(database, {
         dsnKey: 'unknown',
         sentAt: RECEIVED_AT,
         events: [errorAt('a', 1)],
       }),
-    ).toThrow(IngestError);
-    expect(() =>
+    ).rejects.toThrow(IngestError);
+    await expect(
       ingestEnvelope(database, {
         dsnKey: 'demo-dsn-key',
         sentAt: RECEIVED_AT,
         events: [{ ...errorAt('b', RECEIVED_AT), projectId: 'other-project' }],
       }),
-    ).toThrow(expect.objectContaining({ code: 'PROJECT_DSN_MISMATCH' }));
+    ).rejects.toThrow(expect.objectContaining({ code: 'PROJECT_DSN_MISMATCH' }));
   });
 });
 
 describe('failed request grouping', () => {
-  it('keeps each method and status on a URL as its own issue with its own level', () => {
+  it('keeps each method and status on a URL as its own issue with its own level', async () => {
     const failed = (id: string, method: string, status: number): MonitorEvent => ({
       ...errorAt(id, RECEIVED_AT),
       eventType: 'network',
       payload: { method, url: 'https://api.shop.test/cart', status, duration: 12, success: false },
     });
-    ingestEnvelope(
+    await ingestEnvelope(
       database,
       {
         dsnKey: 'demo-dsn-key',
         sentAt: RECEIVED_AT,
-        events: [failed('a', 'GET', 404), failed('b', 'POST', 503), failed('c', 'POST', 503)],
+        events: [
+          failed('a', 'GET', 404),
+          failed('b', 'POST', 503),
+          failed('c', 'POST', 503),
+          failed('d', 'POST', 0),
+        ],
       },
       RECEIVED_AT,
     );
     const issues = database.sqlite
       .prepare('SELECT title, level, event_count FROM issues ORDER BY title')
       .all();
+    // 拿不到响应（状态码 0）和 5xx 一样是 error：SDK 默认就把这两类判为失败。
     expect(issues).toEqual([
       { title: 'GET https://api.shop.test/cart → 404', level: 'warning', event_count: 1 },
+      { title: 'POST https://api.shop.test/cart → 0', level: 'error', event_count: 1 },
       { title: 'POST https://api.shop.test/cart → 503', level: 'error', event_count: 2 },
     ]);
   });
 });
 
 describe('sample rate', () => {
-  it('keeps the rate an event was sampled at, treating older SDKs as full samples', () => {
-    ingestEnvelope(
+  it('keeps the rate an event was sampled at, treating older SDKs as full samples', async () => {
+    await ingestEnvelope(
       database,
       {
         dsnKey: 'demo-dsn-key',
@@ -168,7 +175,7 @@ describe('sample rate', () => {
 });
 
 describe('business errors', () => {
-  it('groups a 200 response with a failing business code by that code', () => {
+  it('groups a 200 response with a failing business code by that code', async () => {
     const business = (id: string, code: number): MonitorEvent => ({
       ...errorAt(id, RECEIVED_AT),
       eventType: 'network',
@@ -182,7 +189,7 @@ describe('business errors', () => {
         businessMessage: 'Coupon expired',
       },
     });
-    ingestEnvelope(
+    await ingestEnvelope(
       database,
       {
         dsnKey: 'demo-dsn-key',

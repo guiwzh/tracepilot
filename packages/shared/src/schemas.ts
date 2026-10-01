@@ -48,6 +48,11 @@ export const monitorEventSchema = z.object({
   }),
   payload: z.record(z.string(), z.unknown()),
   breadcrumbs: z.array(breadcrumbSchema).max(100),
+  /**
+   * 自定义聚合键：给了它，服务端就按它决定归入哪个 Issue，而不是按默认指纹。
+   * 其中的 "{{ default }}" 代表默认指纹，用来在默认结果上再细分，例如 ['{{ default }}', tenantId]。
+   */
+  fingerprint: z.array(z.string().min(1).max(200)).min(1).max(10).optional(),
 });
 
 export const envelopeSchema = z.object({
@@ -66,6 +71,11 @@ export const createReleaseSchema = z.object({
 });
 
 export const updateIssueStatusSchema = z.object({ status: issueStatusSchema });
+
+/** 把这些 Issue 合并进路径里的目标 Issue。 */
+export const mergeIssuesSchema = z.object({
+  issueIds: z.array(z.string().min(1).max(100)).min(1).max(50),
+});
 
 export const diagnosisEvidenceSchema = z.object({
   description: z.string().min(1),

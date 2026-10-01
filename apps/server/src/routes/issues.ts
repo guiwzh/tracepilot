@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { issueStatusSchema, updateIssueStatusSchema } from '@trace-pilot/shared';
+import { issueStatusSchema, mergeIssuesSchema, updateIssueStatusSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
+import { MergeError, mergeIssues } from '../services/issues';
 import { getIssue, listIssueEvents, listIssues } from '../services/queries';
 
 /**
- * Issue 相关接口：列表（筛选、分页）、详情、事件样本、修改处理状态。
+ * Issue 相关接口：列表（筛选、分页）、详情、事件样本、修改处理状态、合并。
  *
  * 一个请求的输入来自三处：
  * - request.params：路径里的变量，例如 /api/v1/issues/:issueId 中的 issueId；
@@ -91,5 +92,28 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
       return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     }
     return { id: issueId, status: parsed.data.status };
+  });
+
+  // 把 body 里列出的 Issue 合并进路径里的这个 Issue，见 services/issues.ts。
+  app.post('/api/v1/issues/:issueId/merge', async (request, reply) => {
+    const parsed = mergeIssuesSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'INVALID_MERGE',
+        message: 'Provide issueIds: the issues to merge into this one.',
+      });
+    }
+    try {
+      return mergeIssues(database, stringParam(request.params, 'issueId'), parsed.data.issueIds);
+    } catch (error) {
+      if (!(error instanceof MergeError)) throw error;
+      const [status, message] = {
+        INVALID_MERGE: [400, 'An issue cannot be merged into itself.'],
+        ISSUE_NOT_FOUND: [404, 'One of the issues does not exist.'],
+        DIFFERENT_PROJECT: [409, 'Only issues of the same project can be merged.'],
+        INVESTIGATION_RUNNING: [409, 'Wait for the running investigation to finish, or cancel it.'],
+      }[error.code] as [number, string];
+      return reply.code(status).send({ error: error.code, message });
+    }
   });
 }

@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
-import { stripUrlQuery, type MonitorEvent } from '@trace-pilot/shared';
+import { DEFAULT_FINGERPRINT, stripUrlQuery, type MonitorEvent } from '@trace-pilot/shared';
 
 /**
  * 错误指纹：决定「哪些错误算同一个 Issue」。
  *
  * 线上同一个 bug 每天可能触发上万次，每次的错误消息都略有不同（订单号、用户 ID、时间戳……）。
  * 把这些动态部分替换成占位符后再算哈希，同一根因的所有发生就得到同一个指纹，
- * 在 issues 表里聚合成一行（UNIQUE(project_id, fingerprint)）。归一化不足会把一个问题拆成很多个 Issue；
+ * 经 issue_fingerprints 表指向同一个 Issue。归一化不足会把一个问题拆成很多个 Issue；
  * 过度归一化则会把不同问题合并到一起。
+ *
+ * 现行算法（v2）在 Source Map 还原之后计算，用应用自己的栈顶帧在源码里的位置：
+ * 「源文件 + 函数名 + 出错那行代码」，不看行列号。压缩后的函数名和列号每次构建都可能变，
+ * 按它们聚合的话，同一个 bug 发一次版就成了新 Issue，回归检测也随之失效；
+ * 出错那行代码则不随上下文的增删而变。没有 map 时退回压缩后的栈顶帧（与 v1 相同）。
  */
 
 /** 生成参与指纹计算的归一化文本：动态片段换成占位符，再统一小写。 */
@@ -81,7 +86,7 @@ export function requestOutcome(payload: Record<string, unknown>): string {
  * 参与指纹的「消息」。失败的请求没有错误消息，按「方法 + 地址 + 状态码」区分：同一个地址上的
  * GET 404、POST 503 和连不上服务器是不同的问题，与 Issue 标题（POST /api/cart → 503）口径一致。
  * 曾经只用地址，三者被并成一个 Issue：标题随最新一条变化，级别停留在第一条的 warning，
- * 503 故障藏在一个「警告」里。业务码另外参与，见 eventFingerprint。
+ * 503 故障藏在一个「警告」里。业务码另外参与，见 businessCodePart。
  */
 function fingerprintMessage(event: MonitorEvent): string {
   const payload = event.payload;
@@ -91,22 +96,103 @@ function fingerprintMessage(event: MonitorEvent): string {
   return String(payload.message ?? payload.url ?? payload.metric ?? 'unknown');
 }
 
-/** 事件的指纹 = SHA-256(错误类型 | 消息 | 栈顶帧)，三部分都先归一化。 */
-export function eventFingerprint(event: MonitorEvent): string {
-  const payload = event.payload;
-  const kind = String(payload.name ?? payload.errorType ?? event.eventType);
-  const message = fingerprintMessage(event);
-  const stack = typeof payload.stack === 'string' ? payload.stack : undefined;
-  // 业务码按原样参与，不经过归一化：它们常是 4～6 位数字，会被当成业务 ID 换成占位符，
-  // 同一个接口上的「优惠券过期」和「库存变化」就被并成了一个 Issue。没有业务码的事件指纹不变。
-  const businessCode =
-    event.eventType === 'network' && payload.businessCode !== undefined
-      ? `|code:${String(payload.businessCode)}`
-      : '';
-  // 存哈希而不是拼接后的原文：长度固定（64 个十六进制字符），适合作为唯一键和索引。
-  return createHash('sha256')
-    .update(
-      `${normalizeMessage(kind)}|${normalizeMessage(message)}|${topStackFrame(stack)}${businessCode}`,
-    )
-    .digest('hex');
+/** 业务码按原样参与，不经过归一化：它们常是 4～6 位数字，会被当成业务 ID 换成占位符，
+ * 同一个接口上的「优惠券过期」和「库存变化」就被并成了一个 Issue。没有业务码的事件指纹不变。 */
+function businessCodePart(event: MonitorEvent): string {
+  return event.eventType === 'network' && event.payload.businessCode !== undefined
+    ? `|code:${String(event.payload.businessCode)}`
+    : '';
+}
+
+function errorKind(event: MonitorEvent): string {
+  return String(event.payload.name ?? event.payload.errorType ?? event.eventType);
+}
+
+// 存哈希而不是拼接后的原文：长度固定（64 个十六进制字符），适合作为唯一键和索引。
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * v1 指纹 = SHA-256(错误类型 | 消息 | 压缩后的栈顶帧)，三部分都先归一化。
+ * 现在只用来找到升级到 v2 之前建的 Issue：它们在 issue_fingerprints 里只登记了 v1 指纹。
+ */
+export function legacyFingerprint(event: MonitorEvent): string {
+  const stack = typeof event.payload.stack === 'string' ? event.payload.stack : undefined;
+  return sha256(
+    `${normalizeMessage(errorKind(event))}|${normalizeMessage(fingerprintMessage(event))}|${topStackFrame(stack)}${businessCodePart(event)}`,
+  );
+}
+
+/** 聚合只需要的栈帧信息；services/sourcemaps.ts 的 ResolvedFrame 满足它。 */
+export interface GroupingFrame {
+  raw: string;
+  file: string;
+  original?: { source: string; line: number; name: string | null; contextLine: string | null };
+}
+
+/**
+ * 不属于应用自己代码的帧：依赖包（node_modules，包括 Vite 开发时的 /node_modules/.vite/deps/）、
+ * 浏览器扩展、打包器的运行时。崩在 React 内部的错误，栈顶是 react-dom 的帧，按它聚合会把
+ * 所有「渲染时出错」并成一个 Issue；应该往下找第一个应用自己的帧。
+ */
+const NOT_IN_APP =
+  /(?:^|\/)node_modules\/|(?:chrome|moz|safari|safari-web)-extension:\/\/|^webpack\/(?:runtime|bootstrap)|^\(webpack\)/i;
+
+export function isInAppFrame(frame: GroupingFrame): boolean {
+  return !NOT_IN_APP.test(frame.original?.source ?? frame.file) && !NOT_IN_APP.test(frame.raw);
+}
+
+/** 源文件路径去掉打包器加的前缀（webpack://app/、./、../），同一个文件在不同构建里写法一致。 */
+function sourcePath(source: string): string {
+  return source
+    .replace(/^webpack:\/\/[^/]*\//i, '')
+    .replace(/^(?:\.\.?\/)+/, '')
+    .replace(/[?#].*$/, '');
+}
+
+/**
+ * 参与聚合的那一帧：第一个应用自己的帧，没有就用栈顶帧。
+ * 映射到源码时取「源文件 + 函数名 + 出错那行代码」；map 没有内联源码时用行号代替代码。
+ * 映射不到时用压缩后的这一行（与 v1 的栈顶帧相同的归一化）。
+ */
+export function groupingFrame(frames: readonly GroupingFrame[]): string | null {
+  const frame = frames.find(isInAppFrame) ?? frames[0];
+  if (!frame) return null;
+  const original = frame.original;
+  if (!original) return normalizeMessage(frame.raw);
+  const code = original.contextLine?.replace(/\s+/g, ' ');
+  return normalizeMessage(
+    `${sourcePath(original.source)}:${original.name ?? ''}:${code ?? `line ${original.line}`}`,
+  );
+}
+
+/**
+ * 默认指纹（v2）= SHA-256(v2 | 错误类型 | 消息 | 聚合帧 [| 业务码])。frames 是还原之后的栈帧；
+ * 不传或为空（没有堆栈、解析不出栈帧）时，退回从堆栈文本里取栈顶帧。
+ */
+export function defaultFingerprint(
+  event: MonitorEvent,
+  frames: readonly GroupingFrame[] = [],
+): string {
+  const stack = typeof event.payload.stack === 'string' ? event.payload.stack : undefined;
+  const frame = groupingFrame(frames) ?? topStackFrame(stack);
+  return sha256(
+    `v2|${normalizeMessage(errorKind(event))}|${normalizeMessage(fingerprintMessage(event))}|${frame}${businessCodePart(event)}`,
+  );
+}
+
+/**
+ * 事件归入 Issue 用的指纹。SDK 传了自定义指纹（event.fingerprint）时按它算，
+ * 其中的 "{{ default }}" 换成默认指纹：['{{ default }}', 'tenant-a'] 表示在默认结果上再按租户细分。
+ */
+export function issueFingerprint(
+  event: MonitorEvent,
+  frames: readonly GroupingFrame[] = [],
+): { fingerprint: string; algorithm: 'v2' | 'custom' } {
+  const base = defaultFingerprint(event, frames);
+  if (!event.fingerprint?.length) return { fingerprint: base, algorithm: 'v2' };
+  const parts = event.fingerprint.map((part) => (part === DEFAULT_FINGERPRINT ? base : part));
+  // \u0000 不会出现在 SDK 校验过的字符串里，用它分隔，['a|b'] 和 ['a', 'b'] 不会撞成同一个指纹。
+  return { fingerprint: sha256(`custom|${parts.join('\u0000')}`), algorithm: 'custom' };
 }

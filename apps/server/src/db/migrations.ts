@@ -10,6 +10,7 @@ import type BetterSqlite3 from 'better-sqlite3';
  *     ├─ releases → projects    应用的一个发布版本（2.4.1 等），Source Map 按版本隔离
  *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里）
  *     └─ issues → projects      按「错误指纹」聚合出的一类问题，列表页的一行
+ *          ├─ issue_fingerprints 指向这个 Issue 的指纹，一个 Issue 可以有多个（合并、算法升级）
  *          ├─ events            一次具体发生（一条浏览器上报），同时关联到它所在的 release
  *          ├─ diagnoses         单次诊断的结果缓存
  *          └─ investigation_runs → investigation_events   排障 Agent 的一次调查及其完整事件流
@@ -112,6 +113,28 @@ export const MIGRATIONS: readonly Migration[] = [
     up: (sqlite) => {
       sqlite.exec('ALTER TABLE issues ADD COLUMN resolved_at INTEGER');
       sqlite.exec("UPDATE issues SET resolved_at = last_seen_at WHERE status = 'resolved'");
+    },
+  },
+  {
+    // 指纹与 Issue 解耦，一个 Issue 可以对应多个指纹：合并 Issue 时被合并方的指纹改指向目标；
+    // 聚合算法升级时，新算法算出的指纹也登记到原来的 Issue 上，正在发生的问题不会突然变成新 Issue。
+    // algorithm 记录指纹出自哪个算法：v1（升级前）、v2（还原后按应用帧）、custom（SDK 自定义）。
+    // 已有 Issue 的指纹都是 v1 算的，原样搬进来。
+    description: 'issue_fingerprints',
+    up: (sqlite) => {
+      sqlite.exec(`
+        CREATE TABLE issue_fingerprints (
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          fingerprint TEXT NOT NULL,
+          issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+          algorithm TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (project_id, fingerprint)
+        );
+        CREATE INDEX issue_fingerprints_issue ON issue_fingerprints(issue_id);
+        INSERT INTO issue_fingerprints (project_id, fingerprint, issue_id, algorithm, created_at)
+          SELECT project_id, fingerprint, id, 'v1', first_seen_at FROM issues;
+      `);
     },
   },
 ];

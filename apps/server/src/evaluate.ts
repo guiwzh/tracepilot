@@ -28,7 +28,7 @@ const config: ServerConfig = {
 };
 
 try {
-  seedDemoData(database);
+  await seedDemoData(database, config.sourceMapDir);
   const issues = listIssues(database, 'demo-project', { page: 1, pageSize: 100 }).items;
   let valid = 0;
   let evidenceItems = 0;

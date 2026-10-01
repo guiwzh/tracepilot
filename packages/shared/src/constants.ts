@@ -17,6 +17,8 @@ export const DEFAULT_DEDUPE_WINDOW = 5_000;
 export const DEFAULT_MAX_QUEUE_SIZE = 1_000;
 /** 每个事件最多携带的 breadcrumb（报错前的用户操作、请求、路由变化）条数。 */
 export const MAX_BREADCRUMBS = 50;
+/** 自定义指纹里代表「默认指纹」的占位符，见 MonitorEvent.fingerprint。 */
+export const DEFAULT_FINGERPRINT = '{{ default }}';
 /** 单次诊断的提示词版本，参与诊断缓存键；改动提示词时要递增，旧缓存才会失效。 */
 export const PROMPT_VERSION = 'diagnosis-evidence-v1';
 

@@ -19,8 +19,8 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 9,434 字节；业务应用打包后实际多付出 15,135 字节，
-其中 `web-vitals`（归因版本）约 5,272 字节。
+体积（`pnpm measure:sdk`，gzip）：发布产物 9,469 字节；业务应用打包后实际多付出 15,175 字节，
+其中 `web-vitals`（归因版本）约 5,280 字节。
 
 ## 2. 代码结构
 
@@ -140,18 +140,18 @@ monitor.start();
 
 ### 4.3 MonitorClient
 
-| 方法                                         | 说明                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------ |
-| `use(plugin)`                                | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装（未被采样的会话不装） |
-| `start()`                                    | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                         |
-| `setUser(user?)`                             | 之后的事件带上这个用户；服务端据此统计受影响用户数                             |
-| `captureException(error, context?)`          | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`                  |
-| `captureMessage(message, level?)`            | 上报一条消息，`level` 默认 `info`                                              |
-| `captureEvent(eventType, payload, options?)` | 底层采集入口，插件和上面两个方法都经过它；`options.page` 指定信号发生时的页面  |
-| `addBreadcrumb(breadcrumb)`                  | 加一条自定义面包屑                                                             |
-| `flush()`                                    | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回     |
-| `stats()`                                    | 当前投递状况                                                                   |
-| `destroy()`                                  | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()`   |
+| 方法                                          | 说明                                                                                              |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `use(plugin)`                                 | 注册插件，同名只注册一次；`start()` 之后注册的会立即安装（未被采样的会话不装）                    |
+| `start()`                                     | 安装插件并启动传输层；幂等。未被采样的会话什么都不安装                                            |
+| `setUser(user?)`                              | 之后的事件带上这个用户；服务端据此统计受影响用户数                                                |
+| `captureException(error, context?, options?)` | 上报一个异常，返回 `eventId`；被过滤、去重或取消时返回 `null`；`options.fingerprint` 自定义聚合键 |
+| `captureMessage(message, level?)`             | 上报一条消息，`level` 默认 `info`                                                                 |
+| `captureEvent(eventType, payload, options?)`  | 底层采集入口，插件和上面两个方法都经过它；`options.page` 指定信号发生时的页面                     |
+| `addBreadcrumb(breadcrumb)`                   | 加一条自定义面包屑                                                                                |
+| `flush()`                                     | 立即尝试发送队列，返回投递状况 `DeliveryStats`；服务端不可达时也会正常返回                        |
+| `stats()`                                     | 当前投递状况                                                                                      |
+| `destroy()`                                   | 逆序卸载插件、交出剩余事件、停止传输层；幂等。销毁后的实例不能再次 `start()`                      |
 
 `DeliveryStats` 用来判断事件是否真的到了服务端，而不是把 `flush()` resolve 当成「已送达」：
 
@@ -241,9 +241,21 @@ flowchart TD
 去重放在组装之前，错误风暴里被挡下的重复几乎没有开销。组装、`beforeSend` 和入队时抛出的异常都只让这次
 采集返回 `null`，不会传到业务代码。
 
-两个便捷方法：`captureException(error, context)` 的 payload 是错误的 `name`、`message`、`stack`，加上
+两个便捷方法：`captureException(error, context, options)` 的 payload 是错误的 `name`、`message`、`stack`，加上
 `context`，`level` 固定为 `error`；`captureMessage(message, level)` 的 payload 是
 `{ name: 'Message', message, level }`。
+
+`options.fingerprint` 是自定义聚合键，放在事件顶层（不混进 payload），服务端按它而不是默认指纹归入 Issue；其中的
+`'{{ default }}'` 代表默认指纹：
+
+```ts
+// 同一个错误按租户分开看
+monitor.captureException(error, { step: 'payment' }, { fingerprint: ['{{ default }}', tenantId] });
+// 不同位置抛出的超时并成一个 Issue
+monitor.captureException(error, {}, { fingerprint: ['checkout-timeout'] });
+```
+
+也可以在 `beforeSend` 里给事件设置 `fingerprint`。
 
 ### 5.4 面包屑
 
@@ -901,9 +913,9 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
-| 发布产物 `dist/index.js` | 29,608 |  9,434 | 10,800 |
-| 业务应用实际接入成本     | 45,747 | 15,135 | 17,300 |
-| 其中 `web-vitals`        |      — |  5,272 |      — |
+| 发布产物 `dist/index.js` | 29,676 |  9,469 | 10,800 |
+| 业务应用实际接入成本     | 45,815 | 15,175 | 17,300 |
+| 其中 `web-vitals`        |      — |  5,280 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
 白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
@@ -911,22 +923,22 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 13. 测试与质量保障
 
-**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，89 项）。`test/setup.ts` 为每个用例把
+**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，90 项）。`test/setup.ts` 为每个用例把
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
-| 测试文件                            | 覆盖                                                                                                                                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、`flush()` 的投递状况、配置规范化            |
-| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                |
-| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                     |
-| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                             |
-| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装 |
-| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                   |
-| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                 |
-| `plugins/WhiteScreenPlugin.test.ts` | 连续空白才上报、中途出现内容不报、骨架屏算空白、路由变化后重新检测且每个路由只报一次、后台暂停回前台再查、零尺寸视口、非法配置用默认值、teardown 停止检测并还原 `history`                                        |
-| `plugins/ConsolePlugin.test.ts`     | 默认只记 warn 与 error 且照常输出、对象只展开一层并遮蔽敏感键、参数抛错不影响业务调用、可配置级别与关闭、只还原自己的包装                                                                                        |
-| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                          |
+| 测试文件                            | 覆盖                                                                                                                                                                                                              |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、自定义指纹、`flush()` 的投递状况、配置规范化 |
+| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                 |
+| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                      |
+| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                              |
+| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装  |
+| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                    |
+| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                  |
+| `plugins/WhiteScreenPlugin.test.ts` | 连续空白才上报、中途出现内容不报、骨架屏算空白、路由变化后重新检测且每个路由只报一次、后台暂停回前台再查、零尺寸视口、非法配置用默认值、teardown 停止检测并还原 `history`                                         |
+| `plugins/ConsolePlugin.test.ts`     | 默认只记 warn 与 error 且照常输出、对象只展开一层并遮蔽敏感键、参数抛错不影响业务调用、可配置级别与关闭、只还原自己的包装                                                                                         |
+| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                           |
 
 **真实浏览器**（Playwright + Chromium）：
 

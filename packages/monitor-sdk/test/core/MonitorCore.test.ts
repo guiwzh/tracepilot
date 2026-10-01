@@ -96,6 +96,24 @@ describe('MonitorCore', () => {
     monitor.destroy();
   });
 
+  it('carries a custom fingerprint on the event without mixing it into the payload', () => {
+    const { monitor, events } = capturing();
+    monitor.start();
+    monitor.captureException(
+      new Error('timed out'),
+      { step: 'payment' },
+      { fingerprint: ['{{ default }}', 'tenant-a'] },
+    );
+    monitor.captureException(new Error('plain'));
+    expect(events[0]).toMatchObject({
+      fingerprint: ['{{ default }}', 'tenant-a'],
+      payload: { message: 'timed out', step: 'payment' },
+    });
+    expect(events[0]!.payload).not.toHaveProperty('fingerprint');
+    expect(events[1]).not.toHaveProperty('fingerprint');
+    monitor.destroy();
+  });
+
   it('lets a plugin submit its final sample while tearing down', async () => {
     // PerformancePlugin 的最终 LCP/CLS/INP 是在 teardown 里提交的。生命周期闸门
     // 曾经把这些提交一并拦掉，导致 destroy() 静默丢指标——而 SPA 组件卸载、热更新

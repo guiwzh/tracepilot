@@ -2,13 +2,19 @@ import { randomUUID } from 'node:crypto';
 import {
   redactPayload,
   redactSensitive,
+  redactStack,
   stripUrlQuery,
   type EventEnvelope,
   type MonitorEvent,
 } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
-import { eventFingerprint, normalizeDisplayTitle, requestOutcome } from '../lib/fingerprint';
-import type { StoredStack } from './sourcemaps';
+import {
+  issueFingerprint,
+  legacyFingerprint,
+  normalizeDisplayTitle,
+  requestOutcome,
+} from '../lib/fingerprint';
+import { resolveStack, type ResolvedStack } from './sourcemaps';
 
 /** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
 export interface IngestResult {
@@ -25,10 +31,10 @@ export interface IngestResult {
 export interface IngestOutcome {
   result: IngestResult;
   /**
-   * 本批新写入、带堆栈的事件，入库之后交给 Source Map 还原。重复送达的事件不在其中：
-   * 它们第一次入库时已经还原过，曾经每次重试都要把整批再还原一遍。
+   * Source Map 还原出错的事件数。还原是附加信息：出错的事件照常入库，按压缩堆栈聚合，
+   * 只是少了原始栈；这个数只用来记日志。
    */
-  stacks: StoredStack[];
+  symbolicationFailures: number;
 }
 
 /** 接入被拒绝的原因。路由据此返回 403；其余错误按服务端问题处理。 */
@@ -139,7 +145,10 @@ function eventLevel(event: MonitorEvent): 'error' | 'warning' | 'info' {
   if (event.eventType === 'performance') return 'info';
   // 业务码表示失败的请求是真实的失败（接入方的判定函数只标记真正的错误），与 5xx 同级。
   if (event.eventType === 'network' && event.payload.businessCode !== undefined) return 'error';
-  if (event.eventType === 'network' && Number(event.payload.status ?? 0) < 500) return 'warning';
+  // 4xx 是 warning；5xx 和拿不到响应（状态码 0：断网、超时、跨域被拦）是 error，
+  // 与 SDK 默认把这两类请求判为失败的口径一致。
+  const status = Number(event.payload.status ?? 0);
+  if (event.eventType === 'network' && status > 0 && status < 500) return 'warning';
   return 'error';
 }
 
@@ -158,46 +167,72 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
 }
 
 /**
- * 把事件归到一个 Issue 上：已有相同指纹的 Issue 就更新它，没有就新建（这种「有则更新、无则插入」
- * 常被叫作 upsert）。成功的网络请求、性能样本不形成 Issue，返回 null。
+ * 把事件归到一个 Issue 上：按指纹在 issue_fingerprints 里找到 Issue 就更新它，找不到就新建
+ * （这种「有则更新、无则插入」常被叫作 upsert）。成功的网络请求、性能样本不形成 Issue，返回 null。
  *
- * 一条 INSERT … ON CONFLICT DO UPDATE 完成：UNIQUE(project_id, fingerprint) 冲突时走更新分支。
- * 更新分支里不带前缀的列名指已有的那一行，excluded.列名 指这次本想插入的值；
- * SET 右边读到的都是更新之前的旧值，所以几个 CASE 判断的是同一个旧状态。
+ * 指纹与 Issue 是多对一：合并 Issue、升级聚合算法之后，多个指纹指向同一个 Issue。
+ * 新算法（v2）的指纹找不到时，再按旧算法（v1）算一次：升级之前建的 Issue 只登记了 v1 指纹，
+ * 找到了就把 v2 指纹也登记上去，正在发生的问题不会因为算法升级突然变成新 Issue。
+ * SDK 自定义的指纹不走这一步：自定义正是为了改变聚合结果，退回旧指纹会把它又并回去。
  *
- * - 出现时间：取最早和最晚；事件乱序到达时，只有更新的事件才改写标题。
+ * 更新时：
+ * - 出现时间取最早和最晚；事件乱序到达时，只有不早于已知最晚一次的事件才改写标题。
  * - 回归：已解决的 Issue 又发生了新事件（发生时间晚于标记解决的时间），重新打开为未解决。
  *   只看发生时间，所以解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）
  *   不会把它重新打开。已忽略的 Issue 保持忽略。
- * - 计数（event_count、user_count）从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加，
- *   避免新建 Issue 的首条事件被同时计入初始值和增量而重复计数。
+ * - SET 右边读到的都是更新之前的旧值，所以几个 CASE 判断的是同一个旧状态。
+ * - 计数（event_count、user_count）从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加。
  */
-function upsertIssue(database: TraceDatabase, event: MonitorEvent): string | null {
+function resolveIssue(
+  database: TraceDatabase,
+  event: MonitorEvent,
+  resolved: ResolvedStack | undefined,
+): string | null {
   if (!shouldCreateIssue(event)) return null;
-  const row = database.sqlite
+  const { fingerprint, algorithm } = issueFingerprint(event, resolved?.frames);
+  const find = database.sqlite.prepare(
+    'SELECT issue_id FROM issue_fingerprints WHERE project_id = ? AND fingerprint = ?',
+  );
+  const register = database.sqlite.prepare(
+    `INSERT INTO issue_fingerprints (project_id, fingerprint, issue_id, algorithm, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  let issueId = (find.get(event.projectId, fingerprint) as { issue_id: string } | undefined)
+    ?.issue_id;
+  if (!issueId && algorithm === 'v2') {
+    issueId = (
+      find.get(event.projectId, legacyFingerprint(event)) as { issue_id: string } | undefined
+    )?.issue_id;
+    if (issueId) register.run(event.projectId, fingerprint, issueId, algorithm, event.timestamp);
+  }
+
+  const values = { title: eventTitle(event), level: eventLevel(event), timestamp: event.timestamp };
+  if (issueId) {
+    database.sqlite
+      .prepare(
+        `UPDATE issues SET
+           first_seen_at = MIN(first_seen_at, @timestamp),
+           last_seen_at = MAX(last_seen_at, @timestamp),
+           title = CASE WHEN @timestamp >= last_seen_at THEN @title ELSE title END,
+           status = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
+             THEN 'unresolved' ELSE status END,
+           resolved_at = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
+             THEN NULL ELSE resolved_at END
+         WHERE id = @id`,
+      )
+      .run({ ...values, id: issueId });
+    return issueId;
+  }
+  const id = randomUUID();
+  // issues.fingerprint 记下建 Issue 时的指纹，供搜索和展示；归并只查 issue_fingerprints。
+  database.sqlite
     .prepare(
       `INSERT INTO issues (id, project_id, fingerprint, title, status, level, first_seen_at, last_seen_at)
-       VALUES (@id, @projectId, @fingerprint, @title, 'unresolved', @level, @timestamp, @timestamp)
-       ON CONFLICT(project_id, fingerprint) DO UPDATE SET
-         first_seen_at = MIN(first_seen_at, excluded.first_seen_at),
-         last_seen_at = MAX(last_seen_at, excluded.last_seen_at),
-         title = CASE WHEN excluded.last_seen_at >= last_seen_at THEN excluded.title ELSE title END,
-         status = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
-           THEN 'unresolved' ELSE status END,
-         resolved_at = CASE WHEN status = 'resolved' AND excluded.last_seen_at > COALESCE(resolved_at, 0)
-           THEN NULL ELSE resolved_at END
-       RETURNING id`,
+       VALUES (@id, @projectId, @fingerprint, @title, 'unresolved', @level, @timestamp, @timestamp)`,
     )
-    .get({
-      id: randomUUID(),
-      projectId: event.projectId,
-      // 指纹是聚合键；同项目相同指纹复用同一个 Issue。
-      fingerprint: eventFingerprint(event),
-      title: eventTitle(event),
-      level: eventLevel(event),
-      timestamp: event.timestamp,
-    }) as { id: string };
-  return row.id;
+    .run({ ...values, id, projectId: event.projectId, fingerprint });
+  register.run(event.projectId, fingerprint, id, algorithm, event.timestamp);
+  return id;
 }
 
 function isFirstEventForUser(
@@ -228,26 +263,44 @@ function updateIssueCounters(
     .run(firstSeenForUser ? 1 : 0, issueId);
 }
 
+/** 信封里的一个事件，经过规范化之后、入库之前。 */
+interface PreparedEvent {
+  /** 换算到服务端时钟、尚未脱敏的事件；Web Vitals 覆盖时要用它重新脱敏。 */
+  raw: MonitorEvent;
+  /** 脱敏后的事件，入库和聚合都用它。 */
+  event: MonitorEvent;
+  rowId: string;
+  metricId: string | null;
+  stack: string | null;
+  /** Source Map 还原的结果；没有堆栈、重复送达或还原出错时没有。 */
+  resolved?: ResolvedStack;
+}
+
 /**
- * 接入一个信封（SDK 一次上报的一批事件）。对每个事件依次：
+ * 接入一个信封（SDK 一次上报的一批事件），分三段：
  *
- *   1. 确认它属于 DSN Key 对应的项目，把事件时间换算到服务端时钟；
- *   2. 幂等检查：同一个 id 已经存过就跳过（Web Vitals 例外：按指标 id 覆盖为更新的值）；
- *   3. 脱敏，关联或创建 Release，按指纹归入 Issue；
- *   4. 写入事件，更新 Issue 的事件数和影响用户数。
+ *   1. 规范化（同步）：确认每个事件都属于 DSN Key 对应的项目，把时间换算到服务端时钟，
+ *      算出行 id，脱敏。项目不符时整个信封被拒绝，什么都还没写。
+ *   2. 还原（异步，在事务之外）：对带堆栈、尚未入库的事件做 Source Map 还原。读 map 文件是异步的，
+ *      而 SQLite 事务必须同步执行完，所以还原放在事务之前。出错只计数，事件照常入库。
+ *   3. 入库（同步，一个事务）：幂等检查（Web Vitals 例外：按指标 id 覆盖为更新的值），关联或创建 Release，
+ *      用还原后的栈帧算指纹、归入 Issue，写入事件，更新 Issue 的事件数和影响用户数。
+ *
+ * 先还原、再聚合，和 Sentry 等产品的顺序一致：聚合看的是源码位置，同一个 bug 不会因为重新构建
+ * 换了压缩后的函数名和列号就变成新的 Issue。这要求 map 在流量到来之前上传（构建时上传）；
+ * 事后补传的 map 只回填 original_stack，不会重新聚合已经入库的事件。
  *
  * 「幂等」指同一个请求执行一次和执行多次效果相同。浏览器会重试、beacon 和普通请求可能重复送达，
- * 所以接入必须幂等，否则同一个错误会被数成好几次。
+ * 所以接入必须幂等，否则同一个错误会被数成好几次。第 2 段之前先查一次重复，重复送达的事件不再还原；
+ * 第 3 段在事务里再查一次，两个并发请求送来同一个事件时也只写入一次。
  *
- * 整批写入包在一个事务里：事务中的所有写操作要么全部生效，要么全部撤销。比如一个信封里第 7 个事件
- * 声明了别的项目，前 6 个事件的写入也会被撤回，数据库里不会留下半个信封。
- * 事务还让一批写入只需落盘一次，比逐条提交快得多。
+ * 整批写入包在一个事务里：所有写操作要么全部生效，要么全部撤销，一批写入也只需落盘一次。
  */
-export function ingestEnvelope(
+export async function ingestEnvelope(
   database: TraceDatabase,
   envelope: EventEnvelope,
   receivedAt = Date.now(),
-): IngestOutcome {
+): Promise<IngestOutcome> {
   // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
   const project = database.sqlite
     .prepare('SELECT id FROM projects WHERE dsn_key = ?')
@@ -255,30 +308,59 @@ export function ingestEnvelope(
   if (!project) throw new IngestError('INVALID_DSN');
   const offset = clockOffset(envelope.sentAt, receivedAt);
 
+  // 1. 规范化
+  const prepared: PreparedEvent[] = envelope.events.map((reported) => {
+    if (reported.projectId !== project.id) throw new IngestError('PROJECT_DSN_MISMATCH');
+    const raw = toServerClock(reported, offset, receivedAt);
+    const metricId = metricInstanceId(raw);
+    // SDK 虽然已经脱敏过，Server 仍把客户端数据视为不可信并再做一遍：
+    // 遮蔽 token、password 等字段，去掉 URL 里的查询参数。
+    const event = redactEvent(raw);
+    return {
+      raw,
+      event,
+      metricId,
+      // 指标样本的行 id 由 metricId 派生，普通事件沿用 SDK 生成的 eventId。
+      rowId: metricId ? `metric:${project.id}:${metricId}` : raw.eventId,
+      stack: typeof event.payload.stack === 'string' ? event.payload.stack : null,
+    };
+  });
+
+  // 2. 还原
+  const findRelease = database.sqlite.prepare(
+    'SELECT id FROM releases WHERE project_id = ? AND version = ?',
+  );
+  const stored = database.sqlite.prepare('SELECT 1 FROM events WHERE id = ?');
+  let symbolicationFailures = 0;
+  for (const item of prepared) {
+    if (!item.stack || item.metricId || stored.get(item.rowId)) continue;
+    // 版本还没登记时没有任何 map，只解析栈帧（聚合仍要用它挑出应用自己的帧）。
+    const release = findRelease.get(project.id, item.event.release) as { id: string } | undefined;
+    try {
+      item.resolved = await resolveStack(database, release?.id ?? null, item.stack);
+    } catch {
+      symbolicationFailures += 1;
+    }
+  }
+
+  // 3. 入库
   let accepted = 0;
   let duplicates = 0;
   let metricUpdates = 0;
   const issueIds = new Set<string>();
-  const stacks: StoredStack[] = [];
-
   // transaction() 把回调包装成一个事务函数：调用时先 BEGIN，回调正常结束则 COMMIT（提交生效），
   // 回调里任何地方抛错则 ROLLBACK（全部撤销），错误继续向外抛给路由处理。
   const ingest = database.sqlite.transaction(() => {
-    for (const reported of envelope.events) {
-      if (reported.projectId !== project.id) throw new IngestError('PROJECT_DSN_MISMATCH');
-      const rawEvent = toServerClock(reported, offset, receivedAt);
-      const metricId = metricInstanceId(rawEvent);
-      // 指标样本的行 id 由 metricId 派生，普通事件沿用 SDK 生成的 eventId。
-      const rowId = metricId ? `metric:${project.id}:${metricId}` : rawEvent.eventId;
+    for (const { raw, event, rowId, metricId, stack, resolved } of prepared) {
       const existing = database.sqlite
         .prepare('SELECT created_at FROM events WHERE id = ?')
         .get(rowId) as { created_at: number } | undefined;
       if (existing && metricId) {
         // 以采集时间为准做「后写者胜」：重试后才送达的旧值晚到时，不能覆盖已经入库的新值。
-        if (rawEvent.timestamp >= existing.created_at) {
+        if (raw.timestamp >= existing.created_at) {
           database.sqlite
             .prepare('UPDATE events SET context_json = ?, created_at = ? WHERE id = ?')
-            .run(JSON.stringify(eventContext(redactEvent(rawEvent))), rawEvent.timestamp, rowId);
+            .run(JSON.stringify(eventContext(event)), raw.timestamp, rowId);
         }
         metricUpdates += 1;
         continue;
@@ -289,35 +371,30 @@ export function ingestEnvelope(
         continue;
       }
 
-      // SDK 虽然已经脱敏过，Server 仍把客户端数据视为不可信并再做一遍：
-      // 遮蔽 token、password 等字段，去掉 URL 里的查询参数。
-      const event = redactEvent(rawEvent);
       const releaseId = ensureRelease(database, event);
-      const issueId = upsertIssue(database, event);
-      const message = eventTitle(event);
-      const stack = typeof event.payload.stack === 'string' ? event.payload.stack : null;
+      const issueId = resolveIssue(database, event, resolved);
       const userId = event.user?.id ?? event.user?.anonymousId ?? null;
-      const context = eventContext(event);
-
       // 必须在事件落库之前判定，否则会查到本条刚写入的记录。
       const firstSeenForUser = issueId ? isFirstEventForUser(database, issueId, userId) : false;
 
       database.sqlite
         .prepare(
-          `INSERT INTO events (id, issue_id, release_id, type, message, stack, page_url, user_id,
-             context_json, breadcrumbs_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO events (id, issue_id, release_id, type, message, stack, original_stack, page_url,
+             user_id, context_json, breadcrumbs_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           rowId,
           issueId,
           releaseId,
           event.eventType,
-          message,
+          eventTitle(event),
           stack,
+          // 还原后的堆栈同样按栈帧规则脱敏：只删帧里的查询参数，保留行列号。
+          resolved?.text ? redactStack(resolved.text) : null,
           stripUrlQuery(event.page.url),
           userId,
-          JSON.stringify(context),
+          JSON.stringify(eventContext(event)),
           JSON.stringify(event.breadcrumbs),
           event.timestamp,
         );
@@ -325,11 +402,13 @@ export function ingestEnvelope(
         updateIssueCounters(database, issueId, firstSeenForUser);
         issueIds.add(issueId);
       }
-      if (stack) stacks.push({ eventId: rowId, releaseId, stack });
       accepted += 1;
     }
   });
   // 真正执行事务。计数变量在回调里被累加，回调抛错时它们已经无关紧要（错误会一路抛出）。
   ingest();
-  return { result: { accepted, duplicates, metricUpdates, issueIds: [...issueIds] }, stacks };
+  return {
+    result: { accepted, duplicates, metricUpdates, issueIds: [...issueIds] },
+    symbolicationFailures,
+  };
 }
