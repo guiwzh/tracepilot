@@ -29,6 +29,14 @@ describe('database migrations', () => {
     const database = createDatabase(path);
     expect(database.sqlite.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
     expect(columns(database.sqlite, 'issues')).toContain('resolved_at');
+    expect(columns(database.sqlite, 'projects')).toContain('settings_json');
+    expect(columns(database.sqlite, 'ingest_outcomes')).toEqual([
+      'project_id',
+      'hour',
+      'outcome',
+      'reason',
+      'count',
+    ]);
     database.close();
   });
 

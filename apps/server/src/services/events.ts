@@ -48,6 +48,21 @@ export class IngestError extends Error {
 }
 
 /**
+ * 确认信封属于一个项目：DSN Key 存在，且每个事件声明的项目都是这个 Key 的项目。返回项目 id。
+ * 路由在过滤和限流之前先调用它（凭据不对的上报连过滤计数都不该进），ingestEnvelope 自己也会再确认一次。
+ */
+export function authorizeEnvelope(database: TraceDatabase, envelope: EventEnvelope): string {
+  const project = database.sqlite
+    .prepare('SELECT id FROM projects WHERE dsn_key = ?')
+    .get(envelope.dsnKey) as { id: string } | undefined;
+  if (!project) throw new IngestError('INVALID_DSN');
+  if (envelope.events.some((event) => event.projectId !== project.id)) {
+    throw new IngestError('PROJECT_DSN_MISMATCH');
+  }
+  return project.id;
+}
+
+/**
  * 设备时钟与服务端相差超过这个值，才认为设备时钟不准。SDK 每次发送时写入 sentAt，它与服务端
  * 收到的时间正常只差网络耗时和几百毫秒的快速重试，远小于一分钟。
  */
@@ -303,16 +318,12 @@ export async function ingestEnvelope(
   envelope: EventEnvelope,
   receivedAt = Date.now(),
 ): Promise<IngestOutcome> {
-  // 先用公开 DSN Key 找项目；后面还会校验每个事件声明的 projectId。
-  const project = database.sqlite
-    .prepare('SELECT id FROM projects WHERE dsn_key = ?')
-    .get(envelope.dsnKey) as { id: string } | undefined;
-  if (!project) throw new IngestError('INVALID_DSN');
+  // 用公开 DSN Key 找项目，并确认每个事件声明的 projectId 都是它：不符时整个信封被拒绝，什么都还没写。
+  const project = { id: authorizeEnvelope(database, envelope) };
   const offset = clockOffset(envelope.sentAt, receivedAt);
 
   // 1. 规范化
   const prepared: PreparedEvent[] = envelope.events.map((reported) => {
-    if (reported.projectId !== project.id) throw new IngestError('PROJECT_DSN_MISMATCH');
     const raw = toServerClock(reported, offset, receivedAt);
     const metricId = metricInstanceId(raw);
     // SDK 虽然已经脱敏过，Server 仍把客户端数据视为不可信并再做一遍：

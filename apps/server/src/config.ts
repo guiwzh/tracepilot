@@ -27,6 +27,18 @@ export interface ServerConfig {
   localAgentStepDelayMs: number;
   /** 是否允许排障 Agent 把出错行附近的源码片段发给模型服务商。 */
   agentSourceContext: boolean;
+  /** 每个项目每分钟最多接收的事件数（没有在项目设置里单独调的项目用它）；0 表示不限。 */
+  ingestRateLimitPerMinute: number;
+  /** 是否启用突增保护（services/ingestGuard.ts）；关闭时项目设置里的开关不起作用。 */
+  spikeProtection: boolean;
+}
+
+/** 非负整数；没有设置或不是数字时用默认值（写错的值不应悄悄变成 0，也就是「不限」）。 */
+function nonNegative(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return value !== undefined && value.trim() !== '' && Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : fallback;
 }
 
 /**
@@ -48,5 +60,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     localAgentStepDelayMs: Math.max(0, Number(env.LOCAL_AGENT_STEP_DELAY_MS ?? 450) || 0),
     // 源码会离开本机发往模型服务商；有合规要求的团队可以设为 false 关闭。
     agentSourceContext: env.AGENT_SOURCE_CONTEXT !== 'false',
+    // 默认每分钟 6,000 个（每秒 100 个）：单机 SQLite 每秒能接入上万个事件，留出余量给别的项目和查询。
+    ingestRateLimitPerMinute: nonNegative(env.INGEST_RATE_LIMIT_PER_MINUTE, 6_000),
+    spikeProtection: env.SPIKE_PROTECTION !== 'false',
   };
 }

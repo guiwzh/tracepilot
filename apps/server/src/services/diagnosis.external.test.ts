@@ -145,6 +145,8 @@ async function buildModelApp(modelApiUrl: string) {
     modelName: 'mock-evidence-model',
     localAgentStepDelayMs: 0,
     agentSourceContext: true,
+    ingestRateLimitPerMinute: 6_000,
+    spikeProtection: true,
     modelApiKey: 'test-only-key',
     modelApiUrl,
   };

@@ -45,6 +45,8 @@ beforeEach(async () => {
     modelName: 'test-model',
     localAgentStepDelayMs: 0,
     agentSourceContext: true,
+    ingestRateLimitPerMinute: 6_000,
+    spikeProtection: true,
   };
   app = await buildApp({ config, logger: false });
 });
@@ -1095,5 +1097,140 @@ describe('issue grouping', () => {
     });
     expect(busy.statusCode).toBe(409);
     expect(busy.json()).toMatchObject({ error: 'INVESTIGATION_RUNNING' });
+  });
+});
+
+describe('ingest protection', () => {
+  const settingsUrl = '/api/v1/projects/demo-project/settings';
+
+  async function settings() {
+    return (await app.inject({ method: 'GET', url: settingsUrl })).json() as {
+      settings: {
+        inboundFilters: { errorMessages: string[]; releases: string[] } & Record<string, unknown>;
+        rateLimit: { eventsPerMinute: number | null; spikeProtection: boolean };
+      };
+      serverDefaults: { eventsPerMinute: number; spikeProtection: boolean };
+    };
+  }
+
+  function put(payload: object) {
+    return app.inject({ method: 'PUT', url: settingsUrl, payload });
+  }
+
+  function batch(prefix: string, count: number, patch: Partial<MonitorEvent> = {}): MonitorEvent[] {
+    return Array.from({ length: count }, (_, index) => ({
+      ...event(`${prefix}-${index}`, String(70_000_000 + index)),
+      ...patch,
+    }));
+  }
+
+  async function stats() {
+    return (
+      await app.inject({ method: 'GET', url: '/api/v1/projects/demo-project/ingest-stats' })
+    ).json() as {
+      accepted: number;
+      filtered: Record<string, number>;
+      rateLimited: Record<string, number>;
+      hourly: Array<{ accepted: number; filtered: number; rateLimited: number }>;
+    };
+  }
+
+  it('starts from defaults and replaces the whole settings object', async () => {
+    const initial = await settings();
+    expect(initial.settings.inboundFilters).toMatchObject({
+      browserExtensions: true,
+      webCrawlers: true,
+      localhost: false,
+    });
+    expect(initial.serverDefaults).toEqual({ eventsPerMinute: 6_000, spikeProtection: true });
+
+    const next = {
+      ...initial.settings,
+      inboundFilters: { ...initial.settings.inboundFilters, releases: ['1.*'] },
+      rateLimit: { eventsPerMinute: 1_200, spikeProtection: false },
+    };
+    expect((await put(next)).json().settings).toEqual(next);
+    expect((await settings()).settings).toEqual(next);
+    // 少于 100 个的上限放不下一个满信封，拒绝。
+    const tooLow = { ...next, rateLimit: { eventsPerMinute: 10, spikeProtection: true } };
+    expect((await put(tooLow)).statusCode).toBe(400);
+    expect(
+      (await app.inject({ method: 'PUT', url: '/api/v1/projects/missing/settings', payload: next }))
+        .statusCode,
+    ).toBe(404);
+  });
+
+  it('drops filtered events before they reach an issue and counts them by reason', async () => {
+    const current = (await settings()).settings;
+    await put({
+      ...current,
+      inboundFilters: { ...current.inboundFilters, errorMessages: ['*cannot read cart*'] },
+    });
+    const bot = { device: { userAgent: 'Mozilla/5.0 (compatible; Googlebot/2.1)' } };
+    const kept: MonitorEvent = {
+      ...event('kept', '80000001'),
+      payload: { name: 'RangeError', message: 'Invalid quantity', stack: 'RangeError: x' },
+    };
+    const response = await send(...batch('noise', 3), ...batch('crawler', 2, bot), kept);
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ accepted: 1, filtered: 5 });
+    expect((await listIssues()).map((issue) => issue.title)).toEqual(['Invalid quantity']);
+    expect(await stats()).toMatchObject({
+      accepted: 1,
+      filtered: { 'error-message': 3, 'web-crawler': 2 },
+      rateLimited: {},
+    });
+  });
+
+  it('answers 429 with Retry-After once a project is over its limit, keeping other projects open', async () => {
+    const current = (await settings()).settings;
+    await put({ ...current, rateLimit: { eventsPerMinute: 600, spikeProtection: true } });
+    // 每分钟 600 个 → 桶最多攒 100 个，一个满信封就用完。
+    expect((await send(...batch('first', 100))).statusCode).toBe(202);
+    const limited = await send(...batch('second', 50));
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+    expect(limited.json()).toMatchObject({ error: 'RATE_LIMITED', reason: 'project-rate-limit' });
+
+    // 被拒的一批什么都没写；别的项目不受影响。
+    expect((await listIssues())[0]!.eventCount).toBe(100);
+    const other = (
+      await app.inject({ method: 'POST', url: '/api/v1/projects', payload: { name: 'Other' } })
+    ).json() as { id: string; dsnKey: string };
+    const otherResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/envelopes',
+      payload: {
+        dsnKey: other.dsnKey,
+        sentAt: Date.now(),
+        events: batch('other', 50, { projectId: other.id }),
+      },
+    });
+    expect(otherResponse.statusCode).toBe(202);
+    expect((await stats()).rateLimited).toEqual({ 'project-rate-limit': 50 });
+  });
+
+  it('rejects a sudden spike above the floor even under the rate limit', async () => {
+    for (let index = 0; index < 6; index += 1) {
+      expect((await send(...batch(`spike-${index}`, 100))).statusCode).toBe(202);
+    }
+    const spike = await send(...batch('spike-6', 100));
+    expect(spike.statusCode).toBe(429);
+    expect(spike.json().reason).toBe('spike-protection');
+    // 关掉这个项目的突增保护就收下。
+    const current = (await settings()).settings;
+    await put({ ...current, rateLimit: { ...current.rateLimit, spikeProtection: false } });
+    expect((await send(...batch('spike-7', 100))).statusCode).toBe(202);
+  });
+
+  it('checks credentials before filtering', async () => {
+    // 全部会被过滤掉的事件，项目却对不上：仍然是 403，不是「收下了 0 个」。
+    const response = await send(
+      ...batch('foreign', 2, {
+        projectId: 'someone-else',
+        device: { userAgent: 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      }),
+    );
+    expect(response.statusCode).toBe(403);
   });
 });

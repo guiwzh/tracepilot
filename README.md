@@ -147,6 +147,10 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
   「已解决又出现」的回归检测也跟着失效。改为在聚合之前还原，按「源文件 + 函数名 + 出错那行代码」聚合，不看行列号，
   并跳过依赖包的帧。旧数据靠指纹映射表衔接：新算法找不到时按旧算法再找一次，找到就把新指纹登记到原 Issue 上。
   代价是聚合依赖 map 先到，缺 map 的版本会单独成 Issue，所以 map 要在构建时上传，分开的可以手动合并。
+- **限流不能只是一个数**　DSN Key 写在浏览器里，谁都能拿来上报。按项目的令牌桶兜住服务端（一个项目打满不影响别的项目）；
+  突增保护按「过去一小时常态的 10 倍」自适应地拒收发版带来的死循环报错，保护的是数据不被一个 Issue 淹没。拒收返回 429 +
+  `Retry-After`，SDK 照它退避；被过滤和被限流的事件按原因计数，否则就是看不见的丢数据。计数在内存里合并、每 10 秒写一次，
+  而不是给写入最频繁的接入路径每个请求再加一次落盘。
 - **map 跟着内容走，不跟着版本号走**　按「版本 + 文件名」找 map，SDK 的版本号配错一次，这个版本的错误就全都还原不了；
   同一个版本号重新构建过，旧页面的错误还会被新 map 还原到一行不相干的代码上。Vite 构建插件给产物和 map 写入同一个
   Debug ID（ECMA-426 提案、Sentry 的做法），在产物开头注入一行登记代码，SDK 出错时带上堆栈里各文件的 Debug ID，
@@ -216,7 +220,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 226 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 245 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -248,7 +252,7 @@ pnpm evaluate:agent
 ```mermaid
 flowchart LR
   App[业务 Web 应用] --> SDK[监控 SDK]
-  SDK --> Ingest[Fastify 接入 API]
+  SDK --> Ingest[Fastify 接入 API<br/>过滤 · 限流]
   Ingest --> DB[(SQLite)]
   Build[Vite 构建插件] -- Debug ID + 私有 map --> Maps[私有 Source Map]
   Maps --> Symbolicate[堆栈还原]
@@ -272,8 +276,9 @@ flowchart LR
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、
 [ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md)、
 [ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)、
-[ADR 0004](docs/decisions/0004-grouping-after-symbolication.md) 与
-[ADR 0005](docs/decisions/0005-debug-ids.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)、
+[ADR 0005](docs/decisions/0005-debug-ids.md) 与
+[ADR 0006](docs/decisions/0006-ingest-protection.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -289,8 +294,11 @@ flowchart LR
   按 `sentAt` 校正设备时钟、SQLite 事务、先还原再聚合（按源码位置、只看应用自己的帧）、指纹映射表
   （聚合算法升级不打断正在发生的 Issue）、Issue 合并与自定义指纹、已解决 Issue 再次发生时重新打开、
   按编号迁移升级表结构。
+- **接入保护**：按项目的入站过滤（浏览器扩展、爬虫、localhost、消息与版本的通配规则）、令牌桶限流与自适应的突增保护
+  （超出返回 429 + `Retry-After`），上报去向按原因计数（内存里累加、定期写库），工作台的 Settings 页可查看和修改。
 - **调查工作台**：项目、筛选/分页 Issue（可勾选合并）、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
-  证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release，以及实时调查时间线。
+  证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release、项目设置与上报去向，
+  以及实时调查时间线。
 - **Source Map**：Vite 构建插件注入 Debug ID、上传 map 且不让它进入产物；按 Debug ID、再按 Release + 文件名找 map；
   私有上传（落盘前完整校验每条映射）、压缩堆栈还原（解析结果跨请求缓存）、读取内联源码片段、map 缺失或损坏时降级为
   压缩堆栈，接入照常返回 202。
@@ -385,19 +393,21 @@ pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场
 
 ## API 摘要
 
-| 方法    | 路径                                      | 作用                               |
-| ------- | ----------------------------------------- | ---------------------------------- |
-| `POST`  | `/api/v1/envelopes`                       | 批量事件接入（JSON 或 text/plain） |
-| `GET`   | `/api/v1/projects/:projectId/issues`      | 分页与筛选 Issue                   |
-| `GET`   | `/api/v1/issues/:issueId`                 | Issue 和最新现场                   |
-| `PATCH` | `/api/v1/issues/:issueId/status`          | 更新处理状态                       |
-| `POST`  | `/api/v1/issues/:issueId/merge`           | 合并 Issue                         |
-| `POST`  | `/api/v1/releases/:releaseId/source-maps` | 私有 Source Map 上传               |
-| `POST`  | `/api/v1/issues/:issueId/investigations`  | 开始调查（进行中则复用）           |
-| `GET`   | `/api/v1/investigations/:runId/events`    | SSE 事件流，支持 Last-Event-ID     |
-| `POST`  | `/api/v1/investigations/:runId/cancel`    | 取消调查                           |
-| `POST`  | `/api/v1/issues/:issueId/diagnoses`       | 单次诊断（对照组）                 |
-| `GET`   | `/api/v1/projects/:projectId/performance` | Web Vital 分位数                   |
+| 方法    | 路径                                       | 作用                               |
+| ------- | ------------------------------------------ | ---------------------------------- |
+| `POST`  | `/api/v1/envelopes`                        | 批量事件接入（JSON 或 text/plain） |
+| `GET`   | `/api/v1/projects/:projectId/issues`       | 分页与筛选 Issue                   |
+| `GET`   | `/api/v1/issues/:issueId`                  | Issue 和最新现场                   |
+| `PATCH` | `/api/v1/issues/:issueId/status`           | 更新处理状态                       |
+| `POST`  | `/api/v1/issues/:issueId/merge`            | 合并 Issue                         |
+| `POST`  | `/api/v1/releases/:releaseId/source-maps`  | 私有 Source Map 上传               |
+| `PUT`   | `/api/v1/projects/:projectId/settings`     | 入站过滤与限流设置（整份替换）     |
+| `GET`   | `/api/v1/projects/:projectId/ingest-stats` | 上报去向：收下、被过滤、被限流     |
+| `POST`  | `/api/v1/issues/:issueId/investigations`   | 开始调查（进行中则复用）           |
+| `GET`   | `/api/v1/investigations/:runId/events`     | SSE 事件流，支持 Last-Event-ID     |
+| `POST`  | `/api/v1/investigations/:runId/cancel`     | 取消调查                           |
+| `POST`  | `/api/v1/issues/:issueId/diagnoses`        | 单次诊断（对照组）                 |
+| `GET`   | `/api/v1/projects/:projectId/performance`  | Web Vital 分位数                   |
 
 ## 安全边界与已知限制
 

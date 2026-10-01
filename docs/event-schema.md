@@ -90,6 +90,11 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - Web Vitals 事件带 `payload.metricId`（来自 web-vitals 的 `metric.id`）。同一指标实例再次上报时按
   `metricId` **覆盖**而不是追加，以采集时间为准，迟到的旧值不会覆盖新值；响应里计入 `metricUpdates`。
 - 整个信封在一个事务里写入；格式错误的信封整体拒绝（400），DSN 与项目不匹配返回 403。
+- **入站过滤**：按项目设置丢掉浏览器扩展、爬虫、localhost（默认关）的上报，以及消息或版本命中通配符规则的事件。
+  被过滤的事件不入库、不占限流额度，响应里计入 `filtered`。
+- **限流**：每个项目每分钟有事件数上限（默认 6,000，可在项目设置里调），另有突增保护（这一分钟远超过去一小时的常态时拒收）。
+  超出时整个信封返回 429、`Retry-After` 和 `{ "error": "RATE_LIMITED", "reason": "project-rate-limit" | "spike-protection",
+"retryAfter": 秒 }`，什么都不写；SDK 照 `Retry-After` 等待后重发这一批。
 - 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）；
   `stack` 与 `componentStack` 只删帧里的查询参数，保留行列号。
 - **还原**：带堆栈的新事件在**聚合之前**用 Source Map 还原，结果存为 `originalStack`。每一帧先按 `debugIds` 在本项目里找
@@ -103,4 +108,4 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
   未解决；已忽略的保持忽略。聚合依赖 map 先于事件到达：缺 map 的版本按压缩帧单独聚合，事后补传 map 不会重新聚合。
 - **级别**：失败的请求里 4xx 为 warning，5xx、拿不到响应和业务码失败为 error；`payload.level` 优先。
 
-响应示例：`{ "accepted": 9, "duplicates": 1, "metricUpdates": 0, "issueIds": ["..."] }`（HTTP 202）。
+响应示例：`{ "accepted": 9, "duplicates": 1, "metricUpdates": 0, "filtered": 2, "issueIds": ["..."] }`（HTTP 202）。

@@ -9,6 +9,7 @@ import type BetterSqlite3 from 'better-sqlite3';
  *   projects                    一个接入 SDK 的前端应用
  *     ├─ releases → projects    应用的一个发布版本（2.4.1 等），Source Map 按版本隔离
  *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里），可带 Debug ID
+ *     ├─ ingest_outcomes        每小时的上报去向：收下、被过滤、被限流
  *     └─ issues → projects      按「错误指纹」聚合出的一类问题，列表页的一行
  *          ├─ issue_fingerprints 指向这个 Issue 的指纹，一个 Issue 可以有多个（合并、算法升级）
  *          ├─ events            一次具体发生（一条浏览器上报），同时关联到它所在的 release
@@ -164,6 +165,25 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE UNIQUE INDEX source_maps_release_file
           ON source_maps(release_id, minified_file, COALESCE(debug_id, ''));
         CREATE INDEX source_maps_debug_id ON source_maps(debug_id);
+      `);
+    },
+  },
+  {
+    // 接入保护：项目设置（入站过滤、限流）存成 JSON，NULL 表示全部用默认值。
+    // ingest_outcomes 按小时汇总每个项目的上报去向（收下、被过滤、被限流，及原因），
+    // 计数先在内存里累加、每隔几秒写一次（services/outcomes.ts），不是每个请求写一行。
+    description: 'project settings and ingest outcomes',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE projects ADD COLUMN settings_json TEXT;
+        CREATE TABLE ingest_outcomes (
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          hour INTEGER NOT NULL,
+          outcome TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          count INTEGER NOT NULL,
+          PRIMARY KEY (project_id, hour, outcome, reason)
+        );
       `);
     },
   },

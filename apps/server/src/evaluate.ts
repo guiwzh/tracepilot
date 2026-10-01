@@ -25,6 +25,8 @@ const config: ServerConfig = {
   modelName: 'local-evidence-engine',
   localAgentStepDelayMs: 0,
   agentSourceContext: true,
+  ingestRateLimitPerMinute: 6_000,
+  spikeProtection: true,
 };
 
 try {

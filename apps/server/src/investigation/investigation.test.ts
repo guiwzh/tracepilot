@@ -35,6 +35,8 @@ beforeEach(async () => {
     modelName: 'test-model',
     localAgentStepDelayMs: 0,
     agentSourceContext: true,
+    ingestRateLimitPerMinute: 6_000,
+    spikeProtection: true,
   };
   // 种子数据先写入同一个库文件，再由 buildApp 打开。
   const database = createDatabase(config.databasePath);

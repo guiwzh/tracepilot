@@ -1,10 +1,13 @@
 import type {
+  IngestStats,
   InvestigationRun,
   IssueDetail,
   IssueListResponse,
   PerformanceOverview,
   Project,
   ProjectOverview,
+  ProjectSettings,
+  ProjectSettingsResponse,
   Release,
   SourceMapRecord,
   StoredEvent,
@@ -89,6 +92,15 @@ export const api = {
       body: form,
     });
   },
+  settings: (projectId: string) =>
+    request<ProjectSettingsResponse>(`/api/v1/projects/${projectId}/settings`),
+  saveSettings: (projectId: string, settings: ProjectSettings) =>
+    request<ProjectSettingsResponse>(`/api/v1/projects/${projectId}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  ingestStats: (projectId: string) =>
+    request<IngestStats>(`/api/v1/projects/${projectId}/ingest-stats`),
   investigations: (issueId: string) =>
     request<{ items: InvestigationRun[] }>(`/api/v1/issues/${issueId}/investigations`),
   startInvestigation: (issueId: string) =>

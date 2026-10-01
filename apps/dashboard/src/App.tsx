@@ -17,6 +17,9 @@ const PerformancePage = lazy(() =>
 const ReleasesPage = lazy(() =>
   import('./pages/ReleasesPage').then((module) => ({ default: module.ReleasesPage })),
 );
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })),
+);
 
 export function App() {
   return (
@@ -28,6 +31,7 @@ export function App() {
           <Route path="/projects/:projectId/issues" element={<IssuesPage />} />
           <Route path="/projects/:projectId/performance" element={<PerformancePage />} />
           <Route path="/projects/:projectId/releases" element={<ReleasesPage />} />
+          <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
           <Route path="/projects/:projectId/issues/:issueId" element={<IssueDetailPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

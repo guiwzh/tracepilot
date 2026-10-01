@@ -16,7 +16,10 @@ import { registerIssueRoutes } from './routes/issues';
 import { registerProjectRoutes } from './routes/projects';
 import { registerDiagnosisRoutes } from './routes/diagnosis';
 import { registerInvestigationRoutes } from './routes/investigations';
+import { registerSettingsRoutes } from './routes/settings';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
+import { IngestGuard } from './services/ingestGuard';
+import { OutcomeRecorder } from './services/outcomes';
 import { clearSourceMapCache } from './services/sourcemaps';
 
 /** buildApp 的参数；测试通过它注入临时数据库配置和模型替身。 */
@@ -55,7 +58,7 @@ export interface BuildAppOptions {
  *   204 成功但没有内容（SSE：调查已结束，让浏览器别再重连）
  *   400 请求本身不合法（字段缺失、格式错误）   403 凭据与项目不匹配（DSN Key）
  *   404 资源不存在     409 与现有状态冲突（版本已存在、调查已结束）   415 文件类型不对
- *   429 太忙，稍后重试（同时进行的调查已达上限）
+ *   429 太忙，稍后重试（项目的接入被限流、同时进行的调查已达上限），Retry-After 写明等多久
  *   500 服务端 bug     502 依赖的上游（模型服务）出错，本服务自身正常
  */
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -94,6 +97,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     options.modelClientFactory ?? defaultModelClientFactory(options.config),
     options.investigationLimits,
   );
+  // 接入保护的进程内状态：每个项目的限流令牌桶与突增基线、上报去向的计数（定期写库）。
+  const ingestProtection = {
+    guard: new IngestGuard(),
+    outcomes: new OutcomeRecorder(database),
+    config: options.config,
+  };
 
   // 插件要先注册完成（await），依赖它们的路由才能正常工作。
   // origin: true 表示把请求的 Origin 原样回显为允许来源，也就是允许任何网页跨域调用。
@@ -102,7 +111,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // 限流或维护时就无法照服务端要求的时间退避。
   await app.register(cors, {
     origin: true,
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
     exposedHeaders: ['retry-after'],
   });
   // multipart/form-data 是浏览器上传文件时的请求格式（Source Map 上传用到）。
@@ -118,8 +127,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     time: Date.now(),
   }));
 
-  registerEventRoutes(app, database);
+  registerEventRoutes(app, database, ingestProtection);
   registerProjectRoutes(app, database);
+  registerSettingsRoutes(app, database, ingestProtection);
   registerIssueRoutes(app, database);
   registerSourceMapRoutes(app, database, options.config);
   registerDiagnosisRoutes(app, database, options.config);
@@ -147,10 +157,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   // app.close() 时执行：测试结束、index.ts 收到 SIGTERM / SIGINT（部署停止、tsx watch 重启、Ctrl+C）
-  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，再关闭 SQLite 文件句柄，
+  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，写完内存里的上报去向计数，再关闭 SQLite 文件句柄，
   // 最后释放缓存的 Source Map 解析结果（它们在 WebAssembly 内存里，垃圾回收管不到）。
   app.addHook('onClose', async () => {
     await investigations.shutdown();
+    ingestProtection.outcomes.close();
     database.close();
     clearSourceMapCache();
   });

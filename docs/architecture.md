@@ -5,7 +5,7 @@ TracePilot 将浏览器遥测数据转换为证据链，让开发者在请求诊
 ```mermaid
 flowchart LR
   Web[Web 应用] --> SDK[监控 SDK]
-  SDK --> Ingest[Fastify 接入 API]
+  SDK --> Ingest[Fastify 接入 API<br/>过滤 · 限流]
   Ingest --> SQLite[(SQLite)]
   Build[Vite 构建插件] -- Debug ID + 私有 map --> Maps[私有 Source Map]
   Maps --> Symbolicator[堆栈还原服务]
@@ -41,5 +41,7 @@ flowchart LR
    按 Debug ID 查找限定在项目内。还原在聚合之前进行，聚合按源码位置（见
    [ADR 0004](decisions/0004-grouping-after-symbolication.md)）；还原是附加信息：map 缺失、损坏或解析失败都只让事件
    保留压缩堆栈、按压缩帧聚合，接入照常返回 202。
-6. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。表结构只在
+6. 上报方不可信：服务端先按项目过滤、再限流（见 [ADR 0006](decisions/0006-ingest-protection.md)），超出时返回 429 让 SDK
+   退避；任何丢弃都按原因计数，Issue 计数与真实发生之间的差额看得见。
+7. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。表结构只在
    `apps/server/src/db/migrations.ts` 一处定义，按编号迁移升级已有数据库；已发布的迁移不再修改。

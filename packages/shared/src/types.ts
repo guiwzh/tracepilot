@@ -1,4 +1,11 @@
-import type { Breadcrumb, DiagnosisResult, IssueLevel, IssueStatus, MonitorEvent } from './schemas';
+import type {
+  Breadcrumb,
+  DiagnosisResult,
+  IssueLevel,
+  IssueStatus,
+  MonitorEvent,
+  ProjectSettings,
+} from './schemas';
 
 /**
  * 这些接口描述 Server 返回给 Dashboard 的公开 DTO。
@@ -147,4 +154,32 @@ export interface ApiErrorBody {
   error: string;
   message: string;
   details?: unknown;
+}
+
+/** GET / PUT /projects/:id/settings 的响应：项目自己的设置，以及没有单独设置时生效的服务端默认值。 */
+export interface ProjectSettingsResponse {
+  settings: ProjectSettings;
+  serverDefaults: {
+    /** 每分钟事件数上限；0 表示不限。 */
+    eventsPerMinute: number;
+    /** 服务端是否启用了突增保护；关闭时项目里的开关不起作用。 */
+    spikeProtection: boolean;
+  };
+}
+
+/** 入站过滤丢弃一个事件的原因。 */
+export type FilterReason =
+  'browser-extension' | 'web-crawler' | 'localhost' | 'error-message' | 'release';
+/** 接入限流拒收一批事件的原因。 */
+export type RateLimitReason = 'project-rate-limit' | 'spike-protection';
+
+/** 一段时间内这个项目的上报去向：收下、被过滤、被限流，按原因分开计数。 */
+export interface IngestStats {
+  windowHours: number;
+  /** 新写入的事件数（重复送达的不算）。 */
+  accepted: number;
+  filtered: Partial<Record<FilterReason, number>>;
+  rateLimited: Partial<Record<RateLimitReason, number>>;
+  /** 按小时，最早的在前。 */
+  hourly: Array<{ hour: number; accepted: number; filtered: number; rateLimited: number }>;
 }

@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Boxes, ChevronDown, Gauge, LayoutList, Radio, Search, X } from 'lucide-react';
+import {
+  Activity,
+  Boxes,
+  ChevronDown,
+  Gauge,
+  LayoutList,
+  Radio,
+  Search,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import { Link, NavLink, Outlet, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../services/api';
 import { IssueStatusBadge, LevelMark } from './Status';
@@ -123,6 +133,9 @@ export function AppShell() {
           <NavLink to={`/projects/${projectId}/releases`}>
             <Boxes size={17} /> Releases
           </NavLink>
+          <NavLink to={`/projects/${projectId}/settings`}>
+            <SlidersHorizontal size={17} /> Settings
+          </NavLink>
         </nav>
 
         <div className="sidebar-foot">
@@ -153,7 +166,7 @@ export function AppShell() {
             GW
           </div>
         </header>
-        {/* 当前 Issues / Performance / Releases / IssueDetail 页面在此渲染。 */}
+        {/* 当前 Issues / Performance / Releases / Settings / IssueDetail 页面在此渲染。 */}
         <Outlet />
       </div>
 

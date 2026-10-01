@@ -905,16 +905,16 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 11. 与服务端的约定
 
-| 方面       | 约定                                                                                                                 |
-| ---------- | -------------------------------------------------------------------------------------------------------------------- |
-| 地址       | `POST /api/v1/envelopes`，信封为 `{ dsnKey, sentAt, events }`，一个信封最多 100 个事件                               |
-| 格式       | `text/plain;charset=UTF-8` 发送 JSON；服务端也接受 `application/json`；请求体上限 1 MiB                              |
-| 成功       | `202`，响应体 `{ accepted, duplicates, metricUpdates, issueIds }`                                                    |
-| 拒收       | `400`（格式不符）、`403`（DSN 无效或与项目不匹配）、`413`（请求体过大）：SDK 丢弃这一批，不重试                      |
-| 限流与故障 | `429`、`5xx`：SDK 退避后重试；`Retry-After` 通过 CORS 暴露给跨域的 SDK                                               |
-| 幂等       | `eventId` 是幂等键，重复送达的事件计入 `duplicates` 并跳过；性能样本按 `metricId` 覆盖，采集时间更早的旧值不覆盖新值 |
-| 时间       | 服务端收到的时间与 `sentAt` 相差超过 1 分钟时，认为设备时钟不准，把事件和它的面包屑平移同样的量                      |
-| 版本       | 带 `debugIds` 的帧按 Debug ID 找 map，不看 `release`；其余按「`release` + 文件名」找                                 |
+| 方面       | 约定                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 地址       | `POST /api/v1/envelopes`，信封为 `{ dsnKey, sentAt, events }`，一个信封最多 100 个事件                                 |
+| 格式       | `text/plain;charset=UTF-8` 发送 JSON；服务端也接受 `application/json`；请求体上限 1 MiB                                |
+| 成功       | `202`，响应体 `{ accepted, duplicates, metricUpdates, filtered, issueIds }`；被服务端入站过滤丢掉的事件计入 `filtered` |
+| 拒收       | `400`（格式不符）、`403`（DSN 无效或与项目不匹配）、`413`（请求体过大）：SDK 丢弃这一批，不重试                        |
+| 限流与故障 | `429`、`5xx`：SDK 退避后重试；`Retry-After` 通过 CORS 暴露给跨域的 SDK。服务端按项目限流和突增保护时返回 429           |
+| 幂等       | `eventId` 是幂等键，重复送达的事件计入 `duplicates` 并跳过；性能样本按 `metricId` 覆盖，采集时间更早的旧值不覆盖新值   |
+| 时间       | 服务端收到的时间与 `sentAt` 相差超过 1 分钟时，认为设备时钟不准，把事件和它的面包屑平移同样的量                        |
+| 版本       | 带 `debugIds` 的帧按 Debug ID 找 map，不看 `release`；其余按「`release` + 文件名」找                                   |
 
 服务端还会再做一遍脱敏、按指纹把事件归入 Issue，详见 [event-schema.md](event-schema.md)。
 

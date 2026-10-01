@@ -83,6 +83,31 @@ export const createReleaseSchema = z.object({
 
 export const updateIssueStatusSchema = z.object({ status: issueStatusSchema });
 
+/**
+ * 项目设置：服务端在接入时按它过滤和限流（PUT 时整份替换）。
+ * 消息和版本的规则是通配符：* 匹配任意字符，例如 "ResizeObserver loop*"、"1.*"。
+ */
+export const projectSettingsSchema = z.object({
+  inboundFilters: z.object({
+    /** 栈顶帧来自浏览器扩展的错误。 */
+    browserExtensions: z.boolean(),
+    /** 搜索引擎爬虫、监控探针等非真实用户的上报。 */
+    webCrawlers: z.boolean(),
+    /** 页面地址是 localhost、127.0.0.1 的上报（本地开发时产生的）。 */
+    localhost: z.boolean(),
+    /** 按「类型: 消息」或消息本身匹配，不区分大小写。 */
+    errorMessages: z.array(z.string().trim().min(1).max(200)).max(50),
+    /** 按版本号匹配，例如不再维护的旧版本。 */
+    releases: z.array(z.string().trim().min(1).max(120)).max(50),
+  }),
+  rateLimit: z.object({
+    /** 这个项目每分钟最多接收的事件数；null 表示用服务端的默认值。 */
+    eventsPerMinute: z.number().int().min(100).max(1_000_000).nullable(),
+    /** 突增保护：一分钟内的事件数远超过去一小时的常态时，拒收超出的部分。 */
+    spikeProtection: z.boolean(),
+  }),
+});
+
 /** 把这些 Issue 合并进路径里的目标 Issue。 */
 export const mergeIssuesSchema = z.object({
   issueIds: z.array(z.string().min(1).max(100)).min(1).max(50),
@@ -116,3 +141,4 @@ export type EventEnvelope = z.infer<typeof envelopeSchema>;
 export type IssueStatus = z.infer<typeof issueStatusSchema>;
 export type IssueLevel = z.infer<typeof issueLevelSchema>;
 export type DiagnosisResult = z.infer<typeof diagnosisResultSchema>;
+export type ProjectSettings = z.infer<typeof projectSettingsSchema>;

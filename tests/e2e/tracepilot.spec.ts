@@ -86,6 +86,7 @@ test('primary dashboard routes stay console-clean and avoid failed API responses
     ['/projects/demo-project/issues', 'Issues'],
     ['/projects/demo-project/performance', 'Performance'],
     ['/projects/demo-project/releases', 'Releases'],
+    ['/projects/demo-project/settings', 'Settings'],
   ] as const) {
     await page.goto(path);
     await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
