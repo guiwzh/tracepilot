@@ -65,7 +65,7 @@ apps/server/
 │   │   └── json.ts              JSON 列的容错解析、分位数
 │   ├── demo/sourceMaps.ts       虚构的结账应用源码与 Source Map，种子数据、评测和截图共用
 │   ├── demo/repository.ts       演示用 git 仓库：2.3.9 → 2.4.1 的提交历史，主问题由其中一个提交引入
-│   ├── eval/                    带标注的诊断评测集、执行与评分，见第 11 节
+│   ├── eval/                    带标注的诊断评测集、执行、评分、轨迹指标、录制回放与裁判校准，见第 11 节
 │   ├── seed.ts                  pnpm seed：演示数据
 │   ├── benchmark.ts             pnpm benchmark：接入、查询与 Source Map 基准
 │   └── evaluate.ts              pnpm evaluate:diagnosis：单次诊断的契约冒烟
@@ -175,6 +175,8 @@ flowchart LR
 | `INGEST_RATE_LIMIT_PER_MINUTE` | `6000`                                   | 每个项目每分钟最多接收的事件数（项目设置可单独调）；`0` 表示不限                       |
 | `SPIKE_PROTECTION`             | 开启（只有 `false` 关闭）                | 突增保护的总开关；关闭时项目设置里的开关不起作用                                       |
 | `REPOSITORY_ROOT`              | `apps/server/.tracepilot/repos`          | 被监控应用的 git 仓库放在 `<这里>/<项目 id>`，代码类工具只读它；空字符串关闭代码类工具 |
+| `EVAL_JUDGE_API_URL`           | 同 `MODEL_API_URL`                       | 只用于评测：LLM 裁判的端点，指向另一家服务商时裁判与被测模型不同源                     |
+| `EVAL_JUDGE_API_KEY`           | 同 `MODEL_API_KEY`                       | 只用于评测：LLM 裁判的密钥                                                             |
 | `EVAL_JUDGE_MODEL`             | 同 `MODEL_NAME`                          | 只用于评测：LLM 裁判的模型                                                             |
 
 两个默认路径由 `config.ts` 自己的位置推出 `apps/server` 目录再拼接：开发时它在 `src/`，构建后被打包进 `dist/index.js`，
@@ -1290,7 +1292,8 @@ evidence[2].quote was not found verbatim in T3 (get_event_detail). Copy a short 
 
 ### 10.8 提示词
 
-`prompt.ts`，版本 `investigation-v2`（v1 要求引用 `tool_call_id`，模型读不到）。评测报告和运行记录据此区分结果出自哪一版。
+`prompt.ts`，版本 `investigation-v3`（v1 要求引用 `tool_call_id`，模型读不到；v3 加入代码类工具的调查步骤）。评测报告、
+录制文件和运行记录据此区分结果出自哪一版。
 提示词用英文书写，与工具说明、报告 Schema 的字段描述保持同一种语言，分三部分：
 
 - **Method**：推荐的调查顺序——先看概览和样本；至少看一个事件的详情，有堆栈就读栈顶帧的源码，再对比版本；证据足以支撑
@@ -1518,27 +1521,43 @@ claude mcp add --transport http tracepilot http://localhost:4318/mcp --header "A
 
 ## 11. 诊断评测
 
-`pnpm evaluate:agent` 在 12 个带标注的虚构事故上对比三种引擎：规则（单次、确定性，没有模型时的基线）、单次模型调用、只读
-Agent。结果与全部限制见[诊断评测报告](reports/agent-evaluation.md)。
+`pnpm evaluate:agent` 在 12 个带标注的虚构事故上对比四种引擎：规则（单次、确定性，没有模型时的基线）、离线脚本驱动的
+Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模型推理）、单次模型调用、模型驱动的只读 Agent。
+结果与全部限制见[诊断评测报告](reports/agent-evaluation.md)，设计取舍见 [ADR 0009](decisions/0009-evaluation-reliability.md)。
 
 - **用例**（`eval/cases.ts`）：根因不能从标题读出，要组合版本分布、出错行源码、只在某个浏览器或语言下出现、操作时序才能
   判断。类别有代码缺陷、上游故障、部署、兼容性、交互、证据缺失（没有 map），以及两类对抗用例：误导证据（报错前恰好有
   一个无关请求失败）和提示词注入（错误消息、按钮文字里夹带指令）。每个用例带参考根因、关键事实组（每组是同一事实的几种
-  说法，命中组内任意一个即可，但每组都要命中）、禁用说法、应当提到的缺失信息。事件 id 只用不透明的哈希前缀：第一次
-  评测时，单次调用的报告直接引用了用例名（例如 `misleading-analytics-404`）里的答案提示。
-- **执行**（`eval/harness.ts`）：每个用例、每个引擎各建一个临时 SQLite 文件，走正式的 `ingestEnvelope` 和 `saveSourceMap`
-  写入数据，再按标题找到目标 Issue。Agent 用真实模型客户端、180 秒超时。
+  说法，命中组内任意一个即可，但每组都要命中）、禁用说法、应当提到的缺失信息，以及关键证据所在的工具（`evidenceTools`）。
+  事件 id 只用不透明的哈希前缀：第一次评测时，单次调用的报告直接引用了用例名（例如 `misleading-analytics-404`）里的答案提示。
+- **执行**（`eval/harness.ts`）：每个用例、每个引擎、每次运行各建一个临时 SQLite 文件，走正式的 `ingestEnvelope` 和
+  `saveSourceMap` 写入数据，再按标题找到目标 Issue。数据只由传入的时钟决定（事件时间相对于 `CASES_CLOCK`，写库时整体
+  平移），回放才能逐字复现工具输出。评测用例没有 git 仓库，代码类工具如实回答没有仓库。Agent 180 秒超时。
+- **重复试验**：模型引擎每个用例默认跑 3 次（`--runs`），报告 pass@1、pass^k（τ-bench：任取 k 次全部成功，
+  C(c,k)/C(n,k)）和每一轮的分数范围（`eval/metrics.ts`）。
 - **评分**（`eval/scoring.ts`）：确定性的三项——关键词（摘要 + 置信度最高的原因，先删掉照抄的 Issue 标题：规则引擎会把标题
   拼进摘要，标题里本来就有的词不能算作理解了根因）、是否采纳禁用说法（只看摘要和置信度 ≥ 0.5 的原因，在低置信度里提到并
-  排除它是正确处理）、是否提到缺失信息；有密钥时再加 LLM 裁判（correct / partial / incorrect）。裁判与被测模型同源时有
-  自我偏好，报告里注明裁判模型。
-- **输出**：`docs/reports/agent-evaluation.json` 与控制台的 Markdown 汇总表。可选参数 `--engines=rules,single,agent`、
-  `--cases=id1,id2`。
+  排除它是正确处理）、是否提到缺失信息；有密钥时再加 LLM 裁判（correct / partial / incorrect，temperature 0）。
+  `EVAL_JUDGE_API_URL` / `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_MODEL` 可以换成另一家服务商的裁判，结果里注明是否同源。
+- **轨迹**（`eval/trajectory.ts`）：从调查事件里统计工具调用、重复调用（同一工具同一参数）、失败调用、被驳回的报告，
+  以及关键证据工具召回——一次都没成功调用关键证据工具就下的结论，不是从那份证据来的。
+- **录制回放**（`eval/cassette.ts`）：`--record` 把 Agent 每一轮的模型回复存进 `eval/recordings/<模型>/<用例>.json`；
+  `--replay` 用 `ReplayClient` 按顺序交还这些回复，循环、工具和引用核对照常执行，不需要密钥就能复现结果表。
+  `replay.test.ts` 在 CI 里回放全部录制，步数、调用序列或引用核对与录制时不同就失败；只是工具输出内容变了则提示录制
+  需要更新。这和前端测试里用 MSW 录制、回放 HTTP 响应是同一个思路，只是录在 `ModelClient` 这一层，与服务商无关。
+- **裁判校准**（`eval/agreement.ts`）：`pnpm evaluate:agreement --template` 生成盲评标注文件（没有引擎名和裁判结论，
+  顺序打乱），人工填写后计算裁判与人工的一致率和 Cohen's kappa，列出分歧。
+- **输出**：完整地跑了 Agent 时写 `docs/reports/agent-evaluation.json`（部分运行不覆盖），控制台输出「结论」和
+  「过程与成本」两张 Markdown 表。可选参数 `--engines`、`--cases`、`--runs`、`--record`、`--replay[=模型]`、
+  `--rejudge`、`--out`。
 - **评测集本身也要测**（`eval.test.ts`）：每个用例都必须聚合成一个 Issue、所有事件都被还原；用例写错时模型的分数就失去
-  意义，而这类错误在跑模型之前看不出来。
+  意义，而这类错误在跑模型之前看不出来。`metrics.test.ts` 用教科书例子核对 pass^k 与 kappa，`replay.test.ts` 还用
+  离线脚本现场录制再回放，验证回放机制本身：同一个时钟下没有漂移，改动引用的原文会被发现，录制的轮数不够时报错
+  而不是即兴发挥。
 
-2026-09-27 用 DeepSeek `deepseek-chat` 实测，裁判得分 Agent 0.79、单次调用 0.67、规则 0.38；Agent 的引用 100% 通过核验，
-代价是约 6 倍的输入 token 和多约 45% 的耗时。样本小、裁判与被测模型同源，适合对比与回归，不足以宣称泛化准确率。
+2026-09-27 用 DeepSeek `deepseek-chat` 实测（升级前：提示词 v2、每个引擎跑一次），裁判得分 Agent 0.79、单次调用 0.67、
+规则 0.38；Agent 的引用 100% 通过核验，代价是约 6 倍的输入 token 和多约 45% 的耗时。样本小、只跑一次、裁判与被测模型
+同源，适合对比与回归，不足以宣称泛化准确率。重复试验与录制还没有用真实模型跑过。
 
 `pnpm evaluate:diagnosis` 是另一回事：在临时库里灌入演示数据，对每个 Issue 用规则引擎诊断两次，检查结构化输出合法、证据
 数量和第二次是否命中缓存。它只验证契约，不衡量诊断质量。
@@ -1624,7 +1643,7 @@ Agent。结果与全部限制见[诊断评测报告](reports/agent-evaluation.md
 
 ## 14. 测试
 
-服务端 141 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 151 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
 | 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -1645,6 +1664,8 @@ Agent。结果与全部限制见[诊断评测报告](reports/agent-evaluation.md
 | `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `mcp/mcp.test.ts`                     |    6 | 用官方 SDK 的客户端：工具清单由 Agent 注册表生成且全部只读、从 Issue 列表一路查到出错行源码和嫌疑提交、参数错误由同一个校验返回、提示词模板、令牌只看自己的项目且不泄露别的 Issue 是否存在、缺失/无效/吊销的令牌被拒且列表不含明文；stdio 子进程提供同样的 11 个工具、只读连接拒绝写入、结构版本不符拒绝打开                                                                                                                                                                                                                                                                           |
 | `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `eval/metrics.test.ts`                |    6 | pass^k 与 pass@k 的教科书数值、非法的试验次数；Cohen's kappa 的完全一致、扣除碰巧一致、没有定义的情况；轨迹指标：重复调用（参数顺序不同也算）、失败调用、被驳回的报告、关键证据工具召回                                                                                                                                                                                                                                                                                                                                                                                                |
+| `eval/replay.test.ts`                 |    4 | 离线脚本现场录制再回放：同一时钟下行为与工具输出都一致、换了时钟只提示漂移、改动引用的原文被发现、录制轮数不够时报错；recordings/ 下的真实模型录制逐个回放（没有录制时这一组为空）                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 跨进程的行为由仓库根目录的 E2E 覆盖：`tests/e2e/tracepilot.spec.ts` 验证调查流式推进并以全部核实的引用结束、调查进行中刷新
 页面接回同一次运行且没有重复步骤、通过 API 上传 map 后新接入的浏览器堆栈被还原；演练场和 SDK 送达两组 E2E 核对服务端最终

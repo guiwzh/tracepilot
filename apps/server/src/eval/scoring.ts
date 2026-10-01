@@ -78,38 +78,84 @@ Return a JSON object: {"verdict": "correct" | "partial" | "incorrect", "adoptedF
 - incorrect: anything else, including confident claims that contradict the reference.
 - adoptedForbiddenClaim: true only if the report presents the forbidden claim as a real cause or finding (mentioning it in order to dismiss it does not count).`;
 
-/** LLM 裁判。和被测模型同源时存在自我偏好，报告里会注明裁判模型。 */
-export async function judge(
+export interface JudgeConfig {
+  apiUrl: string | undefined;
+  apiKey: string | undefined;
+  model: string;
+  /** 裁判与被测模型来自同一个服务商（按接口域名判断）。同源时有自我偏好，报告里要注明。 */
+  sameVendor: boolean;
+}
+
+function host(url: string | undefined): string | null {
+  try {
+    return url ? new URL(url).hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 裁判用哪个模型。默认与被测模型相同（同一个端点和密钥）；EVAL_JUDGE_API_URL、EVAL_JUDGE_API_KEY、
+ * EVAL_JUDGE_MODEL 可以换成另一家服务商的模型，减少「自己给自己打分」的偏好。只换 EVAL_JUDGE_MODEL
+ * 是同一服务商的另一个模型，偏好减轻但没有消除。
+ */
+export function judgeConfig(
   config: ServerConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): JudgeConfig {
+  const apiUrl = env.EVAL_JUDGE_API_URL || config.modelApiUrl;
+  return {
+    apiUrl,
+    apiKey: env.EVAL_JUDGE_API_KEY || config.modelApiKey,
+    model: env.EVAL_JUDGE_MODEL || config.modelName,
+    sameVendor: host(apiUrl) === host(config.modelApiUrl),
+  };
+}
+
+/** LLM 裁判。temperature 取 0，让同一份报告每次得到同样的结论，重复试验的差异只来自被测模型。 */
+export async function judge(
+  config: JudgeConfig,
   evalCase: EvalCase,
   output: EngineOutput,
 ): Promise<JudgeVerdict> {
   const client = new OpenAI({
-    apiKey: config.modelApiKey,
-    baseURL: config.modelApiUrl?.replace(/\/(?:chat\/completions|responses)\/?$/, ''),
+    apiKey: config.apiKey,
+    baseURL: config.apiUrl?.replace(/\/(?:chat\/completions|responses)\/?$/, ''),
     timeout: 60_000,
     maxRetries: 1,
   });
   const ranked = [...output.causes].sort((left, right) => right.confidence - left.confidence);
-  const response = await client.chat.completions.create({
-    model: process.env.EVAL_JUDGE_MODEL ?? config.modelName,
-    response_format: { type: 'json_object' },
-    messages: [
-      { role: 'system', content: JUDGE_PROMPT },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          reference: evalCase.reference,
-          forbiddenClaim: evalCase.forbidden?.join(' / ') ?? null,
-          candidate: {
-            summary: output.summary,
-            causesRankedByConfidence: ranked,
-            missingInformation: output.missingInformation,
-          },
-        }),
-      },
-    ],
-  });
+  const create = (deterministic: boolean) =>
+    client.chat.completions.create({
+      model: config.model,
+      response_format: { type: 'json_object' },
+      ...(deterministic ? { temperature: 0 } : {}),
+      messages: [
+        { role: 'system', content: JUDGE_PROMPT },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            reference: evalCase.reference,
+            forbiddenClaim: evalCase.forbidden?.join(' / ') ?? null,
+            candidate: {
+              summary: output.summary,
+              causesRankedByConfidence: ranked,
+              missingInformation: output.missingInformation,
+            },
+          }),
+        },
+      ],
+    });
+  let response;
+  try {
+    response = await create(true);
+  } catch (error) {
+    // 部分推理模型不接受 temperature：去掉它再试一次。
+    if ((error as { status?: number }).status !== 400 || !/temperature/i.test(String(error))) {
+      throw error;
+    }
+    response = await create(false);
+  }
   const parsed = JSON.parse(response.choices[0]?.message.content ?? '{}') as Partial<JudgeVerdict>;
   return {
     verdict:

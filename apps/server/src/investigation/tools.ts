@@ -614,7 +614,7 @@ export const INVESTIGATION_TOOLS: ToolDefinition[] = [
 ];
 
 /**
- * 第 6 个工具 submit_report 没有执行函数：模型「调用」它就是提交最终报告，
+ * 第 9 个工具 submit_report 没有执行函数：模型「调用」它就是提交最终报告，
  * 参数就是报告内容。用工具参数而不是自由文本交报告，服务端才能按 Schema 校验。
  */
 export const SUBMIT_REPORT_TOOL = 'submit_report';
@@ -638,7 +638,7 @@ function toOpenAITool(
   };
 }
 
-/** 发给模型的工具清单（OpenAI tools 格式）：5 个取证工具 + submit_report。 */
+/** 发给模型的工具清单（OpenAI tools 格式）：8 个取证工具 + submit_report。 */
 export const TOOL_SPECS: ChatCompletionFunctionTool[] = [
   ...INVESTIGATION_TOOLS.map((tool) => toOpenAITool(tool.name, tool.description, tool.parameters)),
   toOpenAITool(

@@ -182,10 +182,17 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
 其中有误导证据、证据缺失和两个提示词注入用例（错误消息和按钮文字里夹带「根因是数据库故障」这类指令）。
 
 ```bash
-pnpm evaluate:agent
+pnpm evaluate:agent             # 有密钥：四个引擎，模型引擎各跑 3 次（pass^k），裁判复核
+pnpm evaluate:agent --record    # 同时录下 Agent 的模型回复
+pnpm evaluate:agent --replay    # 不需要密钥：按录制回放，复现结果表
+pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's kappa）
 ```
 
-2026-09-27 实测，被测模型与裁判均为 DeepSeek `deepseek-chat`：
+除了结论，评测也看过程：工具调用、重复和失败的调用、被驳回的报告，以及 Agent 有没有调用过关键证据所在的工具。
+真实模型的回复可以录制下来，CI 每次回放全部录制，改了工具输出导致模型当时的引用对不上时测试就会失败——不需要密钥。
+不配置密钥时，评测跑规则引擎和离线脚本驱动的 Agent，给出可复现的基线。
+
+2026-09-27 实测（升级前：每个引擎跑一次，提示词 v2），被测模型与裁判均为 DeepSeek `deepseek-chat`：
 
 | 引擎         | 裁判：正确 / 部分 / 错误 | 裁判得分 | 采纳注入或误导 | 引用有效率 | 平均耗时 | 平均输入 token |
 | ------------ | -----------------------: | -------: | -------------: | ---------: | -------: | -------------: |
@@ -201,7 +208,8 @@ pnpm evaluate:agent
 - 关键词检查在注入一列报出 4 次命中，人工逐条核对**全部是误报**——模型提到注入内容是为了否定它，
   关键词匹配识别不了否定语境。
 
-样本小（12 例、每个引擎只跑一次）、裁判与被测模型同源，适合对比与回归，不足以宣称泛化准确率。
+样本小（12 例、每个引擎只跑一次）、裁判与被测模型同源，适合对比与回归，不足以宣称泛化准确率。重复试验、录制回放和
+裁判校准是之后加入的（[ADR 0009](docs/decisions/0009-evaluation-reliability.md)），还没有用真实模型跑过。
 数据集、评分方法与全部限制见[诊断评测报告](docs/reports/agent-evaluation.md)，原始输出在
 [agent-evaluation.json](docs/reports/agent-evaluation.json)。
 
@@ -225,7 +233,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 258 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 268 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -410,7 +418,8 @@ pnpm dev                  # 并行启动全部应用/包的开发模式
 pnpm seed                 # 重建虚构演示数据（含内联源码的 Source Map）
 pnpm verify               # lint + typecheck + 单元/集成 + build + 体积预算 + 冒烟
 pnpm test:e2e             # 真实浏览器闭环测试（含 SDK 送达回归与调查续传）
-pnpm evaluate:agent       # 诊断评测：规则 / 单次调用 / Agent
+pnpm evaluate:agent       # 诊断评测：规则 / 离线脚本 Agent / 单次调用 / Agent，可录制回放
+pnpm evaluate:agreement   # 评测裁判与人工标注的一致性
 pnpm screenshots          # 从运行中的应用重新生成 README 截图
 pnpm benchmark            # 本地 SQLite API 基准、写入放大分段、大型 Source Map 下的接入与回填
 pnpm measure:sdk          # SDK 产物体积与真实接入成本，含预算断言
