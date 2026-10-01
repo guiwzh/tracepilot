@@ -1,8 +1,8 @@
 # TracePilot
 
 前端可观测平台，加一个**证据约束的只读排障 Agent**。浏览器 SDK 采集错误、请求、白屏、用户操作和
-Web Vitals，服务端聚合成 Issue、用 Source Map 还原源码；排障时，Agent 通过 5 个只读工具
-自己查证据，报告里的每条证据都必须逐字引用某次工具调用的结果，服务端逐条核对后才接受。
+Web Vitals，服务端聚合成 Issue、用 Source Map 还原源码；排障时，Agent 通过 8 个只读工具
+（含按版本读代码、找嫌疑提交）自己查证据，报告里的每条证据都必须逐字引用某次工具调用的结果，服务端逐条核对后才接受。
 
 ![调查过程实时可见](docs/screenshots/07-investigation-live.png)
 
@@ -64,8 +64,8 @@ beacon。投递语义是「至少一次」，重复由服务端按 `eventId` 幂
 （出错行源码、是否只在某个版本出现），而「每条结论都有证据」只由提示词约束，引用的内容是否存在
 没人检查。
 
-**方案**　改成工具调用循环，模型自己决定查什么，但只有 5 个只读工具（概览、事件样本、事件时间线、
-源码片段、版本对比），作用域绑定到当前 Issue。每个工具结果的第一行写着一个编号（`ref: T3`），报告
+**方案**　改成工具调用循环，模型自己决定查什么，但只有只读工具（概览、事件样本、事件时间线、
+源码片段、版本对比，后来加上按版本读代码、搜代码和嫌疑提交），作用域绑定到当前 Issue。每个工具结果的第一行写着一个编号（`ref: T3`），报告
 通过 `submit_report` 提交，每条证据必须给出编号和从那次结果里**逐字摘出的原文**；服务端确定性核对
 调用存在、调用成功、原文确实出现。不通过时把问题清单作为工具结果退回模型修正；报告最多提交 3 次（首次加
 2 次重交），第 3 次仍有未核实的引用时照样接受，但如实标出。
@@ -151,6 +151,11 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
   突增保护按「过去一小时常态的 10 倍」自适应地拒收发版带来的死循环报错，保护的是数据不被一个 Issue 淹没。拒收返回 429 +
   `Retry-After`，SDK 照它退避；被过滤和被限流的事件按原因计数，否则就是看不见的丢数据。计数在内存里合并、每 10 秒写一次，
   而不是给写入最频繁的接入路径每个请求再加一次落盘。
+- **「哪个提交引入的」要两个信号互相印证**　排障 Agent 原来只看得到 map 内联的出错行前后 5 行。现在按版本记录的提交号
+  （构建插件自动记 `git rev-parse HEAD`）只读地访问被监控应用的 git 仓库：读整个文件、搜类型定义、找嫌疑提交。嫌疑提交取
+  「首次出现的版本与上一个版本之间、改过堆栈文件的提交」和「对出错行的 git blame」，Sentry 也经历了从前者到后者的演进。
+  仓库路径只能放在服务端配置的目录下，没有接口能改：管理接口没有鉴权，能改路径就能读服务器上的任意目录。演示数据配了一个
+  真实的 git 仓库，主问题由其中一次性能优化引入，离线调查会把它作为一条经过核验的证据。
 - **map 跟着内容走，不跟着版本号走**　按「版本 + 文件名」找 map，SDK 的版本号配错一次，这个版本的错误就全都还原不了；
   同一个版本号重新构建过，旧页面的错误还会被新 map 还原到一行不相干的代码上。Vite 构建插件给产物和 map 写入同一个
   Debug ID（ECMA-426 提案、Sentry 的做法），在产物开头注入一行登记代码，SDK 出错时带上堆栈里各文件的 Debug ID，
@@ -220,7 +225,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 251 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 258 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -260,6 +265,7 @@ flowchart LR
   DB --> Query[Issue 与指标 API]
   Query --> UI[React 调查工作台]
   DB --> Tools[只读工具]
+  Repo[(git 仓库<br/>按版本只读)] --> Tools
   Maps --> Tools
   Tools <--> Agent[排障 Agent 循环]
   Agent -- 事件日志 + SSE --> UI
@@ -280,8 +286,9 @@ flowchart LR
 [ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)、
 [ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)、
 [ADR 0005](docs/decisions/0005-debug-ids.md)、
-[ADR 0006](docs/decisions/0006-ingest-protection.md) 与
-[ADR 0007](docs/decisions/0007-mcp-server.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0006](docs/decisions/0006-ingest-protection.md)、
+[ADR 0007](docs/decisions/0007-mcp-server.md) 与
+[ADR 0008](docs/decisions/0008-code-and-change-context.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -305,7 +312,7 @@ flowchart LR
 - **Source Map**：Vite 构建插件注入 Debug ID、上传 map 且不让它进入产物；按 Debug ID、再按 Release + 文件名找 map；
   私有上传（落盘前完整校验每条映射）、压缩堆栈还原（解析结果跨请求缓存）、读取内联源码片段、map 缺失或损坏时降级为
   压缩堆栈，接入照常返回 202。
-- **排障 Agent**：5 个只读工具、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
+- **排障 Agent**：8 个只读工具（含按版本读代码、搜代码、版本间的嫌疑提交与 blame）、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
   SSE 续传、取消、并发闸门、离线脚本引擎。
 - **MCP 服务器**：同一套工具注册表开放给 Claude Code、Cursor 等编码 Agent（Streamable HTTP + stdio），全部只读；
   项目级令牌只存哈希，工作台一键给出客户端配置。
@@ -392,7 +399,8 @@ claude mcp add tracepilot -- node /path/to/tracepilot/apps/server/dist/mcp.js --
 ```
 
 工具：`list_projects`、`list_issues`、`get_issue_overview`、`list_event_samples`、`get_event_detail`、`get_source_context`、
-`compare_releases`、`get_latest_investigation`，全部只读（`readOnlyHint`）；另有提示词模板 `investigate_issue`。
+`compare_releases`、`read_source_file`、`search_code`、`find_suspect_commits`、`get_latest_investigation`，全部只读
+（`readOnlyHint`）；另有提示词模板 `investigate_issue`。
 实现见 [server.md](docs/server.md#1015-mcp把同一套工具开放给编码-agent)，决策见 [ADR 0007](docs/decisions/0007-mcp-server.md)。
 
 ## 常用命令

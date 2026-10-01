@@ -135,12 +135,19 @@ test('an investigation streams its steps and ends with verified citations', asyn
 
   // 没有配置模型密钥时走离线脚本，界面必须明确说明它不是模型推理。
   await expect(page.getByText(/Offline demo/)).toBeVisible();
-  await expect(page.locator('.tool-call.is-ok')).toHaveCount(5, { timeout: 15_000 });
+  // 概览、样本、事件详情、版本对比、源码、嫌疑提交，共 6 次调用。
+  await expect(page.locator('.tool-call.is-ok')).toHaveCount(6, { timeout: 15_000 });
   await expect(page.getByRole('heading', { name: 'Evidence cited' })).toBeVisible();
   await expect(page.locator('.verification-badge.is-ok')).toContainText('citations verified');
   // 源码证据来自种子 Source Map 内联的源码，而不是压缩后的栈。
   await expect(
     page.locator('.investigation-report blockquote').filter({ hasText: 'cart.summary.total' }),
+  ).toBeVisible();
+  // 嫌疑提交来自演示 git 仓库：出错那一行最后是被 2.4.1 之前的那次性能优化改的。
+  await expect(
+    page
+      .locator('.investigation-report blockquote')
+      .filter({ hasText: 'reuse the cart summary total' }),
   ).toBeVisible();
 
   // 证据能跳回产生它的那次工具调用，并展开当时返回给模型的原始结果。

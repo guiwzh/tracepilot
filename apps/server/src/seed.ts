@@ -5,12 +5,14 @@ import { resolve } from 'node:path';
 import type { Breadcrumb, MonitorEvent } from '@trace-pilot/shared';
 import { loadConfig } from './config';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from './db/client';
+import { createDemoRepository } from './demo/repository';
 import { buildSourceMap, DEMO_SOURCE_MAPS } from './demo/sourceMaps';
 import { ingestEnvelope } from './services/events';
 import { saveSourceMap } from './services/sourcemaps';
 
 /**
- * 演示数据脚本（pnpm seed）：清空并重建 demo-project 的虚构数据和两个版本的 Source Map。
+ * 演示数据脚本（pnpm seed）：清空并重建 demo-project 的虚构数据、两个版本的 Source Map，
+ * 以及（给了仓库根目录时）演示用的 git 仓库，两个版本的 commit_sha 指向其中的真实提交。
  *
  * 通过正式的 saveSourceMap 和 ingestEnvelope 写入，而不是直接往 issues 表插最终结果，
  * 因此演示数据也会经过还原、指纹、脱敏、聚合和计数的真实生产代码。
@@ -99,10 +101,13 @@ function baseEvent(
   };
 }
 
+const HOUR = 3_600_000;
+
 export async function seedDemoData(
   database: TraceDatabase,
   sourceMapDir: string,
-): Promise<{ events: number; sourceMaps: number }> {
+  repositoryRoot: string | null = null,
+): Promise<{ events: number; sourceMaps: number; repository: boolean }> {
   ensureDemoProject(database);
   // 删除 releases 会级联清掉 source_maps 表行，但磁盘上的 .map 文件不会跟着消失。
   // 先取出待删记录的路径，删完表数据后逐个删除文件，避免反复 seed 在私有目录里堆积孤儿文件。
@@ -127,16 +132,29 @@ export async function seedDemoData(
     rmSync(mapPath, { force: true });
   }
   const now = Date.now();
-  database.sqlite
-    .prepare(
-      'INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)',
-    )
-    .run('demo-release-2-4-1', 'demo-project', '2.4.1', '7f3ac91', now - 3_600_000);
-  database.sqlite
-    .prepare(
-      'INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)',
-    )
-    .run('demo-release-2-3-9', 'demo-project', '2.3.9', '4b2e210', now - 5 * 24 * 3_600_000);
+  // 部署时间要早于各自版本的事件：2.4.1 的事件从约 21 小时前开始，它在 26 小时前上线。
+  // 曾经 2.4.1 记成一小时前部署，而它的事件早在那之前就有了，排障 Agent 会被这个矛盾带偏。
+  const deployedAt = { previous: now - 5 * 24 * HOUR, current: now - 26 * HOUR };
+  const commits = repositoryRoot
+    ? createDemoRepository(repositoryRoot, 'demo-project', deployedAt)
+    : null;
+  const insertRelease = database.sqlite.prepare(
+    'INSERT INTO releases (id, project_id, version, commit_sha, created_at) VALUES (?, ?, ?, ?, ?)',
+  );
+  insertRelease.run(
+    'demo-release-2-4-1',
+    'demo-project',
+    '2.4.1',
+    commits?.current ?? null,
+    deployedAt.current,
+  );
+  insertRelease.run(
+    'demo-release-2-3-9',
+    'demo-project',
+    '2.3.9',
+    commits?.previous ?? null,
+    deployedAt.previous,
+  );
 
   const events: MonitorEvent[] = [];
   for (let index = 0; index < 96; index += 1) {
@@ -150,8 +168,12 @@ export async function seedDemoData(
       `Cannot read properties of undefined (reading 'total') — order ${83000000 + index}`,
       'calculateTotal',
     ];
+    // 主问题是 2.4.1 的一次改动引入的（见 demo/repository.ts），只出现在 2.4.1；
+    // 次要的根因沿用 baseEvent 的版本分布，两个版本都有。
+    const base = baseEvent(id, timestamp, index);
     events.push({
-      ...baseEvent(id, timestamp, index),
+      ...base,
+      release: variant ? base.release : '2.4.1',
       eventType: 'error',
       payload: {
         name,
@@ -271,14 +293,15 @@ export async function seedDemoData(
       events: events.slice(start, start + 100),
     });
   }
-  return { events: events.length, sourceMaps };
+  return { events: events.length, sourceMaps, repository: commits !== null };
 }
 
 /**
  * 两个版本都上传 Source Map。聚合在还原之后进行：某个版本缺 map 时，它的事件只能按压缩后的栈帧聚合，
  * 和有 map 的版本里的同一个 bug 分成两个 Issue（与 Sentry 等产品的行为相同，所以要在构建时上传 map）。
  * 「缺少 map」这种证据缺口由评测集里的 missing-source-map 用例覆盖。
- * 演示数据是虚构的，两个版本的压缩文件同名、内容相同，所以用同一份 map。
+ * 演示数据是虚构的，两个版本用同一份 map（内联的是 2.4.1 的源码）：2.3.9 的 total.ts 与之不同，
+ * 但 2.3.9 没有落在那个文件里的事件，展示不到这个差别；按版本读代码以 git 仓库为准。
  */
 async function seedDemoSourceMaps(database: TraceDatabase, sourceMapDir: string): Promise<number> {
   let uploaded = 0;
@@ -302,9 +325,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const config = loadConfig();
   const database = createDatabase(config.databasePath);
   try {
-    const result = await seedDemoData(database, config.sourceMapDir);
+    const result = await seedDemoData(database, config.sourceMapDir, config.repositoryRoot);
     process.stdout.write(
       `Seeded ${result.events} fictional browser events and ${result.sourceMaps} source maps for demo-project.\n`,
+    );
+    process.stdout.write(
+      result.repository
+        ? `Demo git repository: ${config.repositoryRoot}/demo-project (releases point at its commits).\n`
+        : 'No demo git repository (git unavailable or REPOSITORY_ROOT is empty): code tools will report it.\n',
     );
   } finally {
     database.close();

@@ -47,6 +47,7 @@ beforeEach(async () => {
     agentSourceContext: true,
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
+    repositoryRoot: null,
   };
   app = await buildApp({ config, logger: false });
 });

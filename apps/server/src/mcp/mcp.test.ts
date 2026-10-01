@@ -31,9 +31,10 @@ beforeAll(async () => {
     agentSourceContext: true,
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
+    repositoryRoot: join(directory, 'repos'),
   };
   const database = createDatabase(config.databasePath);
-  await seedDemoData(database, config.sourceMapDir);
+  await seedDemoData(database, config.sourceMapDir, config.repositoryRoot);
   database.close();
   app = await buildApp({ config, logger: false });
   base = await app.listen({ port: 0, host: '127.0.0.1' });
@@ -86,6 +87,9 @@ describe('MCP over Streamable HTTP', () => {
       'get_event_detail',
       'get_source_context',
       'compare_releases',
+      'read_source_file',
+      'search_code',
+      'find_suspect_commits',
       'get_latest_investigation',
     ]);
     expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
@@ -117,6 +121,21 @@ describe('MCP over Streamable HTTP', () => {
     });
     expect(source.body.available).toBe(true);
     expect(source.body.snippet).toContain('cart.summary.total');
+
+    // 代码与变更：出错那一行最后是被 2.4.1 之前的那次性能优化改的；Cart 类型里 summary 本来就是可选的。
+    const suspects = await call(client, 'find_suspect_commits', { issueId: issue.id });
+    expect(suspects.body).toMatchObject({
+      firstSeenRelease: '2.4.1',
+      previousRelease: '2.3.9',
+      lastChangeToFailingLine: {
+        author: 'Lin Wei',
+        code: 'const subtotal = cart.summary.total;',
+        inReleaseRange: true,
+      },
+    });
+    expect(suspects.body.summary).toContain('perf(checkout)');
+    const search = await call(client, 'search_code', { issueId: issue.id, query: 'summary?:' });
+    expect(search.body.matches).toEqual([expect.stringContaining('src/api/types.ts')]);
 
     // 参数不合法时由 Agent 的同一个校验返回错误，而不是抛出。
     const invalid = await call(client, 'list_event_samples', { issueId: issue.id, limit: 99 });
@@ -215,13 +234,17 @@ describe('MCP over stdio', () => {
       command: process.execPath,
       args: [require.resolve('tsx/cli'), 'src/mcp/stdio.ts', '--project', 'demo-project'],
       cwd: serverRoot,
-      env: { ...process.env, DATABASE_PATH: config.databasePath } as Record<string, string>,
+      env: {
+        ...process.env,
+        DATABASE_PATH: config.databasePath,
+        REPOSITORY_ROOT: config.repositoryRoot!,
+      } as Record<string, string>,
       stderr: 'pipe',
     });
     const client = new Client({ name: 'tracepilot-test', version: '1.0.0' });
     await client.connect(transport);
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(8);
+    expect(tools).toHaveLength(11);
     const issues = await call(client, 'list_issues', { limit: 50 });
     expect(issues.body.items.length).toBeGreaterThan(5);
     await client.close();

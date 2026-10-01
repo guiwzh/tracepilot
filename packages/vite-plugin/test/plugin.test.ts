@@ -14,7 +14,7 @@ const fixture = fileURLToPath(new URL('./fixture/', import.meta.url));
 
 /** 假的 TracePilot 服务端：记下创建的版本和上传的 map。 */
 interface Received {
-  releases: string[];
+  releases: Array<{ version: string; commitSha?: string }>;
   maps: Array<{
     releaseId: string;
     minifiedFile: string;
@@ -44,12 +44,17 @@ beforeEach(async () => {
     const path = request.url ?? '';
     if (request.method === 'GET' && path === '/api/v1/projects/shop/releases') {
       return send(200, {
-        items: received.releases.map((version) => ({ id: `r-${version}`, version })),
+        items: received.releases.map((release) => ({
+          id: `r-${release.version}`,
+          version: release.version,
+          commitSha: release.commitSha ?? null,
+        })),
       });
     }
     if (request.method === 'POST' && path === '/api/v1/projects/shop/releases') {
-      const { version } = JSON.parse(body.toString()) as { version: string };
-      received.releases.push(version);
+      const release = JSON.parse(body.toString()) as { version: string; commitSha?: string };
+      received.releases.push(release);
+      const version = release.version;
       return send(201, { id: `r-${version}`, version });
     }
     const upload = path.match(/^\/api\/v1\/releases\/([^/]+)\/source-maps$/);
@@ -124,7 +129,12 @@ describe('tracepilotSourceMaps', () => {
     // 入口和懒加载的 chunk 各一个。
     expect(scripts).toHaveLength(2);
 
-    expect(received.releases).toEqual(['1.2.0']);
+    // 版本创建时记下构建所在的提交：fixture 就在本仓库里，取到的是本仓库的 HEAD。
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: fixture,
+      encoding: 'utf8',
+    }).trim();
+    expect(received.releases).toEqual([{ version: '1.2.0', commitSha: head }]);
     expect(received.maps.map((item) => item.minifiedFile).sort()).toEqual(scripts);
     for (const item of received.maps) {
       const code = await readFile(join(outDir, item.minifiedFile), 'utf8');
@@ -164,6 +174,14 @@ describe('tracepilotSourceMaps', () => {
     consumer.destroy();
     expect(original.source).toMatch(/main\.js$/);
     expect(original.line).toBe(3);
+  });
+
+  it('records an explicit commit, or none when told not to', async () => {
+    await buildFixture({ commitSha: 'a'.repeat(40) });
+    expect(received.releases).toEqual([{ version: '1.2.0', commitSha: 'a'.repeat(40) }]);
+    received.releases = [];
+    await buildFixture({ release: '1.3.0', commitSha: false });
+    expect(received.releases).toEqual([{ version: '1.3.0' }]);
   });
 
   it('only injects in a dry run', async () => {

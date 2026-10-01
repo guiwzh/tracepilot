@@ -5,7 +5,7 @@ import { SUBMIT_REPORT_TOOL } from './tools';
 /**
  * 没有配置模型密钥时使用的确定性离线引擎。
  *
- * 它不是模型推理：按固定顺序调用同一批真实工具（概览 → 样本 → 事件详情 + 版本对比 → 源码），
+ * 它不是模型推理：按固定顺序调用同一批真实工具（概览 → 样本 → 事件详情 + 版本对比 → 源码 → 嫌疑提交），
  * 再用规则从工具结果里摘出原文组装报告。它的用途是离线演示和 E2E 测试——
  * 走的是与真实模型完全相同的循环、工具、引用校验和事件流，界面上会明确标注为离线脚本。
  *
@@ -84,6 +84,7 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
   const detail = find('get_event_detail');
   const source = find('get_source_context');
   const releases = find('compare_releases');
+  const suspects = find('find_suspect_commits');
 
   const evidence: SubmittedReport['evidence'] = [];
   // push 返回新长度，减 1 就是刚加入的证据下标，原因用它引用证据；-1 表示没有这条证据。
@@ -153,6 +154,21 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
       })
     : -1;
 
+  // 出错那一行最后一次被改，恰好就在问题首次出现的版本范围里：引用提交说明，作为一条原因的证据。
+  const lastChange = suspects?.value.lastChangeToFailingLine as
+    { commit: string; subject: string; author: string; inReleaseRange: boolean } | null | undefined;
+  const firstSeen = String(suspects?.value.firstSeenRelease ?? '');
+  const commitRef =
+    suspects && lastChange?.inReleaseRange
+      ? add({
+          resultRef: suspects.ref,
+          quote: lastChange.subject.slice(0, 160),
+          description: `The failing line was last changed by ${lastChange.commit.slice(0, 7)} (${lastChange.author}), shipped in ${firstSeen}.`,
+          source: 'commit',
+        })
+      : -1;
+  if (suspects && typeof suspects.value.meaning === 'string') missing.push(suspects.value.meaning);
+
   const refs = (...values: number[]) => values.filter((value) => value >= 0);
   const lower = `${title} ${errorText}`.toLowerCase();
   const causes: SubmittedReport['possibleCauses'] = [];
@@ -178,7 +194,13 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
       evidenceRefs: refs(sourceRef, stackRef, clickRef),
     });
   }
-  if (releaseRef >= 0) {
+  if (commitRef >= 0) {
+    causes.push({
+      cause: `Commit ${lastChange!.commit.slice(0, 7)} ("${lastChange!.subject}") changed the failing line in ${firstSeen}, the release where the issue first appeared.`,
+      confidence: 0.66,
+      evidenceRefs: refs(commitRef, sourceRef, releaseRef),
+    });
+  } else if (releaseRef >= 0) {
     causes.push({
       cause: 'A release changed the data shape or timing this code path depends on.',
       confidence: 0.4,
@@ -222,6 +244,9 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
     suggestions: [
       'Guard the optional value at the mapped frame and keep the UI in a recoverable state.',
       'Add a test fixture for the data shape that triggered the failure.',
+      ...(commitRef >= 0
+        ? [`Review commit ${lastChange!.commit.slice(0, 7)} and restore the behaviour it removed.`]
+        : []),
     ],
     missingInformation: missing.slice(0, 6),
   };
@@ -268,6 +293,9 @@ export class LocalScriptedClient implements ModelClient {
       toolCalls = [
         call('get_source_context', { eventId: String(detail.value.eventId), frameIndex: 0 }),
       ];
+    } else if (!forcedSubmit && has('get_source_context') && !has('find_suspect_commits')) {
+      narration = 'Checking which commit last changed the failing code.';
+      toolCalls = [call('find_suspect_commits', {})];
     } else {
       narration = 'Enough evidence gathered; submitting a report that cites each tool result.';
       toolCalls = [call(SUBMIT_REPORT_TOOL, buildLocalReport(results))];

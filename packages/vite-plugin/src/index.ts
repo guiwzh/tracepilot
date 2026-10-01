@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 import type { Logger, Plugin } from 'vite';
 import { debugIdFor, injectDebugId, type RawMap } from './debugId';
@@ -13,6 +14,25 @@ export interface TracePilotPluginOptions extends UploadTarget {
   failOnError?: boolean;
   /** 只注入 Debug ID、不上传，map 照样不进产物。没有服务端的本地构建用。 */
   dryRun?: boolean;
+  /**
+   * 这次构建对应的提交，创建版本时一并记下，排障时据此读这个版本的代码、找嫌疑提交。
+   * 默认取项目根目录的 git rev-parse HEAD（不在 git 仓库里就不记）；false 表示不记。
+   */
+  commitSha?: string | false;
+}
+
+/** 项目根目录所在 git 仓库的当前提交；不在仓库里、没有 git 时返回 null。 */
+function headCommit(root: string): string | null {
+  try {
+    const sha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -32,6 +52,7 @@ export interface TracePilotPluginOptions extends UploadTarget {
 export function tracepilotSourceMaps(options: TracePilotPluginOptions): Plugin {
   let logger: Logger | undefined;
   let pending: MapFile[] = [];
+  let commitSha: string | null = null;
 
   return {
     name: 'tracepilot-source-maps',
@@ -51,6 +72,8 @@ export function tracepilotSourceMaps(options: TracePilotPluginOptions): Plugin {
 
     configResolved(resolved) {
       logger = resolved.logger;
+      commitSha =
+        options.commitSha === false ? null : (options.commitSha ?? headCommit(resolved.root));
     },
 
     generateBundle(_output, bundle) {
@@ -92,10 +115,13 @@ export function tracepilotSourceMaps(options: TracePilotPluginOptions): Plugin {
         return;
       }
       try {
-        const count = await uploadSourceMaps(options, files);
+        const result = await uploadSourceMaps(options, files, commitSha);
         logger?.info(
-          `[tracepilot] uploaded ${count} source maps to ${options.projectId}@${options.release}`,
+          `[tracepilot] uploaded ${result.uploaded} source maps to ${options.projectId}@${options.release}${
+            commitSha ? ` (commit ${commitSha.slice(0, 12)})` : ''
+          }`,
         );
+        if (result.warning) logger?.warn(`[tracepilot] ${result.warning}`);
       } catch (error) {
         const message = `[tracepilot] source map upload failed: ${(error as Error).message}`;
         if (options.failOnError ?? true) throw new Error(message, { cause: error });

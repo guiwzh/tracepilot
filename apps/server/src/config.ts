@@ -31,6 +31,11 @@ export interface ServerConfig {
   ingestRateLimitPerMinute: number;
   /** 是否启用突增保护（services/ingestGuard.ts）；关闭时项目设置里的开关不起作用。 */
   spikeProtection: boolean;
+  /**
+   * 被监控应用的 git 仓库放在哪个目录下：<repositoryRoot>/<项目 id>。代码类工具（读源码、搜代码、
+   * 找嫌疑提交）只读这里的仓库；null 表示不提供代码上下文。
+   */
+  repositoryRoot: string | null;
 }
 
 /** 非负整数；没有设置或不是数字时用默认值（写错的值不应悄悄变成 0，也就是「不限」）。 */
@@ -63,5 +68,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // 默认每分钟 6,000 个（每秒 100 个）：单机 SQLite 每秒能接入上万个事件，留出余量给别的项目和查询。
     ingestRateLimitPerMinute: nonNegative(env.INGEST_RATE_LIMIT_PER_MINUTE, 6_000),
     spikeProtection: env.SPIKE_PROTECTION !== 'false',
+    // 设为空字符串可以关掉代码类工具；默认目录不存在时它们如实回答「没有配置仓库」。
+    repositoryRoot:
+      env.REPOSITORY_ROOT === ''
+        ? null
+        : resolve(env.REPOSITORY_ROOT ?? resolve(serverRoot, '.tracepilot/repos')),
   };
 }

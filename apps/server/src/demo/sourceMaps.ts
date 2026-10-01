@@ -137,6 +137,14 @@ export function normalizeInventory(response: InventoryResponse): InventoryLine[]
 }
 `;
 
+/** 2.4.1 的全部源文件（路径 → 内容），演示仓库里这个版本的代码与 map 内联的源码一致。 */
+export function demoSourceFiles(): Record<string, string> {
+  return Object.assign({}, ...DEMO_SOURCE_MAPS.map((fixture) => fixture.sources)) as Record<
+    string,
+    string
+  >;
+}
+
 export const DEMO_SOURCE_MAPS: SourceMapFixture[] = [
   {
     minifiedFile: 'checkout.a81e93bd.js',

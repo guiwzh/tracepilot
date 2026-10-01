@@ -18,6 +18,8 @@ export const investigationSourceSchema = z.enum([
   'breadcrumb',
   'network',
   'release',
+  // 代码变更：嫌疑提交、出错行最后一次改动（find_suspect_commits）。
+  'commit',
 ]);
 
 export const submittedEvidenceSchema = z.object({

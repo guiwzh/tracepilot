@@ -10,6 +10,16 @@ import {
 import type { TraceDatabase } from '../db/client';
 import { browserName } from '../lib/userAgent';
 import { getIssue, listIssueEvents, mapEvent } from '../services/queries';
+import {
+  blameLine,
+  commitsBetween,
+  fileDiff,
+  projectRepository,
+  readFileAt,
+  RepositoryError,
+  resolveRepositoryFile,
+  searchCodeAt,
+} from '../services/repository';
 import { lookupFor, sourceContext } from '../services/sourcemaps';
 
 /**
@@ -32,8 +42,10 @@ export interface ToolContext {
   database: TraceDatabase;
   issueId: string;
   projectId: string;
-  /** 是否允许把源码片段发给模型服务商；关闭后 get_source_context 如实返回不可用。 */
+  /** 是否允许把源码片段发给模型服务商；关闭后读源码、搜代码的工具如实返回不可用。 */
   allowSourceContext: boolean;
+  /** 被监控应用的 git 仓库所在的根目录（<root>/<项目 id>）；null 表示没有代码上下文。 */
+  repositoryRoot: string | null;
 }
 
 /** 工具里预期内的失败（例如事件不存在）。code 和 message 会原样回给模型，让它换个参数重试。 */
@@ -145,6 +157,14 @@ const SOURCE_UNAVAILABLE: Record<string, string> = {
   FRAME_NOT_MAPPED: 'The source map has no mapping for this frame.',
   NO_SOURCES_CONTENT: 'The source map does not embed source code (sourcesContent).',
   DISABLED: 'Source snippets are disabled on this server.',
+  NO_REPOSITORY:
+    'No git repository is configured for this project, so its code and commit history cannot be read.',
+  NO_COMMIT: 'The release has no commit recorded, so the code it shipped cannot be located.',
+  COMMIT_NOT_FOUND: "The release's commit is not in the configured repository.",
+  FILE_NOT_FOUND: 'That file does not exist at the release commit.',
+  INVALID_PATH: 'The path must be relative to the repository root.',
+  GIT_FAILED: 'The repository could not be read.',
+  NO_RELEASE: 'None of the events of this issue is linked to a release.',
 };
 
 const getIssueOverview = defineTool({
@@ -326,13 +346,271 @@ const compareReleases = defineTool({
   },
 });
 
-/** 收集证据用的 5 个只读工具。参数都是 z.object：MCP 在它们之上扩展出 issueId。 */
+interface ReleaseRow {
+  version: string;
+  commit_sha: string | null;
+  created_at: number;
+  issue_events: number;
+  first_seen: number | null;
+}
+
+/** 项目的全部版本（按部署时间），以及本 Issue 在每个版本里的事件数和首次出现时间。 */
+function releasesOf(context: ToolContext): ReleaseRow[] {
+  return context.database.sqlite
+    .prepare(
+      `SELECT r.version, r.commit_sha, r.created_at,
+         SUM(CASE WHEN e.issue_id = ? THEN 1 ELSE 0 END) AS issue_events,
+         MIN(CASE WHEN e.issue_id = ? THEN e.created_at END) AS first_seen
+       FROM releases r LEFT JOIN events e ON e.release_id = r.id
+       WHERE r.project_id = ? GROUP BY r.id ORDER BY r.created_at`,
+    )
+    .all(context.issueId, context.issueId, context.projectId) as ReleaseRow[];
+}
+
+/**
+ * 代码类工具读哪个版本：参数指定的版本，否则是本 Issue 最近一个事件所在的版本（出错的就是那份代码）。
+ */
+function targetRelease(context: ToolContext, version: string | undefined): ReleaseRow {
+  const releases = releasesOf(context);
+  if (version) {
+    const named = releases.find((release) => release.version === version);
+    if (!named) {
+      throw new ToolError('RELEASE_NOT_FOUND', `This project has no release "${version}".`);
+    }
+    return named;
+  }
+  const latest = context.database.sqlite
+    .prepare(
+      `SELECT r.version FROM events e JOIN releases r ON r.id = e.release_id
+       WHERE e.issue_id = ? ORDER BY e.created_at DESC LIMIT 1`,
+    )
+    .get(context.issueId) as { version: string } | undefined;
+  const release = latest && releases.find((item) => item.version === latest.version);
+  if (!release) throw new RepositoryError('NO_COMMIT', 'NO_RELEASE');
+  return release;
+}
+
+/** 代码类工具拿不到结果时的统一回答：原因码加说明，模型把它记进 missingInformation。 */
+function codeUnavailable(reason: string, release?: string) {
+  return { available: false, reason, meaning: SOURCE_UNAVAILABLE[reason] ?? reason, release };
+}
+
+/** 运行一个代码类工具：仓库缺失、提交缺失等预期内的情况变成 codeUnavailable，其余错误照常抛出。 */
+async function withRepository<T>(
+  context: ToolContext,
+  run: (repository: string) => Promise<T>,
+): Promise<T | ReturnType<typeof codeUnavailable>> {
+  const repository = projectRepository(context.repositoryRoot, context.projectId);
+  if (!repository) return codeUnavailable('NO_REPOSITORY');
+  try {
+    return await run(repository);
+  } catch (error) {
+    if (error instanceof RepositoryError) {
+      return codeUnavailable(error.message === 'NO_RELEASE' ? 'NO_RELEASE' : error.code);
+    }
+    throw error;
+  }
+}
+
+const readSourceFile = defineTool({
+  name: 'read_source_file',
+  description:
+    "Lines of a file from the application's git repository, exactly as shipped in a release (default: the release of the issue's latest event). Use it to read more than get_source_context shows, or files the stack does not reach. At most 80 lines per call.",
+  parameters: z.object({
+    path: z
+      .string()
+      .min(1)
+      .max(300)
+      .describe('Path relative to the repository root, e.g. src/checkout/total.ts'),
+    startLine: z.number().int().min(1),
+    endLine: z.number().int().min(1),
+    release: z
+      .string()
+      .min(1)
+      .max(120)
+      .nullable()
+      .optional()
+      .describe('Release version; defaults to the latest one with this issue'),
+  }),
+  execute: async ({ path, startLine, endLine, release: version }, context) => {
+    if (!context.allowSourceContext) return codeUnavailable('DISABLED');
+    const release = targetRelease(context, version ?? undefined);
+    return withRepository(context, async (repository) => {
+      const file = await readFileAt(
+        repository,
+        release.commit_sha,
+        path,
+        startLine,
+        Math.min(Math.max(endLine, startLine), startLine + 79),
+      );
+      return {
+        available: true,
+        release: release.version,
+        commit: file.commit.slice(0, 12),
+        path: file.path,
+        totalLines: file.totalLines,
+        // 带行号的文本：模型引用时连行号一起摘，读的人也能对上编辑器里的位置。
+        code: file.lines
+          .map((text, offset) => `${String(file.startLine + offset).padStart(4)} | ${text}`)
+          .join('\n'),
+      };
+    });
+  },
+});
+
+const searchCode = defineTool({
+  name: 'search_code',
+  description:
+    "Literal (not regex) text search over the application's git repository as shipped in a release: where a field is defined, who else calls a function, how a value is produced. Returns at most 20 matching lines.",
+  parameters: z.object({
+    query: z.string().min(2).max(100),
+    path: z
+      .string()
+      .min(1)
+      .max(200)
+      .nullable()
+      .optional()
+      .describe('Only search under this directory or file'),
+    release: z.string().min(1).max(120).nullable().optional(),
+  }),
+  execute: async ({ query, path, release: version }, context) => {
+    if (!context.allowSourceContext) return codeUnavailable('DISABLED');
+    const release = targetRelease(context, version ?? undefined);
+    return withRepository(context, async (repository) => {
+      const result = await searchCodeAt(
+        repository,
+        release.commit_sha,
+        query,
+        path ?? undefined,
+        20,
+      );
+      return {
+        available: true,
+        release: release.version,
+        commit: result.commit.slice(0, 12),
+        matches: result.matches.map((match) => `${match.path}:${match.line}: ${match.text}`),
+        truncated: result.truncated,
+      };
+    });
+  },
+});
+
+/** 还原后堆栈里的一帧：at fn (src/x.ts:12:5)。只取映射到源码的帧，跳过依赖包和仍是压缩地址的帧。 */
+const MAPPED_FRAME = /at\s+\S+\s+\(([^()\s]+):(\d+):\d+\)/;
+
+function inAppFrames(originalStack: string): Array<{ source: string; line: number }> {
+  const frames: Array<{ source: string; line: number }> = [];
+  for (const text of originalStack.split('\n')) {
+    const match = MAPPED_FRAME.exec(text);
+    if (!match) continue;
+    const source = match[1]!;
+    if (/^[a-z]+:\/\//i.test(source) || source.includes('node_modules/')) continue;
+    frames.push({ source, line: Number(match[2]) });
+  }
+  return frames;
+}
+
+const findSuspectCommits = defineTool({
+  name: 'find_suspect_commits',
+  description:
+    'Which code change likely introduced this issue: the release it first appeared in, the commits between the previous release and that one (flagging those that touch files in the stack), and the commit that last changed the failing line (git blame).',
+  parameters: z.object({}),
+  execute: async (_args, context) => {
+    const releases = releasesOf(context);
+    const affected = releases.filter((release) => release.issue_events > 0);
+    const first = affected[0];
+    if (!first) return codeUnavailable('NO_RELEASE');
+    const previous = releases
+      .filter((release) => release.created_at < first.created_at && release.commit_sha)
+      .at(-1);
+    return withRepository(context, async (repository) => {
+      // 最近一个已还原的事件的应用帧，对到仓库里的文件。
+      const sample = context.database.sqlite
+        .prepare(
+          `SELECT original_stack FROM events WHERE issue_id = ? AND original_stack IS NOT NULL
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(context.issueId) as { original_stack: string } | undefined;
+      const stackFiles: Array<{ path: string; line: number }> = [];
+      for (const frame of inAppFrames(sample?.original_stack ?? '').slice(0, 5)) {
+        const path = await resolveRepositoryFile(
+          repository,
+          first.commit_sha ?? '',
+          frame.source,
+        ).catch(() => null);
+        if (path && !stackFiles.some((file) => file.path === path))
+          stackFiles.push({ path, line: frame.line });
+      }
+
+      const top = stackFiles[0];
+      const blame = top ? await blameLine(repository, first.commit_sha, top.path, top.line) : null;
+      const commits = previous
+        ? await commitsBetween(repository, previous.commit_sha, first.commit_sha, 30)
+        : [];
+      const stackPaths = new Set(stackFiles.map((file) => file.path));
+      const inRange = commits.map((commit) => ({
+        commit: commit.sha.slice(0, 12),
+        author: commit.author,
+        date: commit.date,
+        subject: commit.subject,
+        files: commit.files.slice(0, 10),
+        touchesStackFiles: commit.files.filter((file) => stackPaths.has(file)),
+      }));
+      const suspects = inRange.filter((commit) => commit.touchesStackFiles.length > 0);
+      const blameInRange = Boolean(blame && commits.some((commit) => commit.sha === blame.sha));
+
+      const summary = !previous
+        ? `${first.version} is the first release with a recorded commit, so there is no earlier release to compare with.`
+        : `${suspects.length} of ${inRange.length} commits between ${previous.version} and ${first.version} touched files in the stack${
+            suspects[0]
+              ? `; ${suspects[0].commit.slice(0, 7)} "${suspects[0].subject}" by ${suspects[0].author} changed ${suspects[0].touchesStackFiles.join(', ')}`
+              : ''
+          }.`;
+      return {
+        available: true,
+        firstSeenRelease: first.version,
+        previousRelease: previous?.version ?? null,
+        range: previous
+          ? `${String(previous.commit_sha).slice(0, 12)}..${String(first.commit_sha).slice(0, 12)}`
+          : null,
+        stackFiles: stackFiles.map((file) => `${file.path}:${file.line}`),
+        summary,
+        lastChangeToFailingLine: blame
+          ? {
+              commit: blame.sha.slice(0, 12),
+              author: blame.author,
+              date: blame.date,
+              subject: blame.subject,
+              line: `${blame.files[0]}:${blame.line}`,
+              // 出错那一行的代码只在允许外发源码时给出。
+              ...(context.allowSourceContext ? { code: blame.code } : {}),
+              inReleaseRange: blameInRange,
+            }
+          : null,
+        commitsInRange: inRange.slice(0, 10),
+        // 嫌疑提交对出错文件的改动：只在允许外发源码时给出，最多 30 行。
+        diff:
+          context.allowSourceContext && blameInRange && blame && top
+            ? await fileDiff(repository, blame.sha, top.path, 30)
+            : null,
+      };
+    });
+  },
+});
+
+/**
+ * 收集证据用的 8 个只读工具。参数都是 z.object：MCP 在它们之上扩展出 issueId。
+ * 后三个读被监控应用的 git 仓库（services/repository.ts），没有配置仓库时如实回答。
+ */
 export const INVESTIGATION_TOOLS: ToolDefinition[] = [
   getIssueOverview,
   listEventSamples,
   getEventDetail,
   getSourceContext,
   compareReleases,
+  readSourceFile,
+  searchCode,
+  findSuspectCommits,
 ];
 
 /**

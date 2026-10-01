@@ -34,6 +34,8 @@ export interface McpScope {
   projectIds: readonly string[] | 'all';
   /** 是否允许返回源码片段，与 Agent 的 AGENT_SOURCE_CONTEXT 同一个开关。 */
   allowSourceContext: boolean;
+  /** 被监控应用的 git 仓库根目录（REPOSITORY_ROOT）；null 时代码类工具回答「没有配置仓库」。 */
+  repositoryRoot: string | null;
 }
 
 /** 告诉客户端的模型怎么用这些工具；随 initialize 响应下发。 */
@@ -217,6 +219,7 @@ async function callTool(scope: McpScope, name: string, args: unknown): Promise<C
     issueId,
     projectId,
     allowSourceContext: scope.allowSourceContext,
+    repositoryRoot: scope.repositoryRoot,
   });
   return { content: [{ type: 'text', text: result.output }], isError: !result.ok };
 }

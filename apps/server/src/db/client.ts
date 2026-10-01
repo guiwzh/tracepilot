@@ -86,5 +86,6 @@ export function ensureDemoProject(database: TraceDatabase): void {
       `INSERT INTO releases (id, project_id, version, commit_sha, created_at)
        VALUES (?, ?, ?, ?, ?) ON CONFLICT(project_id, version) DO NOTHING`,
     )
-    .run('demo-release-2-4-1', 'demo-project', '2.4.1', '7f3ac91', now - 3_600_000);
+    // 与种子数据一致：26 小时前部署。没有跑过 pnpm seed 时不知道提交号，留空。
+    .run('demo-release-2-4-1', 'demo-project', '2.4.1', null, now - 26 * 3_600_000);
 }

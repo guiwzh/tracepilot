@@ -15,7 +15,7 @@ test.beforeAll(async () => {
 });
 
 test('capture the investigation walkthrough', async ({ page }) => {
-  // 种子已为 2.4.1 上传内联源码的 Source Map（2.3.9 故意缺失），截图直接使用。
+  // 种子已为两个版本上传内联源码的 Source Map，并建好演示 git 仓库，截图直接使用。
   // 1. Issue 列表：筛选、趋势、影响用户——排障的入口。
   await page.goto('/projects/demo-project/issues');
   await expect(page.getByRole('heading', { name: 'Issues' })).toBeVisible();

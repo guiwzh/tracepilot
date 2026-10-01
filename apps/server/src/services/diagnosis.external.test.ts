@@ -147,6 +147,7 @@ async function buildModelApp(modelApiUrl: string) {
     agentSourceContext: true,
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
+    repositoryRoot: null,
     modelApiKey: 'test-only-key',
     modelApiUrl,
   };

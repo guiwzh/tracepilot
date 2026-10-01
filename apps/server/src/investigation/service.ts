@@ -121,6 +121,7 @@ export class InvestigationService {
           issueId: issue.id,
           projectId: issue.project_id,
           allowSourceContext: this.config.agentSourceContext,
+          repositoryRoot: this.config.repositoryRoot,
         },
         issue,
         emit: (event) => this.store.append(runId, event),

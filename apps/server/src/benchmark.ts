@@ -28,6 +28,7 @@ const config: ServerConfig = {
   // 基准要在一两秒里灌进上万个事件，测的是接入本身：关掉限流和突增保护。
   ingestRateLimitPerMinute: 0,
   spikeProtection: false,
+  repositoryRoot: null,
 };
 // 不配置模型密钥、关闭日志：只测接入和查询本身。
 const app = await buildApp({ config, logger: false });

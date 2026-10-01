@@ -34,8 +34,10 @@ function SourceMapUploader({ release }: { release: Release }) {
           <Boxes size={15} />
           <span>
             <strong>{release.version}</strong>
-            <small>
-              {release.commitSha ?? 'No commit linked'} · {absoluteTime(release.createdAt)}
+            <small title={release.commitSha ?? undefined}>
+              {/* 构建插件记下的是 40 位提交号，列表里显示前 12 位，悬停看完整的。 */}
+              {release.commitSha ? release.commitSha.slice(0, 12) : 'No commit linked'} ·{' '}
+              {absoluteTime(release.createdAt)}
             </small>
           </span>
         </span>

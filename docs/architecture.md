@@ -13,6 +13,7 @@ flowchart LR
   SQLite --> Query[Issue 与指标 API]
   Query --> Dashboard[React 调查工作台]
   SQLite --> Tools[只读工具]
+  Repo[(被监控应用的 git 仓库<br/>按版本只读)] --> Tools
   Maps --> Tools
   Tools <--> Agent[排障 Agent 循环]
   Agent -- 事件日志 + SSE --> Dashboard
@@ -22,7 +23,7 @@ flowchart LR
 
 排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)，实现见
 [server.md](server.md#10-排障-agent)。同一套只读工具经 MCP 开放给编码 Agent，见
-[ADR 0007](decisions/0007-mcp-server.md)。
+[ADR 0007](decisions/0007-mcp-server.md)；按版本读代码、找嫌疑提交见 [ADR 0008](decisions/0008-code-and-change-context.md)。
 
 ## 工作区边界
 

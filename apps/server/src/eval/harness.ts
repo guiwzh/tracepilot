@@ -118,6 +118,7 @@ export async function runEngine(
       issueId: prepared.issueId,
       projectId: 'demo-project',
       allowSourceContext: config.agentSourceContext,
+      repositoryRoot: config.repositoryRoot,
     },
     issue: { id: prepared.issueId, title: prepared.issueTitle },
     emit: () => {},

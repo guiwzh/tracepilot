@@ -37,10 +37,11 @@ beforeEach(async () => {
     agentSourceContext: true,
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
+    repositoryRoot: join(directory, 'repos'),
   };
-  // 种子数据先写入同一个库文件，再由 buildApp 打开。
+  // 种子数据先写入同一个库文件，再由 buildApp 打开；演示 git 仓库建在临时目录里。
   const database = createDatabase(config.databasePath);
-  await seedDemoData(database, config.sourceMapDir);
+  await seedDemoData(database, config.sourceMapDir, config.repositoryRoot);
   database.close();
 });
 
@@ -130,7 +131,7 @@ describe('investigation agent', () => {
     const events = (
       await app.inject({ method: 'GET', url: `/api/v1/investigations/${run.id}` })
     ).json() as InvestigationRun;
-    expect(events.usage.toolCalls).toBe(5);
+    expect(events.usage.toolCalls).toBe(6);
     const stream = await readStream(run.id, 0);
     expect(stream.map((record) => record.seq)).toEqual(stream.map((_, index) => index + 1));
     expect(
@@ -143,7 +144,16 @@ describe('investigation agent', () => {
       'get_event_detail',
       'compare_releases',
       'get_source_context',
+      'find_suspect_commits',
     ]);
+    // 嫌疑提交：出错那一行最后是被 2.4.1 之前的那次性能优化改的，引用它的提交说明并通过核验。
+    expect(finished.report?.evidence).toContainEqual(
+      expect.objectContaining({
+        source: 'commit',
+        quote: expect.stringContaining('reuse the cart summary total'),
+        verified: true,
+      }),
+    );
     expect(stream.at(-1)?.event.type).toBe('run.completed');
   });
 
@@ -289,6 +299,7 @@ describe('investigation agent', () => {
           issueId: issue!,
           projectId: 'demo-project',
           allowSourceContext: true,
+          repositoryRoot: null,
         },
       );
       const detail = JSON.parse(result.output.slice(result.output.indexOf('{'))) as {
@@ -363,7 +374,13 @@ describe('investigation agent', () => {
       const result = await runTool(
         'get_event_detail',
         JSON.stringify({ eventId: 'offline-failure' }),
-        { database, issueId: issue!, projectId: 'demo-project', allowSourceContext: true },
+        {
+          database,
+          issueId: issue!,
+          projectId: 'demo-project',
+          allowSourceContext: true,
+          repositoryRoot: null,
+        },
       );
       const detail = JSON.parse(result.output) as { failedRequests: string[]; timeline: string[] };
       expect(detail.failedRequests).toEqual([
@@ -400,7 +417,13 @@ describe('investigation agent', () => {
       const result = await runTool(
         'get_event_detail',
         JSON.stringify({ eventId: otherEvent.items[0]!.id }),
-        { database, issueId: target, projectId: 'demo-project', allowSourceContext: true },
+        {
+          database,
+          issueId: target,
+          projectId: 'demo-project',
+          allowSourceContext: true,
+          repositoryRoot: null,
+        },
       );
       expect(result.ok).toBe(false);
       expect(result.output).toContain('EVENT_NOT_FOUND');
