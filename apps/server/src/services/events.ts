@@ -112,6 +112,8 @@ function eventContext(event: MonitorEvent) {
     release: event.release,
     // 生效的采样率；旧版本 SDK 不上报，按 1（全量）处理。
     sampleRate: event.sampleRate ?? 1,
+    // 存下来，事后上传的 map 回填和排障 Agent 读源码时也能按 Debug ID 找 map。
+    ...(event.debugIds?.length ? { debugIds: event.debugIds } : {}),
   };
 }
 
@@ -334,10 +336,15 @@ export async function ingestEnvelope(
   let symbolicationFailures = 0;
   for (const item of prepared) {
     if (!item.stack || item.metricId || stored.get(item.rowId)) continue;
-    // 版本还没登记时没有任何 map，只解析栈帧（聚合仍要用它挑出应用自己的帧）。
+    // 版本还没登记时，按版本 + 文件名找不到任何 map，但按 Debug ID 仍可能找到（版本号填错的情况）；
+    // 两样都没有时只解析栈帧，聚合仍要用它挑出应用自己的帧。
     const release = findRelease.get(project.id, item.event.release) as { id: string } | undefined;
     try {
-      item.resolved = await resolveStack(database, release?.id ?? null, item.stack);
+      item.resolved = await resolveStack(
+        database,
+        { projectId: project.id, releaseId: release?.id ?? null, debugIds: item.event.debugIds },
+        item.stack,
+      );
     } catch {
       symbolicationFailures += 1;
     }

@@ -10,7 +10,7 @@ import {
 import type { TraceDatabase } from '../db/client';
 import { browserName } from '../lib/userAgent';
 import { getIssue, listIssueEvents, mapEvent } from '../services/queries';
-import { sourceContext } from '../services/sourcemaps';
+import { lookupFor, sourceContext } from '../services/sourcemaps';
 
 /**
  * 排障 Agent 能用的全部工具。每个工具 = 名字 + 给模型看的说明 + 参数的 Zod Schema + 执行函数。
@@ -139,7 +139,8 @@ function findEvent(context: ToolContext, eventId: string) {
 const SOURCE_UNAVAILABLE: Record<string, string> = {
   NO_STACK: 'This event has no stack trace.',
   NO_FRAME: 'The stack has no frame at that index.',
-  NO_SOURCE_MAP: 'No source map was uploaded for this file in this release.',
+  NO_SOURCE_MAP:
+    'No uploaded source map matches this file, neither by debug ID nor by release and file name.',
   FRAME_NOT_MAPPED: 'The source map has no mapping for this frame.',
   NO_SOURCES_CONTENT: 'The source map does not embed source code (sourcesContent).',
   DISABLED: 'Source snippets are disabled on this server.',
@@ -247,8 +248,13 @@ const getSourceContext = defineTool({
       release: event.context.release,
     });
     if (!context.allowSourceContext) return unavailable('DISABLED');
-    if (!event.stack || !event.releaseId) return unavailable('NO_STACK');
-    const result = await sourceContext(context.database, event.releaseId, event.stack, frameIndex);
+    if (!event.stack) return unavailable('NO_STACK');
+    const result = await sourceContext(
+      context.database,
+      lookupFor(context.projectId, event),
+      event.stack,
+      frameIndex,
+    );
     if (!result.ok) return unavailable(result.reason);
     return {
       available: true,

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port 4174",
     "build": "tsc -b && vite build",
-    "lab:production": "pnpm --filter \"@trace-pilot/playground^...\" build && vite build --sourcemap hidden && node scripts/upload-source-maps.mjs && vite preview --port 4175 --strictPort",
+    "lab:production": "pnpm --filter \"@trace-pilot/playground^...\" build && vite build -c vite.lab.config.ts && vite preview --port 4175 --strictPort",
     "typecheck": "tsc -p tsconfig.app.json",
     "test": "vitest run --passWithNoTests"
   },
@@ -16,6 +16,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@trace-pilot/vite-plugin": "workspace:*",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",

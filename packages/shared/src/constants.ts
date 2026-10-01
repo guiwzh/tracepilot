@@ -19,6 +19,13 @@ export const DEFAULT_MAX_QUEUE_SIZE = 1_000;
 export const MAX_BREADCRUMBS = 50;
 /** 自定义指纹里代表「默认指纹」的占位符，见 MonitorEvent.fingerprint。 */
 export const DEFAULT_FINGERPRINT = '{{ default }}';
+/**
+ * 构建插件注入到每个产物文件开头的登记表在全局对象上的属性名：键是该文件顶层 new Error().stack，
+ * 值是这个文件的 Debug ID。SDK 从堆栈里解析出文件地址，把事件涉及的文件和 Debug ID 一起上报。
+ */
+export const DEBUG_ID_REGISTRY = '__TRACEPILOT_DEBUG_IDS__';
+/** Debug ID 的格式：小写 UUID，与 ECMA-426 提案和 Sentry 的约定一致。 */
+export const DEBUG_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** 单次诊断的提示词版本，参与诊断缓存键；改动提示词时要递增，旧缓存才会失效。 */
 export const PROMPT_VERSION = 'diagnosis-evidence-v1';
 

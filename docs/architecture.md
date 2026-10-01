@@ -7,7 +7,8 @@ flowchart LR
   Web[Web 应用] --> SDK[监控 SDK]
   SDK --> Ingest[Fastify 接入 API]
   Ingest --> SQLite[(SQLite)]
-  Maps[私有 Source Map] --> Symbolicator[堆栈还原服务]
+  Build[Vite 构建插件] -- Debug ID + 私有 map --> Maps[私有 Source Map]
+  Maps --> Symbolicator[堆栈还原服务]
   SQLite --> Symbolicator
   SQLite --> Query[Issue 与指标 API]
   Query --> Dashboard[React 调查工作台]
@@ -24,6 +25,7 @@ flowchart LR
 
 - `packages/shared`：传输 Schema、公开响应类型、隐私工具与阈值。
 - `packages/monitor-sdk`：仅在浏览器运行的采集核心与插件，内部结构见 [monitor-sdk.md](monitor-sdk.md)。
+- `packages/vite-plugin`：构建时给产物注入 Debug ID、上传 Source Map 且不让它进入产物，见 [vite-plugin.md](vite-plugin.md)。
 - `apps/server`：数据接入、聚合、查询、私有 Source Map、排障 Agent 与评测集，内部结构见 [server.md](server.md)。
 - `apps/dashboard`：面向调查人员的用户界面。
 - `apps/playground`：用于验证完整遥测链路的可控场景；`tests/e2e/playground.spec.ts` 逐个点击这些场景，
@@ -35,7 +37,8 @@ flowchart LR
 2. 模型给出的每条证据都必须指向一次真实的工具调用，并附上从结果里逐字摘出、经服务端核对的原文。
 3. 模型只有只读工具；遥测里的文本一律视为不可信数据，不执行其中的指令。
 4. 默认不采集原始请求体和常见敏感字段。
-5. Release 是 Source Map 解析的隔离边界。还原在聚合之前进行，聚合按源码位置（见
+5. map 按 Debug ID 关联到产物内容（见 [ADR 0005](decisions/0005-debug-ids.md)），没有 Debug ID 时按 Release + 文件名，
+   按 Debug ID 查找限定在项目内。还原在聚合之前进行，聚合按源码位置（见
    [ADR 0004](decisions/0004-grouping-after-symbolication.md)）；还原是附加信息：map 缺失、损坏或解析失败都只让事件
    保留压缩堆栈、按压缩帧聚合，接入照常返回 202。
 6. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。表结构只在

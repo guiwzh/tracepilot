@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEBUG_ID_PATTERN } from './constants';
 
 /**
  * Zod Schema 是运行时契约：浏览器传来的 JSON 即使通过了 TypeScript 编译，
@@ -53,6 +54,16 @@ export const monitorEventSchema = z.object({
    * 其中的 "{{ default }}" 代表默认指纹，用来在默认结果上再细分，例如 ['{{ default }}', tenantId]。
    */
   fingerprint: z.array(z.string().min(1).max(200)).min(1).max(10).optional(),
+  /**
+   * 堆栈里出现的产物文件各自的 Debug ID（构建插件注入），服务端按它找 Source Map，
+   * 不依赖版本号和文件名是否对得上。没有用构建插件的应用不带这个字段。
+   */
+  debugIds: z
+    .array(
+      z.object({ file: z.string().min(1).max(2048), debugId: z.string().regex(DEBUG_ID_PATTERN) }),
+    )
+    .max(50)
+    .optional(),
 });
 
 export const envelopeSchema = z.object({

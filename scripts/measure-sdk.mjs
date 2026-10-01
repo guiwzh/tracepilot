@@ -65,8 +65,10 @@ const artifactText = artifact.toString('utf8');
 
 // 即使刚刚构建过，也复核产物确实经过压缩：万一构建配置里的 minify 被删掉，
 // 这里要直接失败，而不是安静地报告一个更大的数字。
+// 压缩后的产物也不是只有一行：压缩器把代码里的 '\n' 改写成内含真实换行的模板字符串（少一个字节），
+// 每处 split('\n') 都会多出一行。未压缩的产物有上千行且带缩进，按「行数远超这个量级或有缩进」判断。
 const lineCount = artifactText.split('\n').length;
-if (lineCount > 5 || artifactText.includes('\n  ')) {
+if (lineCount > 30 || artifactText.includes('\n  ')) {
   console.error(
     `产物看起来未经压缩（${lineCount} 行，且包含缩进）。\n` +
       '请检查 packages/monitor-sdk/tsdown.config.ts 是否仍设置 minify: true。',

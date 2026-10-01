@@ -19,8 +19,8 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 9,469 字节；业务应用打包后实际多付出 15,175 字节，
-其中 `web-vitals`（归因版本）约 5,280 字节。
+体积（`pnpm measure:sdk`，gzip）：发布产物 9,777 字节；业务应用打包后实际多付出 15,491 字节，
+其中 `web-vitals`（归因版本）约 5,290 字节。
 
 ## 2. 代码结构
 
@@ -34,6 +34,7 @@ packages/monitor-sdk/
 │   │   ├── options.ts            配置规范化：数字项的默认值与上下界（唯一一份）、采样率、失败状态码
 │   │   ├── noise.ts              噪声过滤与去重签名
 │   │   ├── history.ts            watchHistory：包装 pushState / replaceState，得知 SPA 路由变化
+│   │   ├── debugIds.ts           读构建插件注入的 Debug ID 登记表，找出堆栈里各文件的 Debug ID
 │   │   └── helpers.ts            事件 id、页面与设备上下文、错误描述与 cause 链、会话采样、栈首帧
 │   ├── plugins/
 │   │   ├── ErrorPlugin.ts        window error：运行时异常
@@ -237,6 +238,7 @@ flowchart TD
 - `device`：`userAgent`、`language`、视口宽高。
 - `payload`：按 `redactPayload` 脱敏，堆栈字段保留行列号（见第 8 节）。
 - `breadcrumbs`：性能事件为空数组，其余事件带上当前面包屑的副本。
+- `debugIds`：payload 带堆栈、且应用用构建插件构建时，堆栈里出现的产物文件各自的 Debug ID（见 5.6）。
 
 去重放在组装之前，错误风暴里被挡下的重复几乎没有开销。组装、`beforeSend` 和入队时抛出的异常都只让这次
 采集返回 `null`，不会传到业务代码。
@@ -294,6 +296,23 @@ sequenceDiagram
 同一事件上的监听器按注册顺序执行，核心的监听在 `start()` 里早于传输层注册，所以插件提交的数据一定排在
 退出发送之前。这也是插件应该实现 `onPageHidden`、而不是自己监听 `pagehide` 的原因：自己注册的监听器
 可能排在传输层之后。
+
+### 5.6 Debug ID
+
+服务端按「版本 + 文件名」找 Source Map 时，SDK 配置的 `release` 必须与上传 map 时填的一致，同一个版本里同一个文件名也
+只能对应一份内容。构建插件（`@trace-pilot/vite-plugin`，见 [vite-plugin.md](vite-plugin.md)）给每个产物和它的 map
+写入同一个 Debug ID，让 map 直接跟着内容走。
+
+插件在每个产物开头注入一行代码：在文件顶层 `new Error()`，以它的 stack 为键、这个文件的 Debug ID 为值，写进全局的
+`__TRACEPILOT_DEBUG_IDS__`。stack 的第一帧就是这个文件自己的地址。`core/debugIds.ts` 在出错时：
+
+1. 遍历登记表，把每个键（一段 stack）解析成文件地址，结果按键缓存，同一个键只解析一次；懒加载的 chunk 随时会追加条目，
+   所以每次都重新对一遍登记表，只解析新出现的键。
+2. 逐行扫描事件的堆栈，取出每一帧的文件地址，去掉查询参数（事件的堆栈在 SDK 和服务端都会被脱敏删掉它们），按出现顺序
+   挑出登记过的文件，每个文件一次，最多 50 个。
+3. 一个都没有时事件不带这个字段：没用插件的应用，事件与之前完全相同。
+
+不在页面加载时解析：加载时只多一次 `new Error()`，解析留到真的出错时才做。
 
 ## 6. 事件模型
 
@@ -895,7 +914,7 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 | 限流与故障 | `429`、`5xx`：SDK 退避后重试；`Retry-After` 通过 CORS 暴露给跨域的 SDK                                               |
 | 幂等       | `eventId` 是幂等键，重复送达的事件计入 `duplicates` 并跳过；性能样本按 `metricId` 覆盖，采集时间更早的旧值不覆盖新值 |
 | 时间       | 服务端收到的时间与 `sentAt` 相差超过 1 分钟时，认为设备时钟不准，把事件和它的面包屑平移同样的量                      |
-| 版本       | `release` 是 Source Map 的隔离边界：带堆栈的事件按所在版本的 map 还原                                                |
+| 版本       | 带 `debugIds` 的帧按 Debug ID 找 map，不看 `release`；其余按「`release` + 文件名」找                                 |
 
 服务端还会再做一遍脱敏、按指纹把事件归入 Issue，详见 [event-schema.md](event-schema.md)。
 
@@ -913,9 +932,9 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
-| 发布产物 `dist/index.js` | 29,676 |  9,469 | 10,800 |
-| 业务应用实际接入成本     | 45,815 | 15,175 | 17,300 |
-| 其中 `web-vitals`        |      — |  5,280 |      — |
+| 发布产物 `dist/index.js` | 30,478 |  9,777 | 10,800 |
+| 业务应用实际接入成本     | 46,575 | 15,491 | 17,300 |
+| 其中 `web-vitals`        |      — |  5,290 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
 白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
@@ -923,12 +942,13 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 ## 13. 测试与质量保障
 
-**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，90 项）。`test/setup.ts` 为每个用例把
+**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，94 项）。`test/setup.ts` 为每个用例把
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
 | 测试文件                            | 覆盖                                                                                                                                                                                                              |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/debugIds.test.ts`             | 没用插件时不带字段、按文件去重并去掉查询参数（V8 与 Firefox 格式的登记）、懒加载的 chunk 晚登记也能找到、忽略无法使用的登记项                                                                                     |
 | `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、自定义指纹、`flush()` 的投递状况、配置规范化 |
 | `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                 |
 | `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                      |

@@ -147,6 +147,11 @@ Agent 的引用 100% 通过核验，12 份报告都在第一次提交时通过�
   「已解决又出现」的回归检测也跟着失效。改为在聚合之前还原，按「源文件 + 函数名 + 出错那行代码」聚合，不看行列号，
   并跳过依赖包的帧。旧数据靠指纹映射表衔接：新算法找不到时按旧算法再找一次，找到就把新指纹登记到原 Issue 上。
   代价是聚合依赖 map 先到，缺 map 的版本会单独成 Issue，所以 map 要在构建时上传，分开的可以手动合并。
+- **map 跟着内容走，不跟着版本号走**　按「版本 + 文件名」找 map，SDK 的版本号配错一次，这个版本的错误就全都还原不了；
+  同一个版本号重新构建过，旧页面的错误还会被新 map 还原到一行不相干的代码上。Vite 构建插件给产物和 map 写入同一个
+  Debug ID（ECMA-426 提案、Sentry 的做法），在产物开头注入一行登记代码，SDK 出错时带上堆栈里各文件的 Debug ID，
+  服务端先按它找 map。登记代码单独占一行，map 的 `mappings` 前面多一个分号就整体下移一行；集成测试真的跑
+  `vite build`，执行产物、抛错，再用上传的 map 把真实堆栈换算回源码那一行。
 - **Source Map 的行列坐标**　浏览器列号 1 基、`source-map` 库 0 基，两次转换集中在一处；测试刻意避开
   `:1:0`，否则偏移会被「恰好都是 0」掩盖。Release 是隔离边界，`.map` 只存在服务端私有目录。
 - **按会话采样，性能单独抽样**　按事件采样会让一条错误被采到、而它之前的请求没被采到，证据链断裂。
@@ -198,9 +203,9 @@ pnpm evaluate:agent
 
 | 指标                                     |                       结果 | 复现命令                   |
 | ---------------------------------------- | -------------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             |        29,676 / 9,469 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip |       45,815 / 15,175 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals（归因版）                |            5,280 字节 gzip | `pnpm measure:sdk`         |
+| SDK 发布产物 minified / gzip             |        30,478 / 9,777 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |       46,575 / 15,491 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |            5,290 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95¹ |            60 / 190–400 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95¹       |           30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                       0 个 | `pnpm measure:sdk-runtime` |
@@ -211,7 +216,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 206 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 226 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -245,7 +250,8 @@ flowchart LR
   App[业务 Web 应用] --> SDK[监控 SDK]
   SDK --> Ingest[Fastify 接入 API]
   Ingest --> DB[(SQLite)]
-  Maps[私有 Source Map] --> Symbolicate[堆栈还原]
+  Build[Vite 构建插件] -- Debug ID + 私有 map --> Maps[私有 Source Map]
+  Maps --> Symbolicate[堆栈还原]
   DB --> Symbolicate
   DB --> Query[Issue 与指标 API]
   Query --> UI[React 调查工作台]
@@ -265,8 +271,9 @@ flowchart LR
 [server.md](docs/server.md)，关键决策见
 [ADR 0001](docs/decisions/0001-typescript-monorepo.md)、
 [ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md)、
-[ADR 0003](docs/decisions/0003-read-only-investigation-agent.md) 与
-[ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)。
+[ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)、
+[ADR 0004](docs/decisions/0004-grouping-after-symbolication.md) 与
+[ADR 0005](docs/decisions/0005-debug-ids.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -284,8 +291,9 @@ flowchart LR
   按编号迁移升级表结构。
 - **调查工作台**：项目、筛选/分页 Issue（可勾选合并）、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
   证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release，以及实时调查时间线。
-- **Source Map**：私有上传（落盘前完整校验每条映射）、Release 隔离、压缩堆栈还原（解析结果跨请求缓存）、
-  读取内联源码片段、map 缺失或损坏时降级为压缩堆栈，接入照常返回 202。
+- **Source Map**：Vite 构建插件注入 Debug ID、上传 map 且不让它进入产物；按 Debug ID、再按 Release + 文件名找 map；
+  私有上传（落盘前完整校验每条映射）、压缩堆栈还原（解析结果跨请求缓存）、读取内联源码片段、map 缺失或损坏时降级为
+  压缩堆栈，接入照常返回 202。
 - **排障 Agent**：5 个只读工具、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
   SSE 续传、取消、并发闸门、离线脚本引擎。
 - **评测与质量**：12 个标注事故的诊断评测、单元/接口/E2E、真实浏览器送达回归、基准、体积预算。
@@ -335,8 +343,8 @@ Playground 提供 13 个场景：runtime、Promise、资源、Fetch、XHR、业�
 带上下文的告警、React 渲染错误、被取消的请求、错误风暴、白屏和带着未发送事件离开页面。每个场景都由
 `tests/e2e/playground.spec.ts` 在真实 Chrome 里点一遍，并核对服务端最终收到的内容。上报目标默认是演示项目，可在 `apps/playground/.env`（见同目录的
 `.env.example`）或地址参数 `?projectId=…&dsnKey=…` 中修改。
-`pnpm --filter @trace-pilot/playground lab:production` 以生产构建运行演练场（4175 端口），并把 Source Map
-上传到对应版本，用来演示压缩堆栈的还原。
+`pnpm --filter @trace-pilot/playground lab:production` 以生产构建运行演练场（4175 端口）：构建插件注入 Debug ID、
+把 Source Map 上传到对应版本（产物目录里不留 map），用来演示压缩堆栈的还原。需要服务端已在运行。
 
 ### 可选外部模型
 
@@ -372,7 +380,7 @@ pnpm measure:sdk-runtime  # 真实浏览器里的运行时开销与泄漏回归
 pnpm measure:chart        # 图表更新策略的对照测量
 pnpm evaluate:diagnosis   # 单次诊断的契约冒烟测试
 pnpm smoke:production     # 加载 ESM/CJS 包，启动构建后的服务端并验证 SIGTERM 优雅退出
-pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场，上传 Source Map 后预览
+pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场：注入 Debug ID、上传 Source Map 后预览
 ```
 
 ## API 摘要
@@ -413,6 +421,7 @@ apps/server/src/investigation  只读工具、Agent 循环、引用核验、事�
 apps/server/src/eval           带标注的诊断评测集
 apps/playground                可控制造浏览器信号
 packages/monitor-sdk           插件化浏览器 SDK
+packages/vite-plugin           Vite 构建插件：Debug ID 注入与 Source Map 上传
 packages/shared                Zod Schema、类型、隐私工具
 scripts                        体积测量、生产冒烟、README 截图
 docs/reports                   性能测量与诊断评测的方法、结果和限制

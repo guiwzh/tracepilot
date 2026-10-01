@@ -34,6 +34,10 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 指纹。其中的 `"{{ default }}"` 代表默认指纹，`["{{ default }}", "tenant-a"]` 在默认结果上再细分；
 `["checkout-timeout"]` 把不同位置抛出的同一类错误并成一个。SDK 通过 `captureException` 的第三个参数或 `beforeSend` 设置。
 
+可选的 `debugIds`（最多 50 项）是堆栈里各个产物文件的 Debug ID：`[{ "file": "https://shop.example/assets/app.3f9a.js",
+"debugId": "6f1c2a3b-4d5e-4f60-8a7b-1c2d3e4f5a6b" }]`。应用用构建插件（`@trace-pilot/vite-plugin`）构建时，SDK 从插件
+注入的登记表里查到它们，只带堆栈里出现过的文件，地址去掉查询参数；没用插件时没有这个字段。`debugId` 必须是小写 UUID。
+
 ## 哪些信号成为事件
 
 - `error`：运行时异常、未处理的 Promise rejection、React 根节点错误回调（`reactErrorHandler`）
@@ -88,8 +92,9 @@ SDK 把事件批次发送到 `POST /api/v1/envelopes`，一个信封最多 100 �
 - 整个信封在一个事务里写入；格式错误的信封整体拒绝（400），DSN 与项目不匹配返回 403。
 - 写入前移除 URL 查询字符串，并遮蔽具有敏感信息特征的字段（`packages/shared/src/redaction.ts`）；
   `stack` 与 `componentStack` 只删帧里的查询参数，保留行列号。
-- **还原**：带堆栈的新事件在**聚合之前**按所在 Release 的 Source Map 还原，结果存为 `originalStack`；
-  map 缺失、损坏或还原失败只会少这一项，事件照常入库，不影响 202。
+- **还原**：带堆栈的新事件在**聚合之前**用 Source Map 还原，结果存为 `originalStack`。每一帧先按 `debugIds` 在本项目里找
+  map（不看 `release`），找不到再按「`release` + 文件名」；map 缺失、损坏或还原失败只会少这一项，事件照常入库，不影响 202。
+  `debugIds` 随事件存进上下文，事后上传的 map 也能按它回填。
 - **聚合**：错误按「类型 + 归一化后的消息 + 聚合帧」的指纹归入 Issue。聚合帧是第一个应用自己的帧（跳过
   `node_modules`、浏览器扩展里的帧）：还原到源码时取「源文件 + 函数名 + 出错那行代码」，不看行列号，重新构建不会让
   同一个 bug 变成新 Issue；没有 map 时取压缩后的这一帧（第一个以「:行:列」结尾的行，与 SDK 去重用的是同一条规则）。

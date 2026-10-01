@@ -925,6 +925,52 @@ describe('issue grouping', () => {
     ]);
   });
 
+  it('maps and groups by debug ID when the SDK reports a release the map was not uploaded to', async () => {
+    const debugId = '5b0c4e2a-1f3d-4c5b-9a6e-7d8f9a0b1c2d';
+    const source =
+      'export function calculateTotal(cart) {\n  const subtotal = cart.summary.total;\n}\n';
+    const map = JSON.parse(cartMap('app.11111111.js', 420, 2, source)) as Record<string, unknown>;
+    expect(
+      (
+        await uploadMapTo(
+          'demo-release-2-4-1',
+          'app.11111111.js',
+          JSON.stringify({ ...map, debugId }),
+        )
+      ).json(),
+    ).toMatchObject({ minifiedFile: 'app.11111111.js', debugId });
+
+    const stack = 'TypeError: x\n    at t (https://shop.test/assets/app.11111111.js?v=2:1:420)';
+    // SDK 的版本号配错成了 2.4.9（服务端没有这个版本的 map），但带着产物文件的 Debug ID。
+    const mislabelled: MonitorEvent = {
+      ...withStack('wrong-release', stack, '2.4.9'),
+      debugIds: [{ file: 'https://shop.test/assets/app.11111111.js?v=2', debugId }],
+    };
+    // 旧版 SDK 不带 Debug ID，版本号是对的，按版本 + 文件名找到同一份 map。
+    const legacy = withStack('right-release', stack);
+    expect((await send(mislabelled, legacy)).statusCode).toBe(202);
+
+    const issues = await listIssues();
+    expect(issues).toHaveLength(1);
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issues[0]!.id}/events`,
+    });
+    const items = events.json().items as Array<{
+      id: string;
+      originalStack: string;
+      context: { debugIds?: unknown };
+    }>;
+    expect(items.map((item) => item.originalStack)).toEqual([
+      expect.stringContaining('src/cart.ts:2:3'),
+      expect.stringContaining('src/cart.ts:2:3'),
+    ]);
+    // Debug ID 随事件存下来（地址里的查询参数已被脱敏删掉），事后的回填和排障 Agent 都用得上。
+    expect(items.find((item) => item.id === 'wrong-release')!.context.debugIds).toEqual([
+      { file: 'https://shop.test/assets/app.11111111.js', debugId },
+    ]);
+  });
+
   it('keeps feeding an issue created before the grouping upgrade', async () => {
     // 升级之前建的 Issue 只登记了 v1 指纹；新事件按 v2 找不到它时，要按 v1 找回来。
     const old = event('before-upgrade', '50000001');

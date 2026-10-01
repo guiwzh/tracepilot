@@ -48,7 +48,13 @@ function SourceMapUploader({ release }: { release: Release }) {
               <FileCode2 size={15} />
               <span>
                 <strong>{map.minifiedFile}</strong>
-                <small>Uploaded {absoluteTime(map.createdAt)}</small>
+                <small>
+                  Uploaded {absoluteTime(map.createdAt)}
+                  {/* 构建插件上传的 map 带 Debug ID，事件按它找 map，不依赖版本号和文件名。 */}
+                  {map.debugId
+                    ? ` · debug ID ${map.debugId.slice(0, 8)}`
+                    : ' · matched by file name'}
+                </small>
               </span>
               <Check size={14} />
             </div>

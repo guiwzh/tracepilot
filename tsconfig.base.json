@@ -6,7 +6,8 @@
     "moduleResolution": "Bundler",
     "paths": {
       "@trace-pilot/shared": ["./packages/shared/src/index.ts"],
-      "@trace-pilot/monitor-sdk": ["./packages/monitor-sdk/src/index.ts"]
+      "@trace-pilot/monitor-sdk": ["./packages/monitor-sdk/src/index.ts"],
+      "@trace-pilot/vite-plugin": ["./packages/vite-plugin/src/index.ts"]
     },
     "strict": true,
     "noUncheckedIndexedAccess": true,

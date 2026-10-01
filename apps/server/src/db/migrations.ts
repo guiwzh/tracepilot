@@ -8,7 +8,7 @@ import type BetterSqlite3 from 'better-sqlite3';
  *
  *   projects                    一个接入 SDK 的前端应用
  *     ├─ releases → projects    应用的一个发布版本（2.4.1 等），Source Map 按版本隔离
- *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里）
+ *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里），可带 Debug ID
  *     └─ issues → projects      按「错误指纹」聚合出的一类问题，列表页的一行
  *          ├─ issue_fingerprints 指向这个 Issue 的指纹，一个 Issue 可以有多个（合并、算法升级）
  *          ├─ events            一次具体发生（一条浏览器上报），同时关联到它所在的 release
@@ -134,6 +134,36 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE INDEX issue_fingerprints_issue ON issue_fingerprints(issue_id);
         INSERT INTO issue_fingerprints (project_id, fingerprint, issue_id, algorithm, created_at)
           SELECT project_id, fingerprint, id, 'v1', first_seen_at FROM issues;
+      `);
+    },
+  },
+  {
+    // 构建插件给每个产物文件和它的 map 写入同一个 Debug ID，按它找 map 不依赖版本号和文件名。
+    // 唯一键从「版本 + 文件名」改为「版本 + 文件名 + Debug ID」：同一个版本号重新构建过、文件名没变
+    // 而内容变了时，新旧两份 map 并存，旧页面上报的事件仍按自己的 Debug ID 找到旧 map；
+    // 原来的唯一键会让新 map 覆盖旧的。没有 Debug ID 的 map 按空串参与唯一键，行为不变：
+    // 同一版本同名文件只留一份，重新上传即替换。
+    // SQLite 不能修改已有的约束，只能建新表、搬数据、换名字。没有别的表引用 source_maps。
+    // Debug ID 不设全局唯一：同一份内容在两个版本里各上传一次（没改动的 vendor 文件）时它相同。
+    description: 'source_maps.debug_id',
+    up: (sqlite) => {
+      sqlite.exec(`
+        CREATE TABLE source_maps_v4 (
+          id TEXT PRIMARY KEY,
+          release_id TEXT NOT NULL REFERENCES releases(id) ON DELETE CASCADE,
+          minified_file TEXT NOT NULL,
+          debug_id TEXT,
+          map_path TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        INSERT INTO source_maps_v4 (id, release_id, minified_file, map_path, created_at)
+          SELECT id, release_id, minified_file, map_path, created_at FROM source_maps;
+        DROP TABLE source_maps;
+        ALTER TABLE source_maps_v4 RENAME TO source_maps;
+        -- 唯一键，同时服务「版本 + 文件名」的查找（索引的前两列）。
+        CREATE UNIQUE INDEX source_maps_release_file
+          ON source_maps(release_id, minified_file, COALESCE(debug_id, ''));
+        CREATE INDEX source_maps_debug_id ON source_maps(debug_id);
       `);
     },
   },

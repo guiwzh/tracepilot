@@ -55,6 +55,8 @@ export interface StoredEvent {
     release: string;
     /** 事件生效的采样率；这一字段出现之前入库的事件没有它，视为 1。 */
     sampleRate?: number;
+    /** 堆栈里产物文件的 Debug ID，见 MonitorEvent.debugIds。 */
+    debugIds?: MonitorEvent['debugIds'];
   };
   breadcrumbs: Breadcrumb[];
   createdAt: number;
@@ -136,6 +138,8 @@ export interface SourceMapRecord {
   id: string;
   releaseId: string;
   minifiedFile: string;
+  /** map 里的 debugId 字段；构建插件产出的 map 才有，手动上传的旧 map 为 null。 */
+  debugId: string | null;
   createdAt: number;
 }
 

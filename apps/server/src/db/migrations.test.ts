@@ -41,6 +41,8 @@ describe('database migrations', () => {
       INSERT INTO issues (id, project_id, fingerprint, title, status, level, first_seen_at, last_seen_at)
         VALUES ('fixed', 'p', 'f1', 'Fixed bug', 'resolved', 'error', 100, 500),
                ('open', 'p', 'f2', 'Open bug', 'unresolved', 'error', 100, 700);
+      INSERT INTO releases VALUES ('r', 'p', '1.0.0', NULL, 1);
+      INSERT INTO source_maps VALUES ('m', 'r', 'app.js', '/maps/m.map', 1);
     `);
     legacy.close();
 
@@ -63,6 +65,10 @@ describe('database migrations', () => {
     ).toEqual([
       { fingerprint: 'f1', issue_id: 'fixed', algorithm: 'v1' },
       { fingerprint: 'f2', issue_id: 'open', algorithm: 'v1' },
+    ]);
+    // 已有的 map 没有 Debug ID，继续按「版本 + 文件名」查找。
+    expect(database.sqlite.prepare('SELECT id, debug_id FROM source_maps').all()).toEqual([
+      { id: 'm', debug_id: null },
     ]);
     database.close();
   });

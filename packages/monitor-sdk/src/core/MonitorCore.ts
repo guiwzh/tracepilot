@@ -18,6 +18,7 @@ import type {
   ResolvedMonitorOptions,
 } from '../types';
 import { Transport } from '../transport/Transport';
+import { debugIdsFor } from './debugIds';
 import {
   breadcrumbId,
   createId,
@@ -189,6 +190,9 @@ export class MonitorCore implements MonitorClient {
 
     this.capturing = true;
     try {
+      const redactedPayload = redactPayload(payload);
+      // 堆栈里各个产物文件的 Debug ID，服务端按它找 Source Map；应用没用构建插件时没有。
+      const debugIds = debugIdsFor(redactedPayload.stack);
       const event: MonitorEvent = {
         eventId: createId(),
         eventType,
@@ -200,11 +204,12 @@ export class MonitorCore implements MonitorClient {
         page: redactSensitive(options.page ?? getPageContext()),
         user: this.user,
         device: getDeviceContext(),
-        payload: redactPayload(payload),
+        payload: redactedPayload,
         // 面包屑是 Issue 的证据链，只随会形成 Issue 的事件发送。指标样本不属于任何 Issue，
         // 带上 50 条面包屑只会让每个样本的体积大几十倍。
         breadcrumbs: eventType === 'performance' ? [] : this.getBreadcrumbs(),
         ...(options.fingerprint?.length ? { fingerprint: [...options.fingerprint] } : {}),
+        ...(debugIds ? { debugIds } : {}),
       };
       // beforeSend 是业务方最后一次删除字段或取消事件的机会。
       const processed = this.options.beforeSend ? this.options.beforeSend(event) : event;
