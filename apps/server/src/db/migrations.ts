@@ -10,6 +10,7 @@ import type BetterSqlite3 from 'better-sqlite3';
  *     ├─ releases → projects    应用的一个发布版本（2.4.1 等），Source Map 按版本隔离
  *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里），可带 Debug ID
  *     ├─ ingest_outcomes        每小时的上报去向：收下、被过滤、被限流
+ *     ├─ api_tokens             MCP 客户端用的只读令牌（只存哈希）
  *     └─ issues → projects      按「错误指纹」聚合出的一类问题，列表页的一行
  *          ├─ issue_fingerprints 指向这个 Issue 的指纹，一个 Issue 可以有多个（合并、算法升级）
  *          ├─ events            一次具体发生（一条浏览器上报），同时关联到它所在的 release
@@ -184,6 +185,26 @@ export const MIGRATIONS: readonly Migration[] = [
           count INTEGER NOT NULL,
           PRIMARY KEY (project_id, hour, outcome, reason)
         );
+      `);
+    },
+  },
+  {
+    // MCP 客户端（Claude Code、Cursor 等）用的只读 API 令牌，每个令牌属于一个项目。
+    // 只存令牌的 SHA-256：数据库泄露也拿不到能用的令牌。令牌是 192 位随机数，不需要 bcrypt 这类慢哈希
+    // （慢哈希防的是低熵的口令被暴力枚举）。按哈希查找走唯一索引。
+    description: 'api_tokens',
+    up: (sqlite) => {
+      sqlite.exec(`
+        CREATE TABLE api_tokens (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          prefix TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          last_used_at INTEGER
+        );
+        CREATE INDEX api_tokens_project ON api_tokens(project_id, created_at);
       `);
     },
   },

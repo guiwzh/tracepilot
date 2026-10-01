@@ -16,8 +16,10 @@ import { registerIssueRoutes } from './routes/issues';
 import { registerProjectRoutes } from './routes/projects';
 import { registerDiagnosisRoutes } from './routes/diagnosis';
 import { registerInvestigationRoutes } from './routes/investigations';
+import { registerMcpRoutes } from './mcp/http';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
+import { registerTokenRoutes } from './routes/tokens';
 import { IngestGuard } from './services/ingestGuard';
 import { OutcomeRecorder } from './services/outcomes';
 import { clearSourceMapCache } from './services/sourcemaps';
@@ -111,7 +113,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   // 限流或维护时就无法照服务端要求的时间退避。
   await app.register(cors, {
     origin: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     exposedHeaders: ['retry-after'],
   });
   // multipart/form-data 是浏览器上传文件时的请求格式（Source Map 上传用到）。
@@ -130,6 +132,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   registerEventRoutes(app, database, ingestProtection);
   registerProjectRoutes(app, database);
   registerSettingsRoutes(app, database, ingestProtection);
+  registerTokenRoutes(app, database);
+  registerMcpRoutes(app, database, options.config);
   registerIssueRoutes(app, database);
   registerSourceMapRoutes(app, database, options.config);
   registerDiagnosisRoutes(app, database, options.config);

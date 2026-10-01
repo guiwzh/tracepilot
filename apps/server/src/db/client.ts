@@ -45,6 +45,32 @@ export function createDatabase(databasePath: string): TraceDatabase {
   return { sqlite, close: () => sqlite.close() };
 }
 
+/**
+ * 以只读方式打开已有的数据库：MCP 的 stdio 进程用（mcp/stdio.ts）。
+ *
+ * query_only 让这个连接上的任何写语句都直接报错：即使工具代码有 bug、或者以后加错了工具，
+ * 这个进程也改不了数据。不用 better-sqlite3 的 readonly 打开方式：WAL 模式的数据库在没有 -shm 文件时
+ * （服务端没在运行）只读打开会失败。
+ * 不执行迁移：结构比代码旧或新都拒绝打开，让用户先用新版本的服务端启动一次完成升级。
+ */
+export function openReadOnlyDatabase(databasePath: string, expectedVersion: number): TraceDatabase {
+  const sqlite = new BetterSqlite3(databasePath, { fileMustExist: true });
+  sqlite.pragma('busy_timeout = 5000');
+  sqlite.pragma('query_only = ON');
+  sqlite.function('browser_name', { deterministic: true }, (userAgent: unknown) =>
+    browserName(typeof userAgent === 'string' ? userAgent : ''),
+  );
+  const version = sqlite.pragma('user_version', { simple: true }) as number;
+  if (version !== expectedVersion) {
+    sqlite.close();
+    throw new Error(
+      `The database is at schema version ${version}, but this code expects ${expectedVersion}. ` +
+        'Start the TracePilot server once to migrate it.',
+    );
+  }
+  return { sqlite, close: () => sqlite.close() };
+}
+
 export function ensureDemoProject(database: TraceDatabase): void {
   // ON CONFLICT DO NOTHING：主键或唯一键已存在时什么都不做。
   // 这样每次启动都能保证演示项目存在，又不会覆盖已经产生的数据。

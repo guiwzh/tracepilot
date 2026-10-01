@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
  * apps/server 目录的绝对路径。开发时本文件在 src/，构建后被打包进 dist/index.js，
  * 两种情况下「上一级目录」都是 apps/server，默认的数据目录因此不随运行方式变化。
  */
-const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * 服务端的全部配置。环境变量只在 loadConfig 里读一次，其余代码只接收这个对象：

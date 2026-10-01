@@ -64,6 +64,23 @@ function mapRun(row: Row): InvestigationRun {
   };
 }
 
+/**
+ * 某个 Issue 最近一次完成的调查（带报告），没有时返回 null。只读查询，不需要 InvestigationStore 实例
+ * （构造它会把残留的 running 记录改成失败，MCP 的只读连接不能做这个写操作）。
+ */
+export function latestCompletedRun(
+  database: TraceDatabase,
+  issueId: string,
+): InvestigationRun | null {
+  const row = database.sqlite
+    .prepare(
+      `SELECT * FROM investigation_runs WHERE issue_id = ? AND status = 'completed'
+       ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(issueId) as Row | undefined;
+  return row ? mapRun(row) : null;
+}
+
 export class InvestigationStore {
   // 三个 Map 都以 runId 为键：每个运行的订阅者、下一个 seq、待合并的文本。
   private readonly listeners = new Map<string, Set<Listener>>();

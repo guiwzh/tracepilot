@@ -220,7 +220,7 @@ pnpm evaluate:agent
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 245 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 251 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -263,6 +263,8 @@ flowchart LR
   Maps --> Tools
   Tools <--> Agent[排障 Agent 循环]
   Agent -- 事件日志 + SSE --> UI
+  Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
+  MCP <--> Coder[Claude Code / Cursor]
 ```
 
 核心原则：模型不可用时监控仍然可用；每条证据必须指向一次真实的工具调用并经服务端核对；遥测文本
@@ -277,8 +279,9 @@ flowchart LR
 [ADR 0002](docs/decisions/0002-read-only-evidence-diagnosis.md)、
 [ADR 0003](docs/decisions/0003-read-only-investigation-agent.md)、
 [ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)、
-[ADR 0005](docs/decisions/0005-debug-ids.md) 与
-[ADR 0006](docs/decisions/0006-ingest-protection.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0005](docs/decisions/0005-debug-ids.md)、
+[ADR 0006](docs/decisions/0006-ingest-protection.md) 与
+[ADR 0007](docs/decisions/0007-mcp-server.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -304,6 +307,8 @@ flowchart LR
   压缩堆栈，接入照常返回 202。
 - **排障 Agent**：5 个只读工具、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
   SSE 续传、取消、并发闸门、离线脚本引擎。
+- **MCP 服务器**：同一套工具注册表开放给 Claude Code、Cursor 等编码 Agent（Streamable HTTP + stdio），全部只读；
+  项目级令牌只存哈希，工作台一键给出客户端配置。
 - **评测与质量**：12 个标注事故的诊断评测、单元/接口/E2E、真实浏览器送达回归、基准、体积预算。
 
 ## SDK 接入
@@ -373,6 +378,23 @@ pnpm dev
 
 API Key 只由 Server 读取。
 
+### 在 Claude Code / Cursor 里使用（MCP）
+
+排障 Agent 的只读工具同样通过 MCP 开放给编辑器里的编码 Agent：查 Issue、看还原后的堆栈与出错行源码、读已经核实过引用的
+调查报告，再结合本地代码修复。在工作台的 **Settings → MCP access** 创建令牌，页面会给出现成的配置：
+
+```bash
+# 远程 / 团队：Streamable HTTP，令牌只能读它所属的项目
+claude mcp add --transport http tracepilot http://localhost:4318/mcp --header "Authorization: Bearer tp_…"
+
+# 本机：stdio 子进程直接只读打开 SQLite，不需要服务端在运行，也不需要令牌（先 pnpm build）
+claude mcp add tracepilot -- node /path/to/tracepilot/apps/server/dist/mcp.js --project demo-project
+```
+
+工具：`list_projects`、`list_issues`、`get_issue_overview`、`list_event_samples`、`get_event_detail`、`get_source_context`、
+`compare_releases`、`get_latest_investigation`，全部只读（`readOnlyHint`）；另有提示词模板 `investigate_issue`。
+实现见 [server.md](docs/server.md#1015-mcp把同一套工具开放给编码-agent)，决策见 [ADR 0007](docs/decisions/0007-mcp-server.md)。
+
 ## 常用命令
 
 ```bash
@@ -389,25 +411,28 @@ pnpm measure:chart        # 图表更新策略的对照测量
 pnpm evaluate:diagnosis   # 单次诊断的契约冒烟测试
 pnpm smoke:production     # 加载 ESM/CJS 包，启动构建后的服务端并验证 SIGTERM 优雅退出
 pnpm --filter @trace-pilot/playground lab:production  # 生产构建的演练场：注入 Debug ID、上传 Source Map 后预览
+pnpm --silent --filter @trace-pilot/server mcp         # MCP 的 stdio 入口（给编码 Agent 当子进程启动）
 ```
 
 ## API 摘要
 
-| 方法    | 路径                                       | 作用                               |
-| ------- | ------------------------------------------ | ---------------------------------- |
-| `POST`  | `/api/v1/envelopes`                        | 批量事件接入（JSON 或 text/plain） |
-| `GET`   | `/api/v1/projects/:projectId/issues`       | 分页与筛选 Issue                   |
-| `GET`   | `/api/v1/issues/:issueId`                  | Issue 和最新现场                   |
-| `PATCH` | `/api/v1/issues/:issueId/status`           | 更新处理状态                       |
-| `POST`  | `/api/v1/issues/:issueId/merge`            | 合并 Issue                         |
-| `POST`  | `/api/v1/releases/:releaseId/source-maps`  | 私有 Source Map 上传               |
-| `PUT`   | `/api/v1/projects/:projectId/settings`     | 入站过滤与限流设置（整份替换）     |
-| `GET`   | `/api/v1/projects/:projectId/ingest-stats` | 上报去向：收下、被过滤、被限流     |
-| `POST`  | `/api/v1/issues/:issueId/investigations`   | 开始调查（进行中则复用）           |
-| `GET`   | `/api/v1/investigations/:runId/events`     | SSE 事件流，支持 Last-Event-ID     |
-| `POST`  | `/api/v1/investigations/:runId/cancel`     | 取消调查                           |
-| `POST`  | `/api/v1/issues/:issueId/diagnoses`        | 单次诊断（对照组）                 |
-| `GET`   | `/api/v1/projects/:projectId/performance`  | Web Vital 分位数                   |
+| 方法    | 路径                                       | 作用                                                     |
+| ------- | ------------------------------------------ | -------------------------------------------------------- |
+| `POST`  | `/api/v1/envelopes`                        | 批量事件接入（JSON 或 text/plain）                       |
+| `GET`   | `/api/v1/projects/:projectId/issues`       | 分页与筛选 Issue                                         |
+| `GET`   | `/api/v1/issues/:issueId`                  | Issue 和最新现场                                         |
+| `PATCH` | `/api/v1/issues/:issueId/status`           | 更新处理状态                                             |
+| `POST`  | `/api/v1/issues/:issueId/merge`            | 合并 Issue                                               |
+| `POST`  | `/api/v1/releases/:releaseId/source-maps`  | 私有 Source Map 上传                                     |
+| `PUT`   | `/api/v1/projects/:projectId/settings`     | 入站过滤与限流设置（整份替换）                           |
+| `GET`   | `/api/v1/projects/:projectId/ingest-stats` | 上报去向：收下、被过滤、被限流                           |
+| `POST`  | `/mcp`                                     | MCP（Streamable HTTP），`Authorization: Bearer` 项目令牌 |
+| `POST`  | `/api/v1/projects/:projectId/tokens`       | 创建 MCP 令牌（明文只返回这一次）                        |
+| `POST`  | `/api/v1/issues/:issueId/investigations`   | 开始调查（进行中则复用）                                 |
+| `GET`   | `/api/v1/investigations/:runId/events`     | SSE 事件流，支持 Last-Event-ID                           |
+| `POST`  | `/api/v1/investigations/:runId/cancel`     | 取消调查                                                 |
+| `POST`  | `/api/v1/issues/:issueId/diagnoses`        | 单次诊断（对照组）                                       |
+| `GET`   | `/api/v1/projects/:projectId/performance`  | Web Vital 分位数                                         |
 
 ## 安全边界与已知限制
 

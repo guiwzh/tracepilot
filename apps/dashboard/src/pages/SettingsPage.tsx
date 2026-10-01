@@ -4,6 +4,7 @@ import { Filter, Gauge, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { IngestStats, ProjectSettings, ProjectSettingsResponse } from '@trace-pilot/shared';
 import { PageHeader } from '../components/PageHeader';
+import { McpAccess } from '../features/mcp/McpAccess';
 import { ErrorState, LoadingState } from '../components/States';
 import { api } from '../services/api';
 import { formatNumber } from '../utils/format';
@@ -330,6 +331,7 @@ export function SettingsPage() {
           onSaved={(value) => setSavedSettings(JSON.stringify(value))}
         />
       ) : null}
+      <McpAccess projectId={projectId} />
     </main>
   );
 }

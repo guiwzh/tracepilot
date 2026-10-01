@@ -2739,3 +2739,112 @@ pre {
     min-height: 110px;
   }
 }
+
+/* MCP 访问令牌 */
+.mcp-access {
+  margin-top: 18px;
+}
+.settings-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-note code,
+.token-list code {
+  font:
+    400 11px 'DM Mono',
+    monospace;
+}
+.token-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.token-form .pattern-field {
+  flex: 1;
+  min-width: 220px;
+}
+.token-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+.token-list li {
+  padding: 10px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.token-list li > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.token-list strong {
+  font-size: 12px;
+}
+.token-list small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.new-token {
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  background: var(--signal-soft);
+  border: 1px solid var(--signal);
+}
+.new-token p {
+  margin: 0;
+  font-size: 12px;
+}
+.new-token > .button {
+  justify-self: start;
+}
+.token-line,
+.token-snippet {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.token-line code,
+.token-snippet pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid var(--line-dark);
+  font:
+    400 11px 'DM Mono',
+    monospace;
+  overflow-x: auto;
+  white-space: pre;
+}
+.token-line code {
+  white-space: nowrap;
+}
+.token-snippet {
+  flex-wrap: wrap;
+}
+.token-snippet > span {
+  flex-basis: 100%;
+  color: var(--muted);
+  font:
+    500 9px 'DM Mono',
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}

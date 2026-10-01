@@ -16,6 +16,7 @@ import { lookupFor, sourceContext } from '../services/sourcemaps';
  * 排障 Agent 能用的全部工具。每个工具 = 名字 + 给模型看的说明 + 参数的 Zod Schema + 执行函数。
  * 说明和参数 Schema 会转成 JSON Schema 发给模型（TOOL_SPECS），模型据此决定调用哪个、传什么参数；
  * 执行函数只在服务端运行（runTool），模型永远拿不到数据库本身。
+ * MCP 服务器（mcp/server.ts）用的是同一份定义和同一个执行入口（runToolArgs），只是多一个 issueId 参数。
  *
  * 设计上的三条约束：
  *
@@ -45,7 +46,7 @@ export class ToolError extends Error {
   }
 }
 
-interface ToolDefinition<Parameters extends z.ZodTypeAny> {
+export interface ToolDefinition<Parameters extends z.ZodObject = z.ZodObject> {
   name: string;
   description: string;
   parameters: Parameters;
@@ -54,7 +55,7 @@ interface ToolDefinition<Parameters extends z.ZodTypeAny> {
 
 // 原样返回参数的「恒等函数」，作用只在类型层面：让 TypeScript 根据 parameters 的 Schema
 // 推导出 execute 的参数类型，写工具时 args 就有完整的类型提示。
-function defineTool<Parameters extends z.ZodTypeAny>(definition: ToolDefinition<Parameters>) {
+function defineTool<Parameters extends z.ZodObject>(definition: ToolDefinition<Parameters>) {
   return definition;
 }
 
@@ -325,8 +326,8 @@ const compareReleases = defineTool({
   },
 });
 
-/** 收集证据用的 5 个只读工具。 */
-export const INVESTIGATION_TOOLS = [
+/** 收集证据用的 5 个只读工具。参数都是 z.object：MCP 在它们之上扩展出 issueId。 */
+export const INVESTIGATION_TOOLS: ToolDefinition[] = [
   getIssueOverview,
   listEventSamples,
   getEventDetail,
@@ -382,27 +383,38 @@ export interface ToolResult {
   truncated: boolean;
 }
 
+function toolFailure(code: string, message: string): ToolResult {
+  return { ok: false, output: JSON.stringify({ error: code, message }), truncated: false };
+}
+
 /** 执行一次工具调用：解析参数、校验、执行、脱敏、截断。任何失败都变成给模型看的错误结果，不抛出。 */
 export async function runTool(
   name: string,
   rawArguments: string,
   context: ToolContext,
 ): Promise<ToolResult> {
-  const tool = INVESTIGATION_TOOLS.find((candidate) => candidate.name === name);
-  const failure = (code: string, message: string): ToolResult => ({
-    ok: false,
-    output: JSON.stringify({ error: code, message }),
-    truncated: false,
-  });
-  if (!tool) return failure('UNKNOWN_TOOL', `There is no tool named "${name}".`);
-
   let args: unknown;
   try {
     args = rawArguments.trim() ? JSON.parse(rawArguments) : {};
   } catch {
-    return failure('INVALID_ARGUMENTS', 'Tool arguments must be a JSON object.');
+    return toolFailure('INVALID_ARGUMENTS', 'Tool arguments must be a JSON object.');
   }
-  const parsed = (tool.parameters as z.ZodTypeAny).safeParse(args);
+  return runToolArgs(name, args, context);
+}
+
+/**
+ * 参数已经是对象时的执行入口（MCP 客户端传来的就是对象）：校验、执行、脱敏、截断。
+ * Agent 和 MCP 走同一条路：同样的校验、同样在结果离开服务端之前再脱敏一次、同样的长度上限。
+ */
+export async function runToolArgs(
+  name: string,
+  args: unknown,
+  context: ToolContext,
+): Promise<ToolResult> {
+  const tool = INVESTIGATION_TOOLS.find((candidate) => candidate.name === name);
+  const failure = toolFailure;
+  if (!tool) return failure('UNKNOWN_TOOL', `There is no tool named "${name}".`);
+  const parsed = tool.parameters.safeParse(args);
   if (!parsed.success) {
     return failure(
       'INVALID_ARGUMENTS',
@@ -413,10 +425,7 @@ export async function runTool(
   }
 
   try {
-    const value = await (tool.execute as (args: unknown, context: ToolContext) => unknown)(
-      parsed.data,
-      context,
-    );
+    const value = await tool.execute(parsed.data, context);
     // 入库时已经脱敏过一次；这里是发给模型前的最后一道防线，防止历史脏数据流出。
     const output = JSON.stringify(redactSensitive(value));
     if (output.length <= MAX_TOOL_OUTPUT_CHARS) return { ok: true, output, truncated: false };

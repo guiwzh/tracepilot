@@ -1,4 +1,6 @@
 import type {
+  ApiToken,
+  CreatedApiToken,
   IngestStats,
   InvestigationRun,
   IssueDetail,
@@ -47,6 +49,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body.error,
     );
   }
+  // 204 No Content（例如吊销令牌）没有响应体，解析 JSON 会失败。
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -99,6 +103,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(settings),
     }),
+  tokens: (projectId: string) =>
+    request<{ items: ApiToken[] }>(`/api/v1/projects/${projectId}/tokens`),
+  createToken: (projectId: string, name: string) =>
+    request<CreatedApiToken>(`/api/v1/projects/${projectId}/tokens`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  revokeToken: (tokenId: string) =>
+    request<void>(`/api/v1/tokens/${tokenId}`, { method: 'DELETE' }),
   ingestStats: (projectId: string) =>
     request<IngestStats>(`/api/v1/projects/${projectId}/ingest-stats`),
   investigations: (issueId: string) =>

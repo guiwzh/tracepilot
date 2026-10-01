@@ -12,11 +12,13 @@
     "seed": "tsx src/seed.ts",
     "benchmark": "tsx src/benchmark.ts",
     "evaluate:diagnosis": "tsx src/evaluate.ts",
-    "evaluate:agent": "tsx src/eval/run.ts"
+    "evaluate:agent": "tsx src/eval/run.ts",
+    "mcp": "tsx src/mcp/stdio.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@fastify/multipart": "^10.1.2",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@trace-pilot/shared": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^18.0.4",

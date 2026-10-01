@@ -108,6 +108,9 @@ export const projectSettingsSchema = z.object({
   }),
 });
 
+/** 新建一个 API 令牌（给 MCP 客户端用），名字只用来在列表里认出它。 */
+export const createApiTokenSchema = z.object({ name: z.string().trim().min(1).max(80) });
+
 /** 把这些 Issue 合并进路径里的目标 Issue。 */
 export const mergeIssuesSchema = z.object({
   issueIds: z.array(z.string().min(1).max(100)).min(1).max(50),

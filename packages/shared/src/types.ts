@@ -183,3 +183,19 @@ export interface IngestStats {
   /** 按小时，最早的在前。 */
   hourly: Array<{ hour: number; accepted: number; filtered: number; rateLimited: number }>;
 }
+
+/** 一个项目的 API 令牌（只读，给 MCP 客户端用）。令牌本身只在创建时返回一次，服务端只存它的哈希。 */
+export interface ApiToken {
+  id: string;
+  projectId: string;
+  name: string;
+  /** 令牌的前几个字符，用来在列表里认出是哪一个。 */
+  prefix: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
+/** 创建令牌的响应：多了令牌明文，只出现这一次。 */
+export interface CreatedApiToken extends ApiToken {
+  token: string;
+}

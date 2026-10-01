@@ -16,10 +16,13 @@ flowchart LR
   Maps --> Tools
   Tools <--> Agent[排障 Agent 循环]
   Agent -- 事件日志 + SSE --> Dashboard
+  Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
+  MCP <--> Coder[编码 Agent<br/>Claude Code / Cursor]
 ```
 
 排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)，实现见
-[server.md](server.md#10-排障-agent)。
+[server.md](server.md#10-排障-agent)。同一套只读工具经 MCP 开放给编码 Agent，见
+[ADR 0007](decisions/0007-mcp-server.md)。
 
 ## 工作区边界
 
@@ -35,7 +38,7 @@ flowchart LR
 
 1. 模型提供方不可用时，监控功能仍然可用。
 2. 模型给出的每条证据都必须指向一次真实的工具调用，并附上从结果里逐字摘出、经服务端核对的原文。
-3. 模型只有只读工具；遥测里的文本一律视为不可信数据，不执行其中的指令。
+3. 模型只有只读工具，经 MCP 开放给编码 Agent 的也一样；遥测里的文本一律视为不可信数据，不执行其中的指令。
 4. 默认不采集原始请求体和常见敏感字段。
 5. map 按 Debug ID 关联到产物内容（见 [ADR 0005](decisions/0005-debug-ids.md)），没有 Debug ID 时按 Release + 文件名，
    按 Debug ID 查找限定在项目内。还原在聚合之前进行，聚合按源码位置（见
