@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bell, BellOff, Send } from 'lucide-react';
+import { Bell, BellOff, Send, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type {
   AlertChannel,
@@ -27,6 +27,15 @@ const TRIGGER_NAMES: Record<AlertDelivery['trigger'], string> = {
   regression: 'Regression',
   escalating: 'Escalating',
   test: 'Test',
+  investigation: 'Investigation',
+};
+
+/** 规则要求自动调查却没有发起的原因。 */
+const INVESTIGATION_NOTES: Record<string, string> = {
+  cooldown: 'not investigated: already investigated in the last 24 h',
+  daily_limit: 'not investigated: daily limit reached',
+  busy: 'not investigated: too many investigations running',
+  disabled: 'not investigated: automatic investigations are off on this server',
 };
 
 const CHANNELS: Record<AlertChannel['type'], { label: string; placeholder: string }> = {
@@ -55,6 +64,7 @@ function NewRuleForm({ projectId, onCreated }: { projectId: string; onCreated: (
   const [url, setUrl] = useState('');
   const [secret, setSecret] = useState('');
   const [intervalMinutes, setIntervalMinutes] = useState('60');
+  const [autoInvestigate, setAutoInvestigate] = useState(false);
   const create = useMutation({
     mutationFn: () =>
       api.createAlertRule(projectId, {
@@ -62,6 +72,7 @@ function NewRuleForm({ projectId, onCreated }: { projectId: string; onCreated: (
         triggers,
         minLevel,
         intervalMinutes: Number(intervalMinutes),
+        autoInvestigate,
         channel:
           type === 'slack'
             ? { type, url: url.trim() }
@@ -180,6 +191,20 @@ function NewRuleForm({ projectId, onCreated }: { projectId: string; onCreated: (
           />
         </label>
       )}
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={autoInvestigate}
+          onChange={(event) => setAutoInvestigate(event.target.checked)}
+        />
+        <span>
+          <strong>Start an investigation</strong>
+          <small>
+            When an alert goes out, the read-only agent investigates and a follow-up with its cited
+            findings goes to the same channel. Limited per day; each issue at most once in 24 h.
+          </small>
+        </span>
+      </label>
       <div className="alert-rule-actions">
         <button className="button button-primary" disabled={!ready || create.isPending}>
           Create rule
@@ -237,6 +262,7 @@ function RuleRow({ rule, onChange }: { rule: AlertRule; onChange: () => void }) 
           {rule.triggers.map((trigger) => TRIGGER_NAMES[trigger]).join(', ')} · {rule.minLevel}
           {rule.minLevel === 'error' ? '' : ' and above'} · once per issue every{' '}
           {rule.intervalMinutes} min
+          {rule.autoInvestigate ? ' · starts an investigation' : ''}
           {muted ? ` · muted until ${new Date(rule.mutedUntil!).toLocaleTimeString()}` : ''}
         </small>
         {test && (
@@ -253,6 +279,14 @@ function RuleRow({ rule, onChange }: { rule: AlertRule; onChange: () => void }) 
           onClick={() => send.mutate()}
         >
           <Send size={12} /> Test
+        </button>
+        <button
+          type="button"
+          className="button button-quiet"
+          aria-pressed={rule.autoInvestigate}
+          onClick={() => update.mutate({ autoInvestigate: !rule.autoInvestigate })}
+        >
+          <Sparkles size={12} /> {rule.autoInvestigate ? 'Investigating' : 'Investigate'}
         </button>
         <button
           type="button"
@@ -352,6 +386,21 @@ export function AlertRules({ projectId }: { projectId: string }) {
                     {delivery.status === 'pending' && delivery.attempts > 0
                       ? ` · retrying (attempt ${delivery.attempts + 1})`
                       : ''}
+                    {delivery.investigationNote
+                      ? ` · ${INVESTIGATION_NOTES[delivery.investigationNote] ?? delivery.investigationNote}`
+                      : ''}
+                    {delivery.investigationId && delivery.issueId ? (
+                      <>
+                        {' · '}
+                        <Link
+                          to={`/projects/${projectId}/issues/${delivery.issueId}?tab=investigation`}
+                        >
+                          {delivery.trigger === 'investigation'
+                            ? 'report'
+                            : 'investigation started'}
+                        </Link>
+                      </>
+                    ) : null}
                   </small>
                 </li>
               ))}

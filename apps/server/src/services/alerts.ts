@@ -18,6 +18,11 @@ import {
   type AlertMessage,
   type SendOptions,
 } from './alertChannels';
+import {
+  investigationUrl,
+  startAutoInvestigation,
+  type InvestigationStarter,
+} from './autoInvestigation';
 
 /**
  * 告警：规则的增删改查，以及把 Issue 的生命周期变化变成通知的分发器。
@@ -66,6 +71,7 @@ interface RuleRow {
   channel_json: string;
   interval_minutes: number;
   muted_until: number | null;
+  auto_investigate: number;
   created_at: number;
   updated_at: number;
 }
@@ -90,6 +96,7 @@ function mapRule(row: RuleRow): AlertRule {
     },
     intervalMinutes: row.interval_minutes,
     mutedUntil: row.muted_until,
+    autoInvestigate: row.auto_investigate === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -123,6 +130,7 @@ export function createAlertRule(
     minLevel: IssueLevel;
     intervalMinutes: number;
     channel: AlertChannel;
+    autoInvestigate?: boolean;
   },
   now = Date.now(),
 ): AlertRule {
@@ -134,8 +142,8 @@ export function createAlertRule(
   database.sqlite
     .prepare(
       `INSERT INTO alert_rules (id, project_id, name, enabled, triggers_json, min_level, channel_json,
-         interval_minutes, muted_until, created_at, updated_at)
-       VALUES (?, ?, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`,
+         interval_minutes, muted_until, auto_investigate, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?, NULL, ?, ?, ?)`,
     )
     .run(
       id,
@@ -145,6 +153,7 @@ export function createAlertRule(
       input.minLevel,
       JSON.stringify(input.channel),
       input.intervalMinutes,
+      input.autoInvestigate ? 1 : 0,
       now,
       now,
     );
@@ -163,7 +172,7 @@ export function updateAlertRule(
   database.sqlite
     .prepare(
       `UPDATE alert_rules SET name = ?, enabled = ?, triggers_json = ?, min_level = ?,
-         interval_minutes = ?, muted_until = ?, updated_at = ? WHERE id = ?`,
+         interval_minutes = ?, muted_until = ?, auto_investigate = ?, updated_at = ? WHERE id = ?`,
     )
     .run(
       patch.name ?? current.name,
@@ -172,6 +181,11 @@ export function updateAlertRule(
       patch.minLevel ?? current.min_level,
       patch.intervalMinutes ?? current.interval_minutes,
       patch.mutedUntil === undefined ? current.muted_until : patch.mutedUntil,
+      patch.autoInvestigate === undefined
+        ? current.auto_investigate
+        : patch.autoInvestigate
+          ? 1
+          : 0,
       now,
       ruleId,
     );
@@ -191,6 +205,8 @@ interface DeliveryRow {
   status: AlertDelivery['status'];
   reason: string | null;
   attempts: number;
+  investigation_id: string | null;
+  investigation_note: string | null;
   payload_json: string;
   created_at: number;
   sent_at: number | null;
@@ -218,6 +234,8 @@ export function listAlertDeliveries(
     status: row.status,
     reason: row.reason,
     attempts: row.attempts,
+    investigationId: row.investigation_id,
+    investigationNote: row.investigation_note,
     createdAt: row.created_at,
     sentAt: row.sent_at,
   }));
@@ -268,6 +286,8 @@ export interface DispatcherOptions extends SendOptions {
   now?: () => number;
   /** 一轮处理出错时（例如数据库已关闭）的回调；分发器自己不抛错，不能让后台任务打断进程。 */
   onError?: (error: unknown) => void;
+  /** 规则要求「告警时顺带调查」时用它发起调查（services/autoInvestigation.ts）；没有时不发起。 */
+  investigations?: InvestigationStarter;
 }
 
 /** 分发器用到的语句，构造时编译一次：每批接入之后都要跑一轮，每次重新 prepare 的开销比查询本身还大。 */
@@ -318,6 +338,9 @@ function dispatcherStatements(sqlite: TraceDatabase['sqlite']) {
     ),
     markRetry: sqlite.prepare(
       'UPDATE alert_deliveries SET attempts = ?, reason = ?, next_attempt_at = ? WHERE id = ?',
+    ),
+    markInvestigation: sqlite.prepare(
+      'UPDATE alert_deliveries SET investigation_id = ?, investigation_note = ?, payload_json = ? WHERE id = ?',
     ),
   };
 }
@@ -413,6 +436,9 @@ export class AlertDispatcher {
       return found;
     };
 
+    // 要顺带发起调查的通知：发起调查会写库、在后台跑，不能放在下面的事务里，事务提交之后再逐个处理。
+    const investigate: Array<{ deliveryId: string; projectId: string; message: AlertMessage }> = [];
+
     this.database.sqlite.transaction(() => {
       sql.markProcessed.run(pending.at(-1)!.id);
       for (const activity of pending) {
@@ -458,8 +484,9 @@ export class AlertDispatcher {
                     ALERT_LIMITS.perRulePerHour
                   ? 'rate_limited'
                   : null;
+          const deliveryId = randomUUID();
           sql.insert.run(
-            randomUUID(),
+            deliveryId,
             rule.id,
             activity.project_id,
             activity.issue_id,
@@ -470,9 +497,41 @@ export class AlertDispatcher {
             JSON.stringify(message),
             now,
           );
+          if (!reason && rule.auto_investigate === 1) {
+            investigate.push({ deliveryId, projectId: activity.project_id, message });
+          }
         }
       }
     })();
+
+    for (const request of investigate) {
+      const result = this.options.investigations
+        ? startAutoInvestigation(
+            this.database,
+            this.options.investigations,
+            { id: request.message.issue.id, projectId: request.projectId },
+            now,
+          )
+        : { note: 'disabled' as const };
+      // 发起了就把调查的链接写进这条还没发出的通知，收到告警的人直接点进去看调查过程。
+      const message: AlertMessage =
+        'runId' in result
+          ? {
+              ...request.message,
+              investigation: {
+                id: result.runId,
+                status: 'started',
+                url: investigationUrl(request.message.url),
+              },
+            }
+          : request.message;
+      sql.markInvestigation.run(
+        'runId' in result ? result.runId : null,
+        'note' in result ? result.note : null,
+        JSON.stringify(message),
+        request.deliveryId,
+      );
+    }
   }
 
   /** 发送到期的通知（最多 20 条并发），按结果标记已发送、稍后重试或失败。 */

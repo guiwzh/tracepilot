@@ -233,7 +233,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 290 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 295 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -299,8 +299,9 @@ flowchart LR
 [ADR 0006](docs/decisions/0006-ingest-protection.md)、
 [ADR 0007](docs/decisions/0007-mcp-server.md)、
 [ADR 0008](docs/decisions/0008-code-and-change-context.md)、
-[ADR 0009](docs/decisions/0009-evaluation-reliability.md) 与
-[ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0009](docs/decisions/0009-evaluation-reliability.md)、
+[ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md) 与
+[ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -320,7 +321,8 @@ flowchart LR
   （超出返回 429 + `Retry-After`），上报去向按原因计数（内存里累加、定期写库），工作台的 Settings 页可查看和修改。
 - **Issue 生命周期与告警**：回归、恶化（最近一小时对比 Issue 自己过去 7 天的常态）、忽略到恶化为止；新 Issue、回归、
   恶化通知到通用 Webhook（HMAC 签名）、Slack、飞书、钉钉（按官方算法签名）。事务性发件箱、按 Issue 去重、静默、每小时
-  上限、退避重试，被抑制的通知也记下原因；Issue 详情有生命周期时间线。
+  上限、退避重试，被抑制的通知也记下原因；Issue 详情有生命周期时间线。规则可以顺带发起排障调查（每日上限、每个 Issue
+  24 小时冷却），调查结束后把带引用核验的结论跟进到同一个渠道。
 - **调查工作台**：项目、筛选/分页 Issue（可勾选合并）、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
   证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release、项目设置与上报去向，
   以及实时调查时间线。
@@ -424,9 +426,14 @@ claude mcp add tracepilot -- node /path/to/tracepilot/apps/server/dist/mcp.js --
 最低级别、通知到哪（通用 Webhook、Slack、飞书、钉钉机器人）、同一个 Issue 多久最多通知一次，以及临时静默。「Test」按钮立即
 发一条示例告警，下面的通知记录连被静默、去重的也列出来，答得上「为什么没收到」。
 
+勾选 **Start an investigation**，告警发出时排障 Agent 就开始查，告警里带着调查的链接；查完后同一个渠道收到跟进通知：
+结论、首要原因与置信度、引用核验了几条（没有模型密钥时由离线脚本跑，通知里如实说明）。每个项目 24 小时最多自动调查
+`AUTO_INVESTIGATIONS_PER_DAY` 次（默认 10），同一个 Issue 24 小时内只查一次——每次调查都是计费的模型调用。
+
 通知走事务性发件箱：Issue 的变化和待发的通知在同一个事务里落库，后台每 5 秒发一轮、失败退避重试，进程崩溃也不丢。
 错误消息来自浏览器、任何人都能伪造，所以 `<!channel>`、`<at id=all>` 这类 @所有人 的写法和伪装成链接的 Markdown 都会被转义。
-实现见 [server.md](docs/server.md#610-issue-生命周期与告警)，决策见 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)。
+实现见 [server.md](docs/server.md#610-issue-生命周期与告警)（自动调查见 [10.16](docs/server.md#1016-告警触发的自动调查)），
+决策见 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md) 与 [ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)。
 
 ## 常用命令
 

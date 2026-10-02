@@ -33,6 +33,7 @@ beforeAll(async () => {
     spikeProtection: true,
     repositoryRoot: join(directory, 'repos'),
     dashboardUrl: 'http://localhost:4173',
+    autoInvestigationsPerDay: 10,
   };
   const database = createDatabase(config.databasePath);
   await seedDemoData(database, config.sourceMapDir, config.repositoryRoot);

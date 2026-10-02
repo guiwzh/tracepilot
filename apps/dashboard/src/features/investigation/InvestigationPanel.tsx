@@ -316,6 +316,7 @@ function ReportView({
 
 function RunHeader({
   state,
+  startedBy,
   connection,
   onCancel,
   onRestart,
@@ -323,6 +324,8 @@ function RunHeader({
   restarting,
 }: {
   state: InvestigationViewState;
+  /** 这次运行是谁发起的：告警自动发起的在说明里注明。 */
+  startedBy: 'person' | 'alert' | undefined;
   connection: StreamConnection;
   onCancel(): void;
   onRestart(): void;
@@ -347,6 +350,7 @@ function RunHeader({
         </p>
         <h2>Evidence-bound investigation</h2>
         <p className="engine-note">
+          {startedBy === 'alert' ? 'Started automatically by an alert rule. ' : ''}
           {state.engine === 'local'
             ? 'Offline demo: a deterministic script drives the same tools and checks. It is not model reasoning.'
             : `Model ${state.model ?? '…'} · read-only tools · every citation checked against tool output`}
@@ -471,6 +475,7 @@ export function InvestigationPanel({ issueId }: { issueId: string }) {
     <div className="investigation">
       <RunHeader
         state={state}
+        startedBy={runs.data?.items.find((item) => item.id === runId)?.startedBy}
         connection={connection}
         onCancel={() => cancel.mutate(runId)}
         onRestart={() => start.mutate()}

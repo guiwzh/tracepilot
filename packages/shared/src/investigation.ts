@@ -88,6 +88,8 @@ export interface InvestigationRun {
   /** model：真实模型；local：没有配置密钥时的确定性离线演示脚本，不是模型推理。 */
   engine: 'model' | 'local';
   model: string;
+  /** person：有人在工作台发起；alert：告警规则自动发起。 */
+  startedBy: 'person' | 'alert';
   startedAt: number;
   finishedAt: number | null;
   usage: InvestigationUsage;

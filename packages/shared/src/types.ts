@@ -231,6 +231,8 @@ export interface AlertRule {
   intervalMinutes: number;
   /** 静默到这个时间；null 表示没有静默。 */
   mutedUntil: number | null;
+  /** 告警发出时是否顺带发起一次排障调查。 */
+  autoInvestigate: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -245,11 +247,16 @@ export interface AlertDelivery {
   ruleName: string;
   issueId: string | null;
   issueTitle: string;
-  trigger: AlertTrigger | 'test';
+  /** investigation：自动调查结束后的跟进通知。 */
+  trigger: AlertTrigger | 'test' | 'investigation';
   status: 'pending' | 'sent' | 'failed' | 'suppressed';
   /** suppressed 的原因（muted、interval、rate_limited），或最近一次发送失败的原因。 */
   reason: string | null;
   attempts: number;
+  /** 这条通知发起（或汇报）的调查。 */
+  investigationId: string | null;
+  /** 规则要求自动调查、却没有发起的原因：cooldown、daily_limit、busy。 */
+  investigationNote: string | null;
   createdAt: number;
   sentAt: number | null;
 }

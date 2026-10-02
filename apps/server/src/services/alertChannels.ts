@@ -26,7 +26,8 @@ import type {
 
 /** 渲染一条告警需要的全部信息：触发时的 Issue 快照，存在 alert_deliveries.payload_json 里。 */
 export interface AlertMessage {
-  trigger: AlertTrigger | 'test';
+  /** investigation：自动调查结束后的跟进通知。 */
+  trigger: AlertTrigger | 'test' | 'investigation';
   project: { id: string; name: string };
   issue: {
     id: string;
@@ -43,6 +44,13 @@ export interface AlertMessage {
   detail: string;
   /** 工作台里这个 Issue 的地址。 */
   url: string;
+  /** 告警顺带发起的调查（services/autoInvestigation.ts）：发起时为 started，跟进通知里是结局。 */
+  investigation?: {
+    id: string;
+    status: 'started' | 'completed' | 'failed' | 'cancelled';
+    /** 工作台里这次调查的地址。 */
+    url: string;
+  };
 }
 
 export interface ChannelRequest {
@@ -56,7 +64,28 @@ const TRIGGER_LABELS: Record<AlertMessage['trigger'], string> = {
   regression: 'Regression',
   escalating: 'Escalating',
   test: 'Test notification',
+  investigation: 'Investigation',
 };
+
+/** 消息的标题词：跟进通知按调查的结局区分。 */
+function labelOf(message: AlertMessage): string {
+  if (message.trigger !== 'investigation') return TRIGGER_LABELS[message.trigger];
+  return message.investigation?.status === 'completed'
+    ? 'Investigation finished'
+    : 'Investigation stopped';
+}
+
+/** 调查那一行：发起时说「正在调查」，跟进时说「看报告」。没有调查时为 null。 */
+function investigationLine(message: AlertMessage): { text: string; url: string } | null {
+  if (!message.investigation) return null;
+  return {
+    text:
+      message.investigation.status === 'started'
+        ? 'TracePilot started an investigation'
+        : 'Open the investigation report',
+    url: message.investigation.url,
+  };
+}
 
 /**
  * 用户文本放进消息之前的处理：尖括号和 & 转成实体，<!channel>、<at id=all> 不会变成 @所有人；
@@ -118,8 +147,9 @@ export function buildChannelRequest(
   deliveryId: string,
   now: number,
 ): ChannelRequest {
-  const label = TRIGGER_LABELS[message.trigger];
+  const label = labelOf(message);
   const title = oneLine(message.issue.title);
+  const investigation = investigationLine(message);
   const json = { 'content-type': 'application/json' };
 
   if (channel.type === 'webhook') {
@@ -132,6 +162,7 @@ export function buildChannelRequest(
       issue: message.issue,
       detail: message.detail,
       url: message.url,
+      investigation: message.investigation ?? null,
       sentAt: now,
     });
     const timestamp = Math.floor(now / 1000);
@@ -168,6 +199,14 @@ export function buildChannelRequest(
             },
           },
           { type: 'context', elements: [{ type: 'mrkdwn', text: escapeMarkup(facts(message)) }] },
+          ...(investigation
+            ? [
+                {
+                  type: 'section',
+                  text: { type: 'mrkdwn', text: `<${investigation.url}|${investigation.text}>` },
+                },
+              ]
+            : []),
         ],
       }),
     };
@@ -186,7 +225,12 @@ export function buildChannelRequest(
         card: {
           config: { wide_screen_mode: true },
           header: {
-            template: message.trigger === 'new_issue' ? 'orange' : 'red',
+            template:
+              message.trigger === 'investigation'
+                ? 'blue'
+                : message.trigger === 'new_issue'
+                  ? 'orange'
+                  : 'red',
             title: {
               tag: 'plain_text',
               content: `${label} · ${oneLine(message.project.name, 60)}`,
@@ -210,6 +254,16 @@ export function buildChannelRequest(
                   text: { tag: 'plain_text', content: 'Open in TracePilot' },
                   url: message.url,
                 },
+                ...(investigation
+                  ? [
+                      {
+                        tag: 'button',
+                        type: 'default',
+                        text: { tag: 'plain_text', content: investigation.text },
+                        url: investigation.url,
+                      },
+                    ]
+                  : []),
               ],
             },
           ],
@@ -237,6 +291,7 @@ export function buildChannelRequest(
           escapeMarkup(message.detail),
           escapeMarkup(facts(message)),
           `[Open in TracePilot](${message.url})`,
+          ...(investigation ? [`[${investigation.text}](${investigation.url})`] : []),
         ].join('\n\n'),
       },
     }),

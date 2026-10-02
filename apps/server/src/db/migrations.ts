@@ -270,6 +270,23 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // 告警触发的自动调查（services/autoInvestigation.ts）。
+    // - alert_rules.auto_investigate：这条规则的告警发出时，是否顺带发起一次排障调查；
+    // - alert_deliveries.investigation_id：这条通知发起（或汇报）的是哪次调查；investigation_note：没有发起的原因；
+    // - investigation_runs.started_by：person（人点的）或 alert（告警发起的），每日上限只数后者。
+    description: 'alert-triggered investigations',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE alert_rules ADD COLUMN auto_investigate INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE alert_deliveries ADD COLUMN investigation_id TEXT;
+        ALTER TABLE alert_deliveries ADD COLUMN investigation_note TEXT;
+        ALTER TABLE investigation_runs ADD COLUMN started_by TEXT NOT NULL DEFAULT 'person';
+        CREATE INDEX investigation_runs_started_by ON investigation_runs(started_by, started_at);
+        CREATE INDEX alert_deliveries_investigation ON alert_deliveries(investigation_id);
+      `);
+    },
+  },
 ];
 
 /** 把数据库升级到最新结构。数据库比这份代码还新时拒绝启动：旧代码不知道新结构的含义，写入可能破坏它。 */

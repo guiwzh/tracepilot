@@ -29,6 +29,7 @@ const config: ServerConfig = {
   spikeProtection: true,
   repositoryRoot: null,
   dashboardUrl: 'http://localhost:4173',
+  autoInvestigationsPerDay: 10,
 };
 
 try {

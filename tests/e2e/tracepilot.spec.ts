@@ -255,7 +255,7 @@ test('source map upload maps a newly ingested browser stack through the API', as
   }
 });
 
-test('a new issue reaches a signed webhook and shows up in the alert log', async ({
+test('a new issue reaches a signed webhook, starts an investigation and reports back', async ({
   page,
   request,
 }) => {
@@ -277,6 +277,7 @@ test('a new issue reaches a signed webhook and shows up in the alert log', async
       data: {
         name: 'E2E webhook',
         triggers: ['new_issue'],
+        autoInvestigate: true,
         channel: { type: 'webhook', url: `http://127.0.0.1:${port}/hook`, secret: 'e2e-secret' },
       },
     },
@@ -311,21 +312,38 @@ test('a new issue reaches a signed webhook and shows up in the alert log', async
     });
     expect(ingest.status()).toBe(202);
 
-    await expect.poll(() => received.length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => received.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
     const [alert] = received;
     const timestamp = String(alert!.headers['x-tracepilot-timestamp']);
     expect(alert!.headers['x-tracepilot-signature']).toBe(
       `sha256=${createHmac('sha256', 'e2e-secret').update(`${timestamp}.${alert!.body}`).digest('hex')}`,
     );
-    expect(JSON.parse(alert!.body)).toMatchObject({
+    const alertBody = JSON.parse(alert!.body) as { issue: { id: string } };
+    expect(alertBody).toMatchObject({
       trigger: 'new_issue',
       issue: { title: expect.stringContaining('Gift card balance') },
+      investigation: { status: 'started' },
+    });
+
+    // 告警顺带发起的调查（离线脚本）跑完后，同一个渠道收到跟进通知。
+    await expect.poll(() => received.length, { timeout: 30_000 }).toBe(2);
+    expect(JSON.parse(received[1]!.body)).toMatchObject({
+      trigger: 'investigation',
+      investigation: { status: 'completed' },
+      detail: expect.stringContaining('citations verified'),
     });
 
     await page.goto('/projects/demo-project/settings');
     const log = page.locator('.alert-deliveries li').filter({ hasText: 'Gift card balance' });
-    await expect(log).toContainText('E2E webhook');
-    await expect(log.locator('.delivery-sent')).toBeVisible();
+    await expect(log).toHaveCount(2);
+    const kind = (label: string) =>
+      log.filter({ has: page.locator('strong').getByText(label, { exact: true }) });
+    await expect(kind('New issue')).toContainText('investigation started');
+    await expect(kind('Investigation').locator('.delivery-sent')).toBeVisible();
+
+    await page.goto(`/projects/demo-project/issues/${alertBody.issue.id}?tab=investigation`);
+    await expect(page.getByText(/Started automatically by an alert rule/)).toBeVisible();
+    await expect(page.locator('.verification-badge.is-ok')).toContainText('citations verified');
   } finally {
     await request.delete(`http://127.0.0.1:4318/api/v1/alert-rules/${ruleId}`);
     await new Promise((done) => receiver.close(done));

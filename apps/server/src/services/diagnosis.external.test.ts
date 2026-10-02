@@ -149,6 +149,7 @@ async function buildModelApp(modelApiUrl: string) {
     spikeProtection: true,
     repositoryRoot: null,
     dashboardUrl: 'http://localhost:4173',
+    autoInvestigationsPerDay: 10,
     modelApiKey: 'test-only-key',
     modelApiUrl,
   };

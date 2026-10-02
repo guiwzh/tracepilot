@@ -49,6 +49,7 @@ function mapRun(row: Row): InvestigationRun {
     status: row.status as InvestigationStatus,
     engine: row.engine as InvestigationRun['engine'],
     model: String(row.model),
+    startedBy: row.started_by === 'alert' ? 'alert' : 'person',
     startedAt: Number(row.started_at),
     finishedAt: row.finished_at == null ? null : Number(row.finished_at),
     usage: {
@@ -108,14 +109,19 @@ export class InvestigationStore {
     }
   }
 
-  createRun(issueId: string, engine: InvestigationRun['engine'], model: string): InvestigationRun {
+  createRun(
+    issueId: string,
+    engine: InvestigationRun['engine'],
+    model: string,
+    startedBy: InvestigationRun['startedBy'] = 'person',
+  ): InvestigationRun {
     const id = randomUUID();
     this.database.sqlite
       .prepare(
-        `INSERT INTO investigation_runs (id, issue_id, status, engine, model, started_at)
-         VALUES (?, ?, 'running', ?, ?, ?)`,
+        `INSERT INTO investigation_runs (id, issue_id, status, engine, model, started_by, started_at)
+         VALUES (?, ?, 'running', ?, ?, ?, ?)`,
       )
-      .run(id, issueId, engine, model, Date.now());
+      .run(id, issueId, engine, model, startedBy, Date.now());
     this.nextSeq.set(id, 1);
     return this.getRun(id)!;
   }

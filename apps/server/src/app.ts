@@ -22,6 +22,7 @@ import { registerSettingsRoutes } from './routes/settings';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
 import { registerTokenRoutes } from './routes/tokens';
 import { AlertDispatcher } from './services/alerts';
+import { enqueueFollowUp } from './services/autoInvestigation';
 import { EscalationDetector } from './services/escalation';
 import { IngestGuard } from './services/ingestGuard';
 import { OutcomeRecorder } from './services/outcomes';
@@ -110,13 +111,28 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   };
 
   // 告警：接入之后检查恶化；分发器把 Issue 的新建、回归、恶化变成通知，每 5 秒一轮，接入后立即补一轮。
+  // 规则要求时，告警顺带发起一次调查（有每日上限和冷却时间），调查结束后再发一条跟进通知。
   const alerting = {
     escalation: new EscalationDetector(database),
     dispatcher: new AlertDispatcher(database, {
       dashboardUrl: options.config.dashboardUrl,
       onError: (error) => app.log.error({ err: error }, 'alert dispatch failed'),
+      investigations: {
+        dailyLimit: options.config.autoInvestigationsPerDay,
+        start: (issueId) => {
+          const result = investigations.start(issueId, 'alert');
+          return result.status === 'created' || result.status === 'existing'
+            ? { runId: result.run.id }
+            : { skipped: result.status };
+        },
+      },
     }),
   };
+  investigations.onFinished((run) => {
+    if (run.startedBy === 'alert' && enqueueFollowUp(database, run, Date.now())) {
+      alerting.dispatcher.nudge();
+    }
+  });
   alerting.dispatcher.start();
 
   // 插件要先注册完成（await），依赖它们的路由才能正常工作。

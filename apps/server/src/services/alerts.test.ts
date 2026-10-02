@@ -262,6 +262,66 @@ describe('alert dispatch', () => {
     expect(statusesOf()).toEqual([['new_issue', 'suppressed', 'disabled']]);
   });
 
+  it('starts an investigation for alerts that go out, and links it from the notification', async () => {
+    const started: string[] = [];
+    const investigating = new AlertDispatcher(database, {
+      dashboardUrl: 'http://localhost:4173',
+      now: () => clock,
+      investigations: {
+        dailyLimit: 5,
+        start: (issueId) => {
+          started.push(issueId);
+          const runId = `run-${started.length}`;
+          database.sqlite
+            .prepare(
+              `INSERT INTO investigation_runs (id, issue_id, status, engine, model, started_by, started_at)
+               VALUES (?, ?, 'running', 'local', 'local', 'alert', ?)`,
+            )
+            .run(runId, issueId, clock);
+          return { runId };
+        },
+      },
+    });
+    try {
+      rule({ autoInvestigate: true });
+      // 第二条规则也要求调查：同一个 Issue 刚刚调查过，记为冷却中，不会发起第二次。
+      rule({ name: 'Second', autoInvestigate: true });
+      rule({ name: 'Muted', autoInvestigate: true });
+      const rules = database.sqlite.prepare('SELECT id, name FROM alert_rules').all() as Array<{
+        id: string;
+        name: string;
+      }>;
+      updateAlertRule(database, rules.find((item) => item.name === 'Muted')!.id, {
+        mutedUntil: clock + 3_600_000,
+      });
+
+      const { result } = await ingest([failure('a', NOW - 1_000)]);
+      await investigating.run();
+
+      expect(started).toEqual([result.issueIds[0]]);
+      const deliveries = listAlertDeliveries(database, 'demo-project');
+      const byRule = (name: string) => deliveries.find((item) => item.ruleName === name)!;
+      expect(byRule('On call')).toMatchObject({ status: 'sent', investigationId: 'run-1' });
+      expect(byRule('Second')).toMatchObject({ status: 'sent', investigationNote: 'cooldown' });
+      // 静默而没有发出的告警不发起调查。
+      expect(byRule('Muted')).toMatchObject({
+        status: 'suppressed',
+        investigationId: null,
+        investigationNote: null,
+      });
+      const withLink = received
+        .map((request) => JSON.parse(request.body) as { investigation: unknown })
+        .find((body) => body.investigation);
+      expect(withLink?.investigation).toEqual({
+        id: 'run-1',
+        status: 'started',
+        url: `http://localhost:4173/projects/demo-project/issues/${result.issueIds[0]}?tab=investigation`,
+      });
+    } finally {
+      await investigating.close();
+    }
+  });
+
   it('sends a test notification straight away and logs it', async () => {
     const created = rule();
     expect(

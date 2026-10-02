@@ -148,6 +148,8 @@ export const createAlertRuleSchema = z.object({
   minLevel: issueLevelSchema.default('error'),
   intervalMinutes: alertRuleFields.intervalMinutes.default(60),
   channel: alertChannelSchema,
+  /** 告警发出时顺带发起一次排障调查（有每日上限和每个 Issue 的冷却时间）。 */
+  autoInvestigate: z.boolean().default(false),
 });
 
 /** 修改规则。渠道不能改（地址和密钥是凭据，接口不回显），要换渠道就删掉重建。 */
@@ -160,6 +162,7 @@ export const updateAlertRuleSchema = z
     intervalMinutes: alertRuleFields.intervalMinutes,
     /** 静默到这个时间（毫秒时间戳）；null 取消静默。 */
     mutedUntil: z.number().int().positive().nullable(),
+    autoInvestigate: z.boolean(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, 'Change at least one field.');

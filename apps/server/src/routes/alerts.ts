@@ -69,7 +69,9 @@ export function registerAlertRoutes(
   app.patch('/api/v1/alert-rules/:ruleId', async (request, reply) => {
     const parsed = updateAlertRuleSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'INVALID_ALERT_RULE', message: firstIssue(parsed.error) });
+      return reply
+        .code(400)
+        .send({ error: 'INVALID_ALERT_RULE', message: firstIssue(parsed.error) });
     }
     const rule = updateAlertRule(database, param(request.params, 'ruleId'), parsed.data);
     return rule ?? reply.code(404).send(ruleNotFound);

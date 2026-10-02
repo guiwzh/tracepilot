@@ -32,6 +32,7 @@ const config: ServerConfig = {
   spikeProtection: false,
   repositoryRoot: null,
   dashboardUrl: 'http://localhost:4173',
+  autoInvestigationsPerDay: 10,
 };
 
 let directory: string;

@@ -30,6 +30,7 @@ const config: ServerConfig = {
   spikeProtection: false,
   repositoryRoot: null,
   dashboardUrl: 'http://localhost:4173',
+  autoInvestigationsPerDay: 10,
 };
 // 不配置模型密钥、关闭日志：只测接入和查询本身。
 const app = await buildApp({ config, logger: false });

@@ -51,6 +51,8 @@ interface ActiveRun {
 export class InvestigationService {
   /** 本进程里正在跑的调查（runId → ActiveRun）。只在内存里，进程重启即清空。 */
   private readonly active = new Map<string, ActiveRun>();
+  /** 运行结束（完成、失败、取消）后的回调：告警据此给自动调查发跟进通知。 */
+  private readonly finishedListeners = new Set<(run: InvestigationRun) => void>();
 
   constructor(
     private readonly database: TraceDatabase,
@@ -60,8 +62,17 @@ export class InvestigationService {
     private readonly limits: Partial<InvestigationLimits> = {},
   ) {}
 
-  /** 为一个 Issue 发起调查（同步返回，调查本身在后台进行）。 */
-  start(issueId: string): StartResult {
+  /** 订阅运行结束；返回取消订阅的函数。回调里的异常只影响它自己，不影响运行的收尾。 */
+  onFinished(listener: (run: InvestigationRun) => void): () => void {
+    this.finishedListeners.add(listener);
+    return () => this.finishedListeners.delete(listener);
+  }
+
+  /**
+   * 为一个 Issue 发起调查（同步返回，调查本身在后台进行）。startedBy 记下是人点的还是告警发起的，
+   * 告警发起的有每日上限（services/autoInvestigation.ts）。
+   */
+  start(issueId: string, startedBy: InvestigationRun['startedBy'] = 'person'): StartResult {
     const issue = this.database.sqlite
       .prepare('SELECT id, project_id, title FROM issues WHERE id = ?')
       .get(issueId) as { id: string; project_id: string; title: string } | undefined;
@@ -73,7 +84,7 @@ export class InvestigationService {
     if (this.active.size >= MAX_CONCURRENT_RUNS) return { status: 'busy' };
 
     const client = this.createClient();
-    const run = this.store.createRun(issueId, client.engine, client.model);
+    const run = this.store.createRun(issueId, client.engine, client.model, startedBy);
     this.store.append(run.id, { type: 'run.started', engine: client.engine, model: client.model });
 
     const controller = new AbortController();
@@ -83,9 +94,24 @@ export class InvestigationService {
     const done = this.execute(run.id, issue, client, controller.signal).finally(() => {
       clearTimeout(timer);
       this.active.delete(run.id);
+      this.notifyFinished(run.id);
     });
     this.active.set(run.id, { controller, done });
     return { status: 'created', run };
+  }
+
+  private notifyFinished(runId: string): void {
+    if (this.finishedListeners.size === 0) return;
+    // 服务正在关闭、数据库已经关上时，读不到运行记录，跳过。
+    const run = this.database.sqlite.open ? this.store.getRun(runId) : null;
+    if (!run) return;
+    for (const listener of this.finishedListeners) {
+      try {
+        listener(run);
+      } catch {
+        // 订阅方自己的问题（例如告警跟进写库失败）不该让调查的收尾出错。
+      }
+    }
   }
 
   /** 取消一个进行中的调查。只是发出取消信号，终止事件由 execute 在收尾时写入。 */

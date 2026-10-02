@@ -38,6 +38,8 @@ export interface ServerConfig {
   repositoryRoot: string | null;
   /** 工作台的地址，告警消息里的链接指向它。 */
   dashboardUrl: string;
+  /** 每个项目 24 小时内告警最多自动发起几次调查；0 表示关闭（services/autoInvestigation.ts）。 */
+  autoInvestigationsPerDay: number;
 }
 
 /** 非负整数；没有设置或不是数字时用默认值（写错的值不应悄悄变成 0，也就是「不限」）。 */
@@ -76,5 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         ? null
         : resolve(env.REPOSITORY_ROOT ?? resolve(serverRoot, '.tracepilot/repos')),
     dashboardUrl: env.DASHBOARD_URL || 'http://localhost:4173',
+    // 每次调查都要多次调用计费的模型：默认每个项目每天 10 次，够覆盖一次发版带来的几个新问题。
+    autoInvestigationsPerDay: nonNegative(env.AUTO_INVESTIGATIONS_PER_DAY, 10),
   };
 }

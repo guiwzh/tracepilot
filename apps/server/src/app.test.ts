@@ -49,6 +49,7 @@ beforeEach(async () => {
     spikeProtection: true,
     repositoryRoot: null,
     dashboardUrl: 'http://localhost:4173',
+    autoInvestigationsPerDay: 10,
   };
   app = await buildApp({ config, logger: false });
 });
@@ -1402,6 +1403,49 @@ describe('issue lifecycle and alerts', () => {
       expect(
         (await app.inject({ method: 'GET', url: '/api/v1/issues/nope/activity' })).statusCode,
       ).toBe(404);
+    } finally {
+      await receiver.close();
+    }
+  });
+  it('investigates automatically when a rule asks for it and reports back on the same channel', async () => {
+    const receiver = await webhookReceiver();
+    try {
+      expect(
+        (
+          await createRule({
+            triggers: ['new_issue'],
+            autoInvestigate: true,
+            channel: { type: 'webhook', url: receiver.url },
+          })
+        ).statusCode,
+      ).toBe(201);
+      expect((await send(event('auto-1', '20000001'))).statusCode).toBe(202);
+
+      // 先是告警（带「正在调查」的链接），离线脚本跑完之后是跟进通知。
+      await expect.poll(() => receiver.bodies.length, { timeout: 10_000 }).toBe(2);
+      const [alert, followUp] = receiver.bodies.map(
+        (body) =>
+          JSON.parse(body) as {
+            trigger: string;
+            detail: string;
+            issue: { id: string };
+            investigation: { status: string; url: string } | null;
+          },
+      );
+      expect(alert).toMatchObject({ trigger: 'new_issue', investigation: { status: 'started' } });
+      expect(followUp).toMatchObject({
+        trigger: 'investigation',
+        investigation: { status: 'completed' },
+      });
+      expect(followUp!.detail).toContain('citations verified against tool output');
+      // 没有配置模型密钥：报告来自离线脚本，跟进通知如实说明。
+      expect(followUp!.detail).toContain('not model reasoning');
+
+      const runs = await app.inject({
+        method: 'GET',
+        url: `/api/v1/issues/${alert!.issue.id}/investigations`,
+      });
+      expect(runs.json().items[0]).toMatchObject({ startedBy: 'alert', status: 'completed' });
     } finally {
       await receiver.close();
     }

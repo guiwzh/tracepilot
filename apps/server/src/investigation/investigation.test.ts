@@ -39,6 +39,7 @@ beforeEach(async () => {
     spikeProtection: true,
     repositoryRoot: join(directory, 'repos'),
     dashboardUrl: 'http://localhost:4173',
+    autoInvestigationsPerDay: 10,
   };
   // 种子数据先写入同一个库文件，再由 buildApp 打开；演示 git 仓库建在临时目录里。
   const database = createDatabase(config.databasePath);
