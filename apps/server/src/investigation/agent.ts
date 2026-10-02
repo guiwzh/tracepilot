@@ -14,10 +14,11 @@ import {
   investigationRequest,
 } from './prompt';
 import {
+  CODE_TOOLS,
   runTool,
   SUBMIT_ONLY_TOOL_SPECS,
   SUBMIT_REPORT_TOOL,
-  TOOL_SPECS,
+  toolSpecsFor,
   type ToolContext,
   type ToolResult,
 } from './tools';
@@ -178,9 +179,12 @@ function finalReport(
 export async function investigate(options: InvestigateOptions): Promise<InvestigationReport> {
   const { client, context, issue, emit, signal, usage } = options;
   const limits = { ...DEFAULT_LIMITS, ...options.limits };
+  // 没有配置仓库时不提供代码类工具，任务说明里告诉模型这一点。
+  const toolSpecs = toolSpecsFor(context);
+  const hasCodeTools = toolSpecs.some((tool) => CODE_TOOLS.includes(tool.function.name));
   const messages: ChatMessage[] = [
     { role: 'system', content: INVESTIGATION_SYSTEM_PROMPT },
-    { role: 'user', content: investigationRequest(issue) },
+    { role: 'user', content: investigationRequest(issue, { codeTools: hasCodeTools }) },
   ];
   // 本次运行里真实发生过的工具调用，按模型可见的编号（T1、T2……）索引；引用校验只认这里的记录。
   const calls = new Map<string, ExecutedCall>();
@@ -206,7 +210,7 @@ export async function investigate(options: InvestigateOptions): Promise<Investig
     usage.steps = step;
     const turn = await client.complete({
       messages,
-      tools: finalizing ? SUBMIT_ONLY_TOOL_SPECS : TOOL_SPECS,
+      tools: finalizing ? SUBMIT_ONLY_TOOL_SPECS : toolSpecs,
       // 收尾阶段强制调用 submit_report，模型不能再选择继续调查或只回一段文字。
       toolChoice: finalizing ? { name: SUBMIT_REPORT_TOOL } : 'auto',
       signal,

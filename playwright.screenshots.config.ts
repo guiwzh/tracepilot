@@ -37,6 +37,8 @@ export default defineConfig({
     {
       command: 'pnpm --filter @trace-pilot/dashboard dev --host 127.0.0.1',
       url: 'http://127.0.0.1:4173',
+      // 截图演示配置了链路系统（Jaeger）的地址模板，trace 旁边才有「Open trace」。
+      env: { VITE_TRACE_URL_TEMPLATE: 'http://localhost:16686/trace/{traceId}?uiFind={spanId}' },
       reuseExistingServer: true,
       timeout: 120_000,
       // pnpm 12 把脚本进程放进独立的进程组，Playwright 默认对进程组发 SIGKILL 时够不到它们：

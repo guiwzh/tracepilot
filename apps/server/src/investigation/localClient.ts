@@ -303,7 +303,13 @@ export class LocalScriptedClient implements ModelClient {
       toolCalls = [
         call('get_source_context', { eventId: String(detail.value.eventId), frameIndex: 0 }),
       ];
-    } else if (!forcedSubmit && has('get_source_context') && !has('find_suspect_commits')) {
+    } else if (
+      !forcedSubmit &&
+      has('get_source_context') &&
+      !has('find_suspect_commits') &&
+      // 项目没有配置仓库时这个工具不在清单里。
+      request.tools.some((tool) => tool.function.name === 'find_suspect_commits')
+    ) {
       narration = 'Checking which commit last changed the failing code.';
       toolCalls = [call('find_suspect_commits', {})];
     } else {

@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { runTool } from '../investigation/tools';
 import { EVAL_CASES } from './cases';
 import { prepareCase, type EngineOutput } from './harness';
 import { scoreDeterministic } from './scoring';
@@ -40,6 +41,37 @@ describe('evaluation cases', () => {
       }
     },
   );
+});
+
+describe('release timing', () => {
+  it('says when an old release keeps failing after the next one was deployed', async () => {
+    // 2026-10-02 的真实模型评测里，Agent 三次都没注意到报错页面加载于 3.2.0 部署之前。
+    const stale = EVAL_CASES.find((item) => item.id === 'stale-chunk-after-deploy')!;
+    // 上面的用例测试已经在 directory 里建过这个用例的库，换一个目录。
+    const prepared = await prepareCase(stale, await mkdtemp(join(directory, 'timing-')));
+    try {
+      const result = await runTool('compare_releases', '{}', {
+        database: prepared.database,
+        issueId: prepared.issueId,
+        projectId: 'demo-project',
+        allowSourceContext: true,
+        repositoryRoot: null,
+      });
+      const body = JSON.parse(result.output) as {
+        summary: string;
+        releases: Array<{ version: string; eventsAfterNextRelease?: Record<string, unknown> }>;
+      };
+      expect(body.summary).toContain('26 of 26 events of 3.1.0 happened after 3.2.0 was deployed');
+      expect(body.releases[0]!.eventsAfterNextRelease).toMatchObject({
+        nextRelease: '3.2.0',
+        issueEvents: 26,
+      });
+      // 最新的版本没有「下一个」。
+      expect(body.releases[1]).not.toHaveProperty('eventsAfterNextRelease');
+    } finally {
+      prepared.database.close();
+    }
+  });
 });
 
 function output(summary: string, causes: EngineOutput['causes']): EngineOutput {

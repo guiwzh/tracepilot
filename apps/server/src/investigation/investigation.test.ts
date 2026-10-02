@@ -190,6 +190,46 @@ describe('investigation agent', () => {
     );
   });
 
+  it('offers no code tools when the project has no repository, and says so', async () => {
+    // 真实模型评测里没有仓库时 Agent 仍会每次调用代码类工具约 3 次，只能得到「没有配置仓库」。
+    config = { ...config, repositoryRoot: null };
+    const { client, requests } = scripted([
+      () => turn([{ id: 'c1', name: 'get_issue_overview', arguments: '{}' }]),
+      (request) =>
+        turn([
+          {
+            id: 'c2',
+            name: 'submit_report',
+            arguments: JSON.stringify({
+              summary: 'Not enough evidence.',
+              evidence: [
+                {
+                  resultRef: 'T1',
+                  quote: toolOutput(request, 'c1').slice(2, 30),
+                  description: 'Overview.',
+                  source: 'issue',
+                },
+              ],
+              possibleCauses: [{ cause: 'Unknown.', confidence: 0.2, evidenceRefs: [0] }],
+              investigationSteps: [],
+              suggestions: [],
+              missingInformation: [],
+            }),
+          },
+        ]),
+    ]);
+    await start({ modelClientFactory: () => client });
+    const finished = await waitForEnd((await startRun(await issueId("reading 'total'"))).id);
+    expect(finished.status).toBe('completed');
+    const offered = requests[0]!.tools.map((tool) => tool.function.name);
+    expect(offered).not.toContain('search_code');
+    expect(offered).not.toContain('find_suspect_commits');
+    expect(offered).toContain('get_source_context');
+    expect(String(requests[0]!.messages[1]!.content)).toContain(
+      'No git repository is configured for this project',
+    );
+  });
+
   it('sends a report back when it cites a call that never happened, and accepts the correction', async () => {
     const { client, requests } = scripted([
       () => turn([{ id: 'call_overview', name: 'get_issue_overview', arguments: '{}' }]),

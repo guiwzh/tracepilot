@@ -300,29 +300,39 @@ const getSourceContext = defineTool({
 const compareReleases = defineTool({
   name: 'compare_releases',
   description:
-    "How this issue is spread across the project's releases, oldest first: its event count, its share of each release's errors, when it first appeared, and whether source maps exist.",
+    "How this issue is spread across the project's releases, oldest first: its event count, its share of each release's errors, when it first appeared, whether source maps exist, and how many of its events still came from a release after the next one was deployed.",
   parameters: z.object({}),
   execute: (_args, context) => {
     // 每个版本一行（GROUP BY r.id）。SUM(CASE WHEN 条件 THEN 1 ELSE 0 END) 是「按条件计数」：
     // issue_events 数本 Issue 的事件，error_events 数该版本所有归入 Issue 的错误事件。
     // LEFT JOIN 让没有任何事件的版本也出现在结果里（计数为 NULL，下面按 0 处理）。
+    // next_*：按部署时间的下一个版本；after_next 数本 Issue 里「下一个版本部署之后仍带着这个版本号」的事件。
     const rows = context.database.sqlite
       .prepare(
         `SELECT r.version, r.created_at,
           SUM(CASE WHEN e.issue_id = ? THEN 1 ELSE 0 END) AS issue_events,
           SUM(CASE WHEN e.issue_id IS NOT NULL THEN 1 ELSE 0 END) AS error_events,
           MIN(CASE WHEN e.issue_id = ? THEN e.created_at END) AS first_seen,
-          (SELECT COUNT(*) FROM source_maps sm WHERE sm.release_id = r.id) AS source_maps
+          (SELECT COUNT(*) FROM source_maps sm WHERE sm.release_id = r.id) AS source_maps,
+          (SELECT n.version FROM releases n WHERE n.project_id = r.project_id AND n.created_at > r.created_at
+             ORDER BY n.created_at LIMIT 1) AS next_version,
+          (SELECT MIN(n.created_at) FROM releases n WHERE n.project_id = r.project_id
+             AND n.created_at > r.created_at) AS next_deployed,
+          SUM(CASE WHEN e.issue_id = ? AND e.created_at > (SELECT MIN(n.created_at) FROM releases n
+             WHERE n.project_id = r.project_id AND n.created_at > r.created_at) THEN 1 ELSE 0 END) AS after_next
          FROM releases r LEFT JOIN events e ON e.release_id = r.id
          WHERE r.project_id = ? GROUP BY r.id ORDER BY r.created_at ASC`,
       )
-      .all(context.issueId, context.issueId, context.projectId) as Array<{
+      .all(context.issueId, context.issueId, context.issueId, context.projectId) as Array<{
       version: string;
       created_at: number;
       issue_events: number | null;
       error_events: number | null;
       first_seen: number | null;
       source_maps: number;
+      next_version: string | null;
+      next_deployed: number | null;
+      after_next: number | null;
     }>;
     const releases = rows.map((row) => {
       const issueEvents = Number(row.issue_events ?? 0);
@@ -336,6 +346,16 @@ const compareReleases = defineTool({
           : 'n/a',
         firstSeenInRelease: iso(row.first_seen),
         sourceMaps: row.source_maps,
+        // 事件带的版本号是页面加载时的版本：下一个版本部署之后还在上报这个版本的，是部署之前加载、没有刷新的页面。
+        ...(row.next_version
+          ? {
+              eventsAfterNextRelease: {
+                nextRelease: row.next_version,
+                nextDeployedAt: iso(row.next_deployed),
+                issueEvents: Number(row.after_next ?? 0),
+              },
+            }
+          : {}),
       };
     });
     const affected = releases.filter((release) => release.issueEvents > 0);
@@ -343,6 +363,14 @@ const compareReleases = defineTool({
     const first = [...affected].sort((left, right) =>
       String(left.firstSeenInRelease).localeCompare(String(right.firstSeenInRelease)),
     )[0];
+    // 部署时间与页面加载的先后直接写成一句话：模型曾三次都没注意到报错页面加载于部署之前。
+    const stale = affected
+      .filter((release) => (release.eventsAfterNextRelease?.issueEvents ?? 0) > 0)
+      .map(
+        (release) =>
+          ` ${release.eventsAfterNextRelease!.issueEvents} of ${release.issueEvents} events of ${release.version} happened after ${release.eventsAfterNextRelease!.nextRelease} was deployed (${release.eventsAfterNextRelease!.nextDeployedAt}): they come from pages loaded before that deployment and still running ${release.version}.`,
+      )
+      .join('');
     const summary =
       affected.length === 0
         ? 'The issue has no events linked to a release.'
@@ -351,7 +379,7 @@ const compareReleases = defineTool({
               (release) =>
                 `${release.version} has ${Math.round((release.issueEvents / total) * 100)}% of its events`,
             )
-            .join(', ')}.`;
+            .join(', ')}.${stale}`;
     return { summary, releases };
   },
 });
@@ -662,6 +690,23 @@ export const TOOL_SPECS: ChatCompletionFunctionTool[] = [
 export const SUBMIT_ONLY_TOOL_SPECS = TOOL_SPECS.filter(
   (tool) => tool.function.name === SUBMIT_REPORT_TOOL,
 );
+
+/** 读被监控应用 git 仓库的三个工具。 */
+export const CODE_TOOLS: readonly string[] = [
+  'read_source_file',
+  'search_code',
+  'find_suspect_commits',
+];
+
+/**
+ * 这次调查交给模型的工具。项目没有配置仓库时去掉三个代码类工具：它们只会回答「没有配置仓库」，
+ * 真实模型评测里 Agent 平均每次调查仍会调用它们约 3 次，白白多出几轮对话的 token。
+ */
+export function toolSpecsFor(context: Pick<ToolContext, 'repositoryRoot' | 'projectId'>) {
+  return projectRepository(context.repositoryRoot, context.projectId)
+    ? TOOL_SPECS
+    : TOOL_SPECS.filter((tool) => !CODE_TOOLS.includes(tool.function.name));
+}
 
 export interface ToolResult {
   ok: boolean;

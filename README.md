@@ -260,8 +260,12 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 聚合后的 Issue、筛选与趋势                         | 逐字引用并核验的证据，可跳回产生它的工具调用       |
 | ![证据链](docs/screenshots/02-evidence-chain.png)  | ![Source Map 还原](docs/screenshots/03-stack.png)  |
 | 路由跳转 → 点击 → 请求 → 报错                      | `checkout.a81e93bd.js:1:420` → `total.ts:22:20`    |
-| ![Web Vitals](docs/screenshots/05-performance.png) | ![事故演练场](docs/screenshots/06-playground.png)  |
-| 分位数与按 Release / 路由 / 浏览器的对比           | 可控地制造真实浏览器信号                           |
+| ![修复简报](docs/screenshots/08-fix-brief.png)     | ![告警](docs/screenshots/09-alerts.png)            |
+| 交给编码 Agent 的修复简报，生产文本按数据隔离      | 新 Issue 告警顺带发起调查，结论跟进到同一个渠道    |
+| ![后端链路](docs/screenshots/10-network-trace.png) | ![Web Vitals](docs/screenshots/05-performance.png) |
+| 每个请求在后端链路里的 trace，可直接打开           | 分位数与按 Release / 路由 / 浏览器的对比           |
+| ![事故演练场](docs/screenshots/06-playground.png)  |                                                    |
+| 可控地制造真实浏览器信号                           |                                                    |
 
 ## 架构
 
