@@ -3085,3 +3085,72 @@ pre {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* 修复简报：交给编码 Agent */
+.fix-brief {
+  margin-top: 18px;
+  padding: 14px 17px 16px;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line-dark);
+  background: var(--white);
+}
+.fix-brief header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fix-brief header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fix-brief h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.fix-brief p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.fix-brief-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.fix-brief-markdown {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font:
+    400 11px/1.5 'DM Mono',
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.fix-brief-mcp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+.fix-brief-mcp code {
+  padding: 3px 6px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font:
+    400 11px 'DM Mono',
+    monospace;
+  overflow-wrap: anywhere;
+}

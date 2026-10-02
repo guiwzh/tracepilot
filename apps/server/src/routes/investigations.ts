@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { isTerminalInvestigationEvent, type InvestigationStreamEvent } from '@trace-pilot/shared';
+import type { TraceDatabase } from '../db/client';
+import { fixBriefFor } from '../investigation/fixBrief';
 import type { InvestigationService } from '../investigation/service';
-import type { InvestigationStore } from '../investigation/store';
+import { latestCompletedRun, type InvestigationStore } from '../investigation/store';
 
 function param(params: unknown, key: string): string {
   return String((params as Record<string, unknown>)[key] ?? '');
@@ -34,7 +36,40 @@ export function registerInvestigationRoutes(
   app: FastifyInstance,
   service: InvestigationService,
   store: InvestigationStore,
+  database: TraceDatabase,
+  dashboardUrl: string,
 ): void {
+  // 修复简报（investigation/fixBrief.ts）：把一次已完成的调查整理成交给编码 Agent 的 Markdown。
+  // 按运行取，或取某个 Issue 最近一次完成的调查。
+  app.get('/api/v1/investigations/:runId/fix-brief', async (request, reply) => {
+    const run = store.getRun(param(request.params, 'runId'));
+    if (!run) {
+      return reply
+        .code(404)
+        .send({ error: 'INVESTIGATION_NOT_FOUND', message: 'Investigation not found.' });
+    }
+    const brief = fixBriefFor(database, run, dashboardUrl);
+    if (!brief) {
+      return reply.code(409).send({
+        error: 'INVESTIGATION_NOT_COMPLETED',
+        message: 'Only a completed investigation has a report to brief from.',
+      });
+    }
+    return brief;
+  });
+
+  app.get('/api/v1/issues/:issueId/fix-brief', async (request, reply) => {
+    const run = latestCompletedRun(database, param(request.params, 'issueId'));
+    const brief = run && fixBriefFor(database, run, dashboardUrl);
+    if (!brief) {
+      return reply.code(404).send({
+        error: 'NO_COMPLETED_INVESTIGATION',
+        message: 'This issue has no completed investigation yet.',
+      });
+    }
+    return brief;
+  });
+
   // 发起调查。立即返回运行记录，调查本身在后台进行，进度从下面的 /events 接口订阅。
   app.post('/api/v1/issues/:issueId/investigations', async (request, reply) => {
     const result = service.start(param(request.params, 'issueId'));

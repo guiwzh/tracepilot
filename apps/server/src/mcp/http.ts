@@ -17,7 +17,7 @@ import { createMcpServer } from './server';
 export function registerMcpRoutes(
   app: FastifyInstance,
   database: TraceDatabase,
-  config: Pick<ServerConfig, 'agentSourceContext' | 'repositoryRoot'>,
+  config: Pick<ServerConfig, 'agentSourceContext' | 'repositoryRoot' | 'dashboardUrl'>,
 ): void {
   app.post('/mcp', async (request, reply) => {
     const header = request.headers.authorization ?? '';
@@ -40,6 +40,7 @@ export function registerMcpRoutes(
       projectIds: [auth.projectId],
       allowSourceContext: config.agentSourceContext,
       repositoryRoot: config.repositoryRoot,
+      dashboardUrl: config.dashboardUrl,
     });
     // sessionIdGenerator: undefined 即无状态模式；enableJsonResponse 让一问一答直接返回 JSON 而不是开 SSE 流。
     const transport = new StreamableHTTPServerTransport({

@@ -233,7 +233,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 295 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 301 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -300,8 +300,9 @@ flowchart LR
 [ADR 0007](docs/decisions/0007-mcp-server.md)、
 [ADR 0008](docs/decisions/0008-code-and-change-context.md)、
 [ADR 0009](docs/decisions/0009-evaluation-reliability.md)、
-[ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md) 与
-[ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)、
+[ADR 0011](docs/decisions/0011-alert-triggered-investigations.md) 与
+[ADR 0012](docs/decisions/0012-fix-brief.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -333,6 +334,8 @@ flowchart LR
   SSE 续传、取消、并发闸门、离线脚本引擎。
 - **MCP 服务器**：同一套工具注册表开放给 Claude Code、Cursor 等编码 Agent（Streamable HTTP + stdio），全部只读；
   项目级令牌只存哈希，工作台一键给出客户端配置。
+- **修复简报**：把完成的调查整理成交给编码 Agent 的 Markdown（工作台复制、REST、MCP 的 `get_fix_brief` 与 `fix_issue`），
+  生产文本按不可信数据隔离；TracePilot 本身不改代码。
 - **评测与质量**：12 个标注事故的诊断评测、单元/接口/E2E、真实浏览器送达回归、基准、体积预算。
 
 ## SDK 接入
@@ -416,8 +419,14 @@ claude mcp add tracepilot -- node /path/to/tracepilot/apps/server/dist/mcp.js --
 ```
 
 工具：`list_projects`、`list_issues`、`get_issue_overview`、`list_event_samples`、`get_event_detail`、`get_source_context`、
-`compare_releases`、`read_source_file`、`search_code`、`find_suspect_commits`、`get_latest_investigation`，全部只读
-（`readOnlyHint`）；另有提示词模板 `investigate_issue`。
+`compare_releases`、`read_source_file`、`search_code`、`find_suspect_commits`、`get_fix_brief`、`get_latest_investigation`，
+全部只读（`readOnlyHint`）；另有提示词模板 `investigate_issue` 和 `fix_issue`（在 Claude Code 里是
+`/mcp__tracepilot__fix_issue <issueId>`：从修复简报出发，先写复现失败的测试，再做最小修改）。
+
+**修复简报**：TracePilot 不改代码。调查完成后，报告下方的 **Hand off to a coding agent** 把它整理成交给编码 Agent 的
+Markdown——根因与候选、核验过的证据、调查读过的代码位置、嫌疑提交、还缺什么、怎么动手。简报会交给有写权限的 Agent，
+所以来自生产的文字全部放进代码块（围栏比内容里的反引号更长，关不掉），并声明那是数据、不是指令；见
+[ADR 0012](docs/decisions/0012-fix-brief.md)。
 实现见 [server.md](docs/server.md#1015-mcp把同一套工具开放给编码-agent)，决策见 [ADR 0007](docs/decisions/0007-mcp-server.md)。
 
 ### 告警：新 Issue、回归、恶化

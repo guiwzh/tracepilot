@@ -18,6 +18,7 @@ import type { InvestigationReport } from '@trace-pilot/shared';
 import { ErrorState, LoadingState } from '../../components/States';
 import { api } from '../../services/api';
 import { formatNumber } from '../../utils/format';
+import { FixBriefPanel } from './FixBriefPanel';
 import type { InvestigationViewState, StepView, ToolCallView } from './reducer';
 import { useInvestigationStream, type StreamConnection } from './useInvestigationStream';
 
@@ -31,6 +32,9 @@ const TOOL_LABELS: Record<string, string> = {
   get_event_detail: 'Event detail',
   get_source_context: 'Source context',
   compare_releases: 'Release comparison',
+  read_source_file: 'Source file',
+  search_code: 'Code search',
+  find_suspect_commits: 'Suspect commits',
 };
 
 function prettyOutput(output: string): string {
@@ -514,6 +518,9 @@ export function InvestigationPanel({ issueId }: { issueId: string }) {
         </aside>
       )}
       {state.report && <ReportView report={state.report} onJump={jumpToTool} />}
+      {state.report && state.status === 'completed' && runId && (
+        <FixBriefPanel runId={runId} issueId={issueId} />
+      )}
       <div ref={endRef} />
     </div>
   );

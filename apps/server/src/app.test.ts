@@ -1451,3 +1451,64 @@ describe('issue lifecycle and alerts', () => {
     }
   });
 });
+
+describe('fix brief', () => {
+  it('turns a completed investigation into a brief, and refuses unfinished ones', async () => {
+    expect((await send(event('brief-1', '30000001'))).statusCode).toBe(202);
+    const [issue] = await listIssues();
+    expect(
+      (await app.inject({ method: 'GET', url: `/api/v1/issues/${issue!.id}/fix-brief` })).json(),
+    ).toMatchObject({ error: 'NO_COMPLETED_INVESTIGATION' });
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/v1/investigations/nope/fix-brief' }))
+        .statusCode,
+    ).toBe(404);
+
+    const started = await app.inject({
+      method: 'POST',
+      url: `/api/v1/issues/${issue!.id}/investigations`,
+    });
+    const runId = (started.json() as { id: string }).id;
+    await expect
+      .poll(
+        async () =>
+          (await app.inject({ method: 'GET', url: `/api/v1/investigations/${runId}` })).json()
+            .status,
+        { timeout: 10_000 },
+      )
+      .toBe('completed');
+
+    const byRun = await app.inject({
+      method: 'GET',
+      url: `/api/v1/investigations/${runId}/fix-brief`,
+    });
+    expect(byRun.statusCode).toBe(200);
+    expect(byRun.json()).toMatchObject({
+      runId,
+      issueId: issue!.id,
+      engine: 'local',
+      issue: { url: `http://localhost:4173/projects/demo-project/issues/${issue!.id}` },
+      markdown: expect.stringContaining('## How to proceed'),
+    });
+    const byIssue = await app.inject({
+      method: 'GET',
+      url: `/api/v1/issues/${issue!.id}/fix-brief`,
+    });
+    expect(byIssue.json().runId).toBe(runId);
+
+    // 没有完成的调查（这里直接写一条失败的运行记录）没有报告可以写简报。
+    const sqlite = new Database(join(directory, 'test.db'));
+    sqlite
+      .prepare(
+        `INSERT INTO investigation_runs (id, issue_id, status, engine, model, started_at, error)
+         VALUES ('failed-run', ?, 'failed', 'local', 'local', ?, 'STEP_LIMIT')`,
+      )
+      .run(issue!.id, Date.now());
+    sqlite.close();
+    expect(
+      (
+        await app.inject({ method: 'GET', url: '/api/v1/investigations/failed-run/fix-brief' })
+      ).json(),
+    ).toMatchObject({ error: 'INVESTIGATION_NOT_COMPLETED' });
+  });
+});

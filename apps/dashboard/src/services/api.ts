@@ -5,6 +5,7 @@ import type {
   ApiToken,
   CreateAlertRule,
   CreatedApiToken,
+  FixBrief,
   IngestStats,
   InvestigationRun,
   IssueActivity,
@@ -146,6 +147,7 @@ export const api = {
     request<{ items: InvestigationRun[] }>(`/api/v1/issues/${issueId}/investigations`),
   startInvestigation: (issueId: string) =>
     request<InvestigationRun>(`/api/v1/issues/${issueId}/investigations`, { method: 'POST' }),
+  fixBrief: (runId: string) => request<FixBrief>(`/api/v1/investigations/${runId}/fix-brief`),
   cancelInvestigation: (runId: string) =>
     request<{ status: string }>(`/api/v1/investigations/${runId}/cancel`, { method: 'POST' }),
   // EventSource 自己发请求，不经过 request()；首次连接用 after 指定起点，重连由浏览器带 Last-Event-ID。

@@ -29,6 +29,7 @@ const server = createMcpServer({
   projectIds: project ? [project] : 'all',
   allowSourceContext: config.agentSourceContext,
   repositoryRoot: config.repositoryRoot,
+  dashboardUrl: config.dashboardUrl,
 });
 await server.connect(new StdioServerTransport());
 process.stderr.write(`TracePilot MCP (stdio) reading ${config.databasePath}\n`);

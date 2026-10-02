@@ -1,36 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, KeyRound } from 'lucide-react';
+import { KeyRound } from 'lucide-react';
 import type { CreatedApiToken } from '@trace-pilot/shared';
+import { CopyButton } from '../../components/CopyButton';
 import { API_URL, api } from '../../services/api';
 import { absoluteTime, relativeTime } from '../../utils/format';
-
-/** 复制按钮：成功后短暂显示「Copied」。剪贴板不可用（非安全上下文）时提示手动选择。 */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  return (
-    <button
-      type="button"
-      className="button button-quiet copy-button"
-      aria-label={`Copy ${label}`}
-      onClick={() => {
-        // 剪贴板接口只在安全上下文（https 或 localhost）里存在。
-        if (navigator.clipboard) {
-          navigator.clipboard.writeText(value).then(
-            () => setState('copied'),
-            () => setState('failed'),
-          );
-        } else {
-          setState('failed');
-        }
-        window.setTimeout(() => setState('idle'), 1_600);
-      }}
-    >
-      {state === 'copied' ? <Check size={13} /> : <Copy size={13} />}
-      {state === 'copied' ? 'Copied' : state === 'failed' ? 'Select and copy' : 'Copy'}
-    </button>
-  );
-}
 
 /** 刚创建的令牌：明文只显示这一次，连同两种客户端的配置写法。 */
 function NewToken({ created, onDone }: { created: CreatedApiToken; onDone: () => void }) {

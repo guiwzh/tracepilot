@@ -167,7 +167,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   registerIssueRoutes(app, database);
   registerSourceMapRoutes(app, database, options.config);
   registerDiagnosisRoutes(app, database, options.config);
-  registerInvestigationRoutes(app, investigations, investigationStore);
+  registerInvestigationRoutes(
+    app,
+    investigations,
+    investigationStore,
+    database,
+    options.config.dashboardUrl,
+  );
 
   // 任何路由里抛出、没有被自己处理的错误都会落到这里（包括代码 bug）。
   app.setErrorHandler((error, request, reply) => {

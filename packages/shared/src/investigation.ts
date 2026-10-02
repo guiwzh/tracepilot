@@ -141,3 +141,52 @@ export const TERMINAL_INVESTIGATION_EVENTS = [
 export function isTerminalInvestigationEvent(event: InvestigationEvent): boolean {
   return (TERMINAL_INVESTIGATION_EVENTS as readonly string[]).includes(event.type);
 }
+
+/**
+ * 修复简报：把一次已完成的调查整理成交给编码 Agent（Claude Code、Cursor 等）的输入。
+ * TracePilot 自己不改代码，只把「哪里坏了、证据是什么、该看哪几行、哪个提交可疑」交出去。
+ */
+export interface FixBrief {
+  issueId: string;
+  runId: string;
+  generatedAt: number;
+  issue: {
+    title: string;
+    level: string;
+    events: number;
+    users: number;
+    firstSeenAt: number;
+    lastSeenAt: number;
+    /** 出过这个问题的版本，及其提交（构建插件记录的）。 */
+    releases: Array<{ version: string; commitSha: string | null }>;
+    url: string;
+  };
+  rootCause: { cause: string; confidence: number } | null;
+  otherCauses: Array<{ cause: string; confidence: number }>;
+  evidence: Array<{ source: string; description: string; quote: string; verified: boolean }>;
+  /** 调查中读过的代码位置；被报告引用的排在前面。 */
+  codeLocations: Array<{
+    path: string;
+    line: number;
+    column: number | null;
+    function: string | null;
+    release: string | null;
+    snippet: string | null;
+    cited: boolean;
+  }>;
+  suspectCommit: {
+    sha: string;
+    subject: string;
+    author: string;
+    date: string;
+    /** 出错那一行最后一次被改，恰好在问题首次出现的版本范围里。 */
+    inReleaseRange: boolean;
+  } | null;
+  suggestions: string[];
+  missingInformation: string[];
+  engine: InvestigationRun['engine'];
+  model: string;
+  allVerified: boolean;
+  /** 整份简报的 Markdown，直接粘贴给编码 Agent。 */
+  markdown: string;
+}

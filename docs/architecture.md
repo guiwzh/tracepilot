@@ -19,6 +19,7 @@ flowchart LR
   Agent -- 事件日志 + SSE --> Dashboard
   Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
   MCP <--> Coder[编码 Agent<br/>Claude Code / Cursor]
+  Agent -- 修复简报 --> Coder
   Ingest -- 新建 · 回归 · 恶化 --> Outbox[(活动记录<br/>告警发件箱)]
   Outbox --> Alerts[告警分发<br/>去重 · 静默 · 重试]
   Alerts --> Chat[Webhook / Slack / 飞书 / 钉钉]
@@ -27,7 +28,9 @@ flowchart LR
 排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)，实现见
 [server.md](server.md#10-排障-agent)。同一套只读工具经 MCP 开放给编码 Agent，见
 [ADR 0007](decisions/0007-mcp-server.md)；按版本读代码、找嫌疑提交见 [ADR 0008](decisions/0008-code-and-change-context.md)。
-Issue 的回归、恶化与告警见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)。
+Issue 的回归、恶化与告警见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)，告警顺带调查见
+[ADR 0011](decisions/0011-alert-triggered-investigations.md)；TracePilot 不改代码，调查整理成修复简报交给编码 Agent，见
+[ADR 0012](decisions/0012-fix-brief.md)。
 
 ## 工作区边界
 
