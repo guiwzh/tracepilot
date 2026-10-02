@@ -287,6 +287,17 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    // 事件所属的 trace（W3C Trace Context，SDK 给发往后端的请求加了 traceparent）。
+    // 部分索引只收有 trace id 的行：没开启传播的事件和性能样本都没有，不占索引空间。
+    description: 'events.trace_id',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE events ADD COLUMN trace_id TEXT;
+        CREATE INDEX events_trace ON events(trace_id) WHERE trace_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 /** 把数据库升级到最新结构。数据库比这份代码还新时拒绝启动：旧代码不知道新结构的含义，写入可能破坏它。 */

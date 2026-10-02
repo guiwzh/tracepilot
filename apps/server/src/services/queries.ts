@@ -1,5 +1,6 @@
 import {
   stripUrlQuery,
+  TRACE_ID_PATTERN,
   WEB_VITAL_THRESHOLDS,
   type Breadcrumb,
   type Issue,
@@ -68,6 +69,7 @@ function mapEvent(row: Row): StoredEvent {
     originalStack: row.original_stack ? String(row.original_stack) : null,
     pageUrl: String(row.page_url),
     userId: row.user_id ? String(row.user_id) : null,
+    traceId: row.trace_id ? String(row.trace_id) : null,
     context: parseJson<StoredEvent['context']>(String(row.context_json), {
       page: { url: String(row.page_url) },
       device: { userAgent: 'unknown' },
@@ -185,8 +187,19 @@ export function listIssues(
     params.push(`%${filters.route}%`);
   }
   if (filters.search) {
-    conditions.push('(i.title LIKE ? OR i.fingerprint LIKE ?)');
-    params.push(`%${filters.search}%`, `%${filters.search}%`);
+    const traceId = filters.search.trim().toLowerCase();
+    if (TRACE_ID_PATTERN.test(traceId)) {
+      // 像 trace id 的搜索词还按 trace 找：后端拿着日志里的 trace id，找这次页面浏览里出的前端问题。
+      // 子查询按 events_trace 部分索引定位事件。
+      conditions.push(
+        `(i.title LIKE ? OR i.fingerprint LIKE ?
+          OR EXISTS (SELECT 1 FROM events et WHERE et.trace_id = ? AND et.issue_id = i.id))`,
+      );
+      params.push(`%${filters.search}%`, `%${filters.search}%`, traceId);
+    } else {
+      conditions.push('(i.title LIKE ? OR i.fingerprint LIKE ?)');
+      params.push(`%${filters.search}%`, `%${filters.search}%`);
+    }
   }
   if (filters.from) {
     conditions.push('i.last_seen_at >= ?');

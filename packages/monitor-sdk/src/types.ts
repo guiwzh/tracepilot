@@ -61,6 +61,14 @@ export interface MonitorOptions {
    */
   detectBusinessError?: (response: ApiResponseInfo) => BusinessError | null | undefined;
   /**
+   * 给哪些请求加 W3C traceparent 头，把前端事件和后端链路（OpenTelemetry、SkyWalking 等）连起来。
+   * 默认只有同源请求；[] 表示不加。配置之后以配置为准：字符串是 URL 前缀（'https://api.example.com'、
+   * '/api/'），正则测试完整的 URL（同源请求还测试路径）。
+   * 跨域的后端必须在 Access-Control-Allow-Headers 里放行 traceparent，否则浏览器的预检会让请求失败。
+   * 请求已经带了 traceparent（应用自己或另一个链路 SDK 加的）时不覆盖。
+   */
+  tracePropagationTargets?: Array<string | RegExp>;
+  /**
    * 记成面包屑的控制台级别，默认 ['warn', 'error']；false 表示不包装 console。
    * 只记面包屑、不单独成为事件：它们是之后错误的上下文。
    */
@@ -138,6 +146,18 @@ export interface CaptureOptions {
    * 最多 10 项，每项 1～200 个字符。
    */
   fingerprint?: string[];
+  /**
+   * 事件所属的 trace（W3C trace id，32 位小写十六进制），不合法时忽略。缺省时取当前页面浏览的 trace，
+   * 前提是这次浏览里已经有请求把它带给了后端。失败请求的事件传入请求自己带的那个：请求可能是上一个页面发出的。
+   */
+  traceId?: string;
+}
+
+/** 一个带 traceparent 的请求：trace id、这次请求的 span id 和要带的头。 */
+export interface RequestTrace {
+  traceId: string;
+  spanId: string;
+  traceparent: string;
 }
 
 /** addBreadcrumb 的入参：id 由 SDK 生成，时间缺省为当前时刻。 */
@@ -156,6 +176,12 @@ export interface PluginContext {
     options?: CaptureOptions,
   ): string | null;
   addBreadcrumb(breadcrumb: BreadcrumbInput): void;
+  /**
+   * 给一个要带 traceparent 的请求开一个 span（当前页面浏览的 trace、新的 span id）。调用即表示这个 trace
+   * 带给了后端，之后的事件会带上它的 trace id，所以只在真的要加这个头时调用；
+   * 哪些请求要加由调用方按 tracePropagationTargets 判断（core/trace.ts 的 shouldPropagate）。
+   */
+  startRequestSpan(): RequestTrace;
 }
 
 // 插件只关心 setup/teardown 生命周期，核心无需知道每种浏览器信号的实现细节。

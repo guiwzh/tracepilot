@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveOptions } from '../../src/core/options';
 import { ConsolePlugin } from '../../src/plugins/ConsolePlugin';
 import type { BreadcrumbInput, ConsoleLevel, PluginContext } from '../../src/types';
+import { TraceContext } from '../../src/core/trace';
 
 const realConsole = { log: console.log, warn: console.warn, error: console.error };
 let printed: Record<'log' | 'warn' | 'error', ReturnType<typeof vi.fn>>;
@@ -19,6 +20,7 @@ function install(consoleBreadcrumbs?: ConsoleLevel[] | false) {
     }),
     captureEvent: () => null,
     addBreadcrumb: (breadcrumb) => void breadcrumbs.push(breadcrumb),
+    startRequestSpan: () => new TraceContext().startRequestSpan(),
   };
   plugin = new ConsolePlugin();
   plugin.setup(context);

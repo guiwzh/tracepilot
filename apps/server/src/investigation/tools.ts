@@ -120,7 +120,11 @@ function requestResult(data: Record<string, unknown>): string {
   return String(data.status ?? '?');
 }
 
-function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
+/**
+ * 一条面包屑的一行描述。withTrace 时请求后面附上它在后端链路里的位置（SDK 加的 traceparent）：
+ * 只给失败请求附，时间线里每行都带 48 个字符的 id 太占篇幅。
+ */
+function describeBreadcrumb(item: Breadcrumb, eventTime: number, withTrace = false): string {
   const offset = seconds(item.timestamp - eventTime);
   if (item.type === 'network' && item.data) {
     const duration = Number(item.data.duration);
@@ -128,7 +132,11 @@ function describeBreadcrumb(item: Breadcrumb, eventTime: number): string {
       item.data.businessCode === undefined
         ? ''
         : ` business error ${String(item.data.businessCode)}${item.data.businessMessage ? `: ${String(item.data.businessMessage)}` : ''}`;
-    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${requestResult(item.data)}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}`;
+    const trace =
+      withTrace && typeof item.data.traceId === 'string'
+        ? ` [trace ${item.data.traceId}${typeof item.data.spanId === 'string' ? ` span ${item.data.spanId}` : ''}]`
+        : '';
+    return `${offset} network ${String(item.data.method ?? 'GET')} ${String(item.data.url ?? item.message)} → ${requestResult(item.data)}${business}${Number.isFinite(duration) ? ` (${Math.round(duration)} ms)` : ''}${trace}`;
   }
   const count = Number(item.data?.count) > 1 ? ` (×${String(item.data?.count)})` : '';
   return `${offset} ${item.type} ${item.message}${count}`;
@@ -240,7 +248,9 @@ const getEventDetail = defineTool({
       timeline: event.breadcrumbs
         .slice(-15)
         .map((item) => describeBreadcrumb(item, event.createdAt)),
-      failedRequests: failed.map((item) => describeBreadcrumb(item, event.createdAt)),
+      failedRequests: failed.map((item) => describeBreadcrumb(item, event.createdAt, true)),
+      // 这次页面浏览的 trace：后端在链路系统里按它记下了这个页面发出的请求。调查读不到链路系统。
+      traceId: event.traceId ?? null,
       // SDK 在事件超限时会裁剪证据，调查要知道自己看到的并不完整。
       captureNotes: [
         payload.trimmedBreadcrumbs

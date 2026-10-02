@@ -19,8 +19,8 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 9,777 字节；业务应用打包后实际多付出 15,491 字节，
-其中 `web-vitals`（归因版本）约 5,290 字节。
+体积（`pnpm measure:sdk`，gzip）：发布产物 10,593 字节；业务应用打包后实际多付出 16,331 字节，
+其中 `web-vitals`（归因版本）约 5,300 字节。
 
 ## 2. 代码结构
 
@@ -35,12 +35,13 @@ packages/monitor-sdk/
 │   │   ├── noise.ts              噪声过滤与去重签名
 │   │   ├── history.ts            watchHistory：包装 pushState / replaceState，得知 SPA 路由变化
 │   │   ├── debugIds.ts           读构建插件注入的 Debug ID 登记表，找出堆栈里各文件的 Debug ID
+│   │   ├── trace.ts              W3C Trace Context：页面浏览的 trace、传播范围的匹配、traceparent 的生成与解析
 │   │   └── helpers.ts            事件 id、页面与设备上下文、错误描述与 cause 链、会话采样、栈首帧
 │   ├── plugins/
 │   │   ├── ErrorPlugin.ts        window error：运行时异常
 │   │   ├── PromisePlugin.ts      unhandledrejection：未处理的 Promise 拒绝
 │   │   ├── ResourcePlugin.ts     捕获阶段的 error：图片、脚本、样式、媒体加载失败
-│   │   ├── NetworkPlugin.ts      包装 fetch 与 XHR：请求面包屑与失败请求事件
+│   │   ├── NetworkPlugin.ts      包装 fetch 与 XHR：请求面包屑、失败请求事件、traceparent
 │   │   ├── BehaviorPlugin.ts     点击与路由面包屑
 │   │   ├── PerformancePlugin.ts  Web Vitals（官方 web-vitals 库）
 │   │   ├── WhiteScreenPlugin.ts  白屏检测：加载或切换路由后页面持续空白
@@ -129,6 +130,7 @@ monitor.start();
 | `ignoreErrors`             |  否  | `[]`                | —                                     | 额外忽略的错误：字符串按「消息包含」，正则按消息测试      |
 | `failedRequestStatusCodes` |  否  | `[[500, 599]]`      | 状态码或 `[起, 止]` 区间              | 哪些状态码算请求失败；默认只有 5xx，见 10.5               |
 | `detectBusinessError`      |  否  | —                   | —                                     | 判定 2xx 的 JSON 响应是否业务失败，见 10.5                |
+| `tracePropagationTargets`  |  否  | 同源请求            | 字符串（URL 前缀）或正则的数组        | 给哪些请求加 W3C `traceparent`；`[]` 关闭，见 10.5        |
 | `consoleBreadcrumbs`       |  否  | `['warn', 'error']` | 级别数组或 `false`                    | 哪些控制台级别记成面包屑；`false` 不包装 console，见 10.9 |
 | `whiteScreen`              |  否  | 开启                | 对象或 `false`                        | 白屏检测的容器、骨架屏选择器、间隔与次数，见 10.8         |
 | `user`                     |  否  | —                   | —                                     | `{ id?, anonymousId? }`，之后可用 `setUser` 修改          |
@@ -563,8 +565,10 @@ interface MonitorPlugin {
 
 interface PluginContext {
   readonly options: Readonly<ResolvedMonitorOptions>;
-  captureEvent(eventType, payload, options?: { page? }): string | null;
+  captureEvent(eventType, payload, options?: { page?; fingerprint?; traceId? }): string | null;
   addBreadcrumb(breadcrumb): void;
+  // 给一个要带 traceparent 的请求开一个 span：当前页面浏览的 trace、新的 span id（见 10.5）
+  startRequestSpan(): { traceId; spanId; traceparent };
 }
 ```
 
@@ -584,7 +588,7 @@ interface PluginContext {
 | ErrorPlugin       | `window` 的 `error`（冒泡阶段）                                                                            | `error` 事件                   |
 | PromisePlugin     | `window` 的 `unhandledrejection`                                                                           | `error` 事件                   |
 | ResourcePlugin    | `window` 的 `error`（捕获阶段）                                                                            | `resource` 事件                |
-| NetworkPlugin     | 包装 `window.fetch`、`XMLHttpRequest.prototype.open/send`                                                  | 请求面包屑；失败的请求另成事件 |
+| NetworkPlugin     | 包装 `window.fetch`、`XMLHttpRequest.prototype.open/send/setRequestHeader`                                 | 请求面包屑；失败的请求另成事件 |
 | BehaviorPlugin    | `document` 的 `click`（捕获阶段）、包装 `history.pushState/replaceState`、`popstate`                       | 点击与路由面包屑               |
 | PerformancePlugin | `web-vitals` 的 `onLCP`、`onCLS`、`onINP`、`onFCP`、`onTTFB`                                               | `performance` 事件             |
 | WhiteScreenPlugin | `load`、包装 `history.pushState/replaceState`、`popstate`、`visibilitychange`、`document.elementFromPoint` | 白屏的 `error` 事件            |
@@ -683,11 +687,32 @@ createMonitor({
   按上面的规则有没有判为失败，所以一个默认配置下的 404 是 `success: true`；被取消的请求也是 `false`，
   但另带 `aborted: true`，只记面包屑。
 
+**链路上下文（W3C Trace Context）**：给发往自家后端的请求加上 `traceparent: 00-<trace id>-<span id>-01`，
+后端的 OpenTelemetry、SkyWalking 等接着这条链路往下记；前端事件带上同一个 trace id，工作台就能从前端的 Issue
+跳到后端那次请求的链路，后端拿着日志里的 trace id 也能搜到前端的 Issue。实现在 `core/trace.ts`，决策见
+[ADR 0013](decisions/0013-trace-context-propagation.md)。
+
+- **范围（`tracePropagationTargets`）**：默认只有同源请求。跨域请求带自定义头会先发一次 CORS 预检，对方没在
+  `Access-Control-Allow-Headers` 里放行 `traceparent` 时请求直接失败，trace id 也不该发给第三方。
+  配置之后以配置为准：字符串是 URL 前缀，按页面地址解析后比较（`'https://api.example.com'` 是这个源下的全部请求，
+  `'/api/'` 是同源的 `/api/` 下；规范化后的前缀不会误中 `api.example.com.evil.net`）；正则测试完整的 URL，
+  同源请求还测试路径，所以 `/^\/api\//` 也有效；`[]` 关闭，连 `setRequestHeader` 也不包装。只有 http(s) 请求会带。
+- **一次页面浏览一个 trace**：页面（去掉查询参数的地址，hash 路由算在内）变了就换新的，在用到时才比较，不必再包装
+  一次 `history`。每个请求一个新的 span id，它是后端服务端 span 的 parent；SDK 不上报自己的 span，链路系统里这个
+  parent 显示为缺失，trace 照常可看。采样标志固定为 `01`：按父 span 采样的后端会保留这些 trace。
+- **不覆盖已有的头**：请求已经带了 `traceparent`（应用自己或 OpenTelemetry Web 加的）就不加，记下它带的 id。
+  fetch 复制一份请求头、换一个新的 init 交给原生 fetch，不改调用方传入的对象（给了 `init.headers` 时它整个取代
+  `Request` 自己的头，和 fetch 的语义一致）；XHR 读不到已经设置的请求头，靠包装 `setRequestHeader` 得知应用加过没有
+  ——同一个头设置两次，值会被拼成 `a, b`。`no-cors` 请求不加：浏览器会悄悄丢掉不在安全列表里的头。
+- **记录**：请求记录（面包屑的 `data`、失败请求的事件 payload）带 `traceId`、`spanId`。事件本身的 `traceId` 由核心
+  填写：失败请求的事件是请求自己的 trace（请求可能是上一个页面发出的）；其他事件是当前页面浏览的 trace，前提是这次
+  浏览里已经有请求把它带给了后端——否则后端从没见过这个 trace，工作台给出的链接打开是空的。指标样本不带。
+
 **不采集自己**：地址里包含 `dsn` 的请求直接透传。正常情况下 SDK 的上报根本不经过包装（传输层保存的是原生 fetch），
 这道判断兜住的是另一个 SDK 实例在本插件之后创建、因而保存到了包装版本的情况。不用自定义请求头做标记：自定义头会
 让每次跨域上报多一次 CORS 预检。
 
-**teardown**：只在全局引用仍是自己的包装时还原 `fetch`、`open`、`send`；否则留在链上只做透传。
+**teardown**：只在全局引用仍是自己的包装时还原 `fetch`、`open`、`send`、`setRequestHeader`；否则留在链上只做透传。
 
 ### 10.6 BehaviorPlugin：点击与路由
 
@@ -932,39 +957,40 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
-| 发布产物 `dist/index.js` | 30,478 |  9,777 | 10,800 |
-| 业务应用实际接入成本     | 46,575 | 15,491 | 17,300 |
-| 其中 `web-vitals`        |      — |  5,290 |      — |
+| 发布产物 `dist/index.js` | 33,134 | 10,593 | 12,200 |
+| 业务应用实际接入成本     | 49,225 | 16,331 | 18,800 |
+| 其中 `web-vitals`        |      — |  5,300 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
-白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
+白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB、链路上下文约 0.8 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，
 只体现在接入成本里。各次改动的体积代价见[性能报告](reports/performance.md)。
 
 ## 13. 测试与质量保障
 
-**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，94 项）。`test/setup.ts` 为每个用例把
+**单元测试**（`packages/monitor-sdk/test/`，Vitest + happy-dom，101 项）。`test/setup.ts` 为每个用例把
 `window.fetch` 和 `navigator.sendBeacon` 换成不出网的替身，用直接赋值而不是 `vi.spyOn`：后者会把属性换成
 getter / setter，包装全局 API 的插件在测试里就和在浏览器里不一样了。
 
-| 测试文件                            | 覆盖                                                                                                                                                                                                              |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/debugIds.test.ts`             | 没用插件时不带字段、按文件去重并去掉查询参数（V8 与 Firefox 格式的登记）、懒加载的 chunk 晚登记也能找到、忽略无法使用的登记项                                                                                     |
-| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、自定义指纹、`flush()` 的投递状况、配置规范化 |
-| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                 |
-| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                      |
-| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                              |
-| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装  |
-| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                    |
-| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                  |
-| `plugins/WhiteScreenPlugin.test.ts` | 连续空白才上报、中途出现内容不报、骨架屏算空白、路由变化后重新检测且每个路由只报一次、后台暂停回前台再查、零尺寸视口、非法配置用默认值、teardown 停止检测并还原 `history`                                         |
-| `plugins/ConsolePlugin.test.ts`     | 默认只记 warn 与 error 且照常输出、对象只展开一层并遮蔽敏感键、参数抛错不影响业务调用、可配置级别与关闭、只还原自己的包装                                                                                         |
-| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                           |
+| 测试文件                            | 覆盖                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/debugIds.test.ts`             | 没用插件时不带字段、按文件去重并去掉查询参数（V8 与 Firefox 格式的登记）、懒加载的 chunk 晚登记也能找到、忽略无法使用的登记项                                                                                                                                                                                                |
+| `core/MonitorCore.test.ts`          | 生命周期、三个标志、会话采样与性能采样、忽略与去重（含窗口语义）、脱敏不破坏堆栈行列号、保留 hash 路由、cause 链（含循环引用、读取 cause 时抛错）、控制台面包屑合并、自定义指纹、事件的 trace id（有请求带给后端之后才写、换页面重新开始、显式给出的优先）、`flush()` 的投递状况、配置规范化                                 |
+| `transport/Transport.test.ts`       | 重试、不带 keepalive、拒收不堵队、裁剪、退出时按配额切块交给 beacon、服务端故障或离线时退出不丢队列、退避与 `Retry-After`、队列上限、UTF-8 字节数                                                                                                                                                                            |
+| `plugins/ErrorPlugin.test.ts`       | 用抛出的错误描述、没有错误对象时的退路、任意类型的 rejection                                                                                                                                                                                                                                                                 |
+| `plugins/ResourcePlugin.test.ts`    | 捕获阶段取到资源地址                                                                                                                                                                                                                                                                                                         |
+| `plugins/NetworkPlugin.test.ts`     | 成功只记面包屑、失败成为事件、默认 4xx 只记面包屑而可配置、业务码（fetch 读克隆、XHR 同步读、只读 2xx JSON、判定函数抛错不影响页面）、网络错误原样抛出、取消与 opaque 不算失败、跳过自己的上报、只还原自己的包装、`traceparent`（默认同源、URL 前缀与正则、关闭、不覆盖已有的头、no-cors 不加、XHR、每次页面浏览一个 trace） |
+| `plugins/BehaviorPlugin.test.ts`    | 点击描述的取文字规则、`data-tp-mask`、勾选框与下拉框、文字上限、只记路由变化、只还原自己的包装                                                                                                                                                                                                                               |
+| `plugins/PerformancePlugin.test.ts` | 上报时机、同 id 再报、整页只注册一次、晚到实例补收、与退出发送的先后、指标发生时的页面、精简归因                                                                                                                                                                                                                             |
+| `plugins/WhiteScreenPlugin.test.ts` | 连续空白才上报、中途出现内容不报、骨架屏算空白、路由变化后重新检测且每个路由只报一次、后台暂停回前台再查、零尺寸视口、非法配置用默认值、teardown 停止检测并还原 `history`                                                                                                                                                    |
+| `plugins/ConsolePlugin.test.ts`     | 默认只记 warn 与 error 且照常输出、对象只展开一层并遮蔽敏感键、参数抛错不影响业务调用、可配置级别与关闭、只还原自己的包装                                                                                                                                                                                                    |
+| `integrations/react.test.ts`        | 组件栈上报、保留 React 默认的控制台输出                                                                                                                                                                                                                                                                                      |
 
 **真实浏览器**（Playwright + Chromium）：
 
 - `tests/e2e/sdk-delivery.spec.ts`：用 SDK 默认配置和真实的跨域服务端，验证 50 次请求之后连续 10 个带完整面包屑的
   错误全部送达，以及页面退出时仍在队列里的事件经 beacon 送达。这两条路径都曾在单元测试全绿的情况下静默丢数据。
-- `tests/e2e/playground.spec.ts`：逐个点击演练场的 13 个场景，核对服务端最终收到的内容。
+- `tests/e2e/playground.spec.ts`：逐个点击演练场的 13 个场景，核对服务端最终收到的内容；同源请求带上的
+  `traceparent` 与事件记下的 trace、span 一致，按 trace id 搜得到这个 Issue。
 
 **运行时开销与泄漏**（`pnpm measure:sdk-runtime`，真实 Chromium）：`createMonitor()` + `start()` 的 P50 约
 60 µs，单次 `captureException` 的 P50 约 30 µs（数量级绊线分别是 2,000 µs 和 250 µs）；500 个错误、10 种签名的
@@ -987,6 +1013,12 @@ getter / setter，包装全局 API 的插件在测试里就和在浏览器里不
   业务失败的面包屑和事件比 HTTP 层面的那条晚一点出现。
 - **请求只覆盖 fetch 和 XHR**：WebSocket、EventSource 和业务自己调用的 `sendBeacon` 不在其中；不采集请求和响应的
   body 与 headers。
+- **链路上下文只做传播**：SDK 不上报自己的 span，前端这一侧的耗时（DNS、排队、渲染）不在后端的 trace 里；
+  `traceparent` 的 parent 在链路系统里显示为缺失。和 OpenTelemetry Web 同时使用时，谁的包装在外层谁的头生效：
+  OpenTelemetry 在外层时 SDK 记下它的 id；在内层时它会覆盖 SDK 加的头，SDK 记下的 id 就对不上了，这时把
+  `tracePropagationTargets` 设为 `[]`。
+- **跨域后端要放行 `traceparent`**：配置了跨域目标，对方却没在 `Access-Control-Allow-Headers` 里放行时，预检失败，
+  业务请求跟着失败——所以默认只传播同源请求。
 - **白屏检测只看采样点上最上层的元素**：应用渲染了一个铺满视口、但没有内容的外层容器（例如只有背景色的布局
   `div`）时，要把它加进 `containers`，否则检测不到；只空了半屏、或者被一个全屏的错误提示盖住，都不算白屏。
 - **白屏只在加载和切换路由之后检测**：页面显示过内容、之后才变空（例如没被错误边界接住的渲染错误卸载了整个

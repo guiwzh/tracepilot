@@ -61,6 +61,8 @@ export interface StoredEvent {
   originalStack?: string | null;
   pageUrl: string;
   userId?: string | null;
+  /** 事件所属的 trace（W3C trace id），见 MonitorEvent.traceId；没有时为 null。 */
+  traceId?: string | null;
   context: {
     page: MonitorEvent['page'];
     device: MonitorEvent['device'];

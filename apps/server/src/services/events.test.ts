@@ -5,6 +5,7 @@ import type { MonitorEvent } from '@trace-pilot/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase, ensureDemoProject, type TraceDatabase } from '../db/client';
 import { IngestError, ingestEnvelope } from './events';
+import { listIssueEvents, listIssues } from './queries';
 
 let directory: string;
 let database: TraceDatabase;
@@ -207,3 +208,46 @@ describe('business errors', () => {
     ]);
   });
 });
+
+describe('trace ids', () => {
+  const TRACE = '0af7651916cd43dd8448eb211c80319c';
+
+  it('stores the trace an event belongs to and finds its issues by that trace', async () => {
+    await ingestEnvelope(
+      database,
+      {
+        dsnKey: 'demo-dsn-key',
+        sentAt: RECEIVED_AT,
+        events: [
+          { ...errorAt('traced', RECEIVED_AT), traceId: TRACE },
+          errorAt('untraced', RECEIVED_AT),
+        ],
+      },
+      RECEIVED_AT,
+    );
+    const traceIds = database.sqlite.prepare('SELECT id, trace_id FROM events ORDER BY id').all();
+    expect(traceIds).toEqual([
+      { id: 'traced', trace_id: TRACE },
+      { id: 'untraced', trace_id: null },
+    ]);
+
+    const search = (value: string) =>
+      listIssues(database, 'demo-project', { page: 1, pageSize: 20, search: value }).items.map(
+        (issue) => issue.title,
+      );
+    // 后端日志里抄来的 trace id 可能是大写、带空格。
+    expect(search(` ${TRACE.toUpperCase()} `)).toEqual(['failure traced']);
+    expect(search('failure untraced')).toEqual(['failure untraced']);
+    // 32 位十六进制但不是任何事件的 trace：照常按标题和指纹找，什么也没有。
+    expect(search('ffffffffffffffffffffffffffffffff')).toEqual([]);
+    expect(listIssueEvents(database, issueOf('traced'), 1)[0]!.traceId).toBe(TRACE);
+  });
+});
+
+function issueOf(eventId: string): string {
+  return (
+    database.sqlite.prepare('SELECT issue_id FROM events WHERE id = ?').get(eventId) as {
+      issue_id: string;
+    }
+  ).issue_id;
+}

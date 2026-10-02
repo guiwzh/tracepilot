@@ -32,9 +32,11 @@ const artifactPath = resolve(repoRoot, 'packages/monitor-sdk/dist/index.js');
 // 指标的页面归属使产物 +0.7 KB（已扣除删掉 localStorage 保存事件省下的部分）。
 // 2026-09-30 当天再次设定：新增白屏检测（约 0.8 KB）、控制台面包屑（约 0.4 KB）与 cause 链，
 // 产物 +1.4 KB、接入 +1.4 KB gzip。
+// 2026-10-02 再次设定：W3C traceparent 传播（页面浏览的 trace、传播范围匹配、fetch 与 XHR 加头），
+// 产物 +0.8 KB、接入 +0.8 KB gzip，按实测值留约 15% 余量。
 const BUDGETS = {
-  artifactGzipBytes: 10_800,
-  consumerGzipBytes: 17_300,
+  artifactGzipBytes: 12_200,
+  consumerGzipBytes: 18_800,
   consumerZodIdentifiers: 0,
 };
 

@@ -26,6 +26,8 @@ export const DEFAULT_FINGERPRINT = '{{ default }}';
 export const DEBUG_ID_REGISTRY = '__TRACEPILOT_DEBUG_IDS__';
 /** Debug ID 的格式：小写 UUID，与 ECMA-426 提案和 Sentry 的约定一致。 */
 export const DEBUG_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** W3C Trace Context 的 trace id：32 位小写十六进制，不能全为 0。 */
+export const TRACE_ID_PATTERN = /^(?!0{32}$)[0-9a-f]{32}$/;
 /** 单次诊断的提示词版本，参与诊断缓存键；改动提示词时要递增，旧缓存才会失效。 */
 export const PROMPT_VERSION = 'diagnosis-evidence-v1';
 

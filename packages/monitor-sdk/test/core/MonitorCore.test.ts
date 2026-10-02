@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MonitorEvent } from '@trace-pilot/shared';
 import { createMonitor } from '../../src/index';
 import { ErrorPlugin } from '../../src/plugins/ErrorPlugin';
+import { NetworkPlugin } from '../../src/plugins/NetworkPlugin';
 import type { MonitorPlugin, PluginContext } from '../../src/types';
 import { MonitorCore } from '../../src/core/MonitorCore';
 
@@ -459,6 +460,48 @@ describe('MonitorCore', () => {
       { page: { url: 'https://shop.test/landing?token=secret', route: '/landing' } },
     );
     expect(events[0]!.page).toEqual({ url: 'https://shop.test/landing', route: '/landing' });
+    monitor.destroy();
+  });
+
+  it('puts the page view’s trace id on events once a request has carried it to a backend', async () => {
+    const { monitor, events } = capturing();
+    // 插件装上之后 window.fetch 是它的包装，先拿住底下的替身。
+    const fetchMock = vi.mocked(window.fetch);
+    monitor.use(new NetworkPlugin()).start();
+
+    // 这次页面浏览里还没有请求带过 trace：后端没见过它，事件上不写。
+    monitor.captureException(new Error('render failed before any request'));
+    await window.fetch('/api/cart');
+    const traceId = new Headers(fetchMock.mock.calls[0]![1]!.headers)
+      .get('traceparent')!
+      .split('-')[1];
+    monitor.captureException(new Error('cart.summary is undefined'));
+    // 指标样本不属于任何 Issue，不带。
+    monitor.captureEvent('performance', { metric: 'LCP', value: 2_200 });
+    // 显式给出的 trace id 优先，不合法的忽略。
+    monitor.captureEvent(
+      'network',
+      { method: 'GET', url: '/api/a', status: 503, success: false },
+      { traceId: '0af7651916cd43dd8448eb211c80319c' },
+    );
+    monitor.captureEvent(
+      'network',
+      { method: 'GET', url: '/api/b', status: 503, success: false },
+      { traceId: 'not-a-trace-id' },
+    );
+    // 换了页面：新的 trace，还没有请求带过它。
+    history.pushState({}, '', '/orders');
+    monitor.captureException(new Error('orders failed'));
+    history.replaceState({}, '', '/');
+
+    expect(events.map((event) => event.traceId)).toEqual([
+      undefined,
+      traceId,
+      undefined,
+      '0af7651916cd43dd8448eb211c80319c',
+      traceId,
+      undefined,
+    ]);
     monitor.destroy();
   });
 

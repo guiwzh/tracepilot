@@ -218,7 +218,7 @@ export function AppShell() {
                   aria-label="Search issues"
                   value={searchValue}
                   onChange={(event) => setSearchValue(event.target.value)}
-                  placeholder="Search issue titles or fingerprints"
+                  placeholder="Search titles, fingerprints or trace ids"
                   autoComplete="off"
                 />
                 {searchValue ? (

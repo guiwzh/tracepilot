@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveOptions } from '../../src/core/options';
 import { WhiteScreenPlugin } from '../../src/plugins/WhiteScreenPlugin';
 import type { CapturePayload, PluginContext, WhiteScreenOptions } from '../../src/types';
+import { TraceContext } from '../../src/core/trace';
 
 /** 视口里最上层的元素由测试决定：返回 body 表示这个点是空的。 */
 let topElement: () => Element | null = () => document.body;
@@ -24,6 +25,7 @@ function install(whiteScreen: WhiteScreenOptions | false = { interval: 100, chec
       return 'event-id';
     },
     addBreadcrumb: () => {},
+    startRequestSpan: () => new TraceContext().startRequestSpan(),
   };
   plugin = new WhiteScreenPlugin();
   plugin.setup(context);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BreadcrumbInput, PluginContext, ResolvedMonitorOptions } from '../../src/types';
 import { BehaviorPlugin, elementLabel } from '../../src/plugins/BehaviorPlugin';
+import { TraceContext } from '../../src/core/trace';
 
 function mount(html: string): HTMLElement {
   const host = document.createElement('div');
@@ -17,6 +18,7 @@ function install() {
     options: {} as ResolvedMonitorOptions,
     captureEvent: () => null,
     addBreadcrumb: (breadcrumb) => void breadcrumbs.push(breadcrumb),
+    startRequestSpan: () => new TraceContext().startRequestSpan(),
   };
   plugin = new BehaviorPlugin();
   plugin.setup(context);

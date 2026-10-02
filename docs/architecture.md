@@ -5,6 +5,8 @@ TracePilot 将浏览器遥测数据转换为证据链，让开发者在请求诊
 ```mermaid
 flowchart LR
   Web[Web 应用] --> SDK[监控 SDK]
+  SDK -- traceparent --> Backend[业务后端<br/>OpenTelemetry 等]
+  Backend --> Tracing[(后端链路系统)]
   SDK --> Ingest[Fastify 接入 API<br/>过滤 · 限流]
   Ingest --> SQLite[(SQLite)]
   Build[Vite 构建插件] -- Debug ID + 私有 map --> Maps[私有 Source Map]
@@ -12,6 +14,7 @@ flowchart LR
   SQLite --> Symbolicator
   SQLite --> Query[Issue 与指标 API]
   Query --> Dashboard[React 调查工作台]
+  Dashboard -. 按 trace id 跳转 .-> Tracing
   SQLite --> Tools[只读工具]
   Repo[(被监控应用的 git 仓库<br/>按版本只读)] --> Tools
   Maps --> Tools
@@ -30,7 +33,8 @@ flowchart LR
 [ADR 0007](decisions/0007-mcp-server.md)；按版本读代码、找嫌疑提交见 [ADR 0008](decisions/0008-code-and-change-context.md)。
 Issue 的回归、恶化与告警见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)，告警顺带调查见
 [ADR 0011](decisions/0011-alert-triggered-investigations.md)；TracePilot 不改代码，调查整理成修复简报交给编码 Agent，见
-[ADR 0012](decisions/0012-fix-brief.md)。
+[ADR 0012](decisions/0012-fix-brief.md)。SDK 给自家后端的请求加 W3C `traceparent`，前端事件和后端链路共用一个 trace id，见
+[ADR 0013](decisions/0013-trace-context-propagation.md)。
 
 ## 工作区边界
 

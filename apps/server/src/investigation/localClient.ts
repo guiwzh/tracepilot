@@ -224,7 +224,17 @@ export function buildLocalReport(results: ToolOutput[]): SubmittedReport {
       source: 'issue',
     });
   }
-  missing.push('A correlated backend trace or request id for the failing session.');
+  // 失败请求带着后端链路的位置时点名它，否则只能泛泛地说缺后端的线索。
+  const traced = failed
+    .map((line) => /\[trace ([0-9a-f]{32})(?: span ([0-9a-f]{16}))?\]/.exec(line))
+    .find((match) => match !== null);
+  const traceId =
+    traced?.[1] ?? (typeof detail?.value.traceId === 'string' ? detail.value.traceId : null);
+  missing.push(
+    traceId
+      ? `The backend side of trace ${traceId}${traced?.[2] ? ` (span ${traced[2]})` : ''}: open it in the tracing system to see what the backend did.`
+      : 'A correlated backend trace or request id for the failing session.',
+  );
 
   // 只保留有证据支撑的原因，按置信度从高到低，最多 4 条。
   const ranked = causes

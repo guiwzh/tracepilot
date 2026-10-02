@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEBUG_ID_PATTERN } from './constants';
+import { DEBUG_ID_PATTERN, TRACE_ID_PATTERN } from './constants';
 
 /**
  * Zod Schema 是运行时契约：浏览器传来的 JSON 即使通过了 TypeScript 编译，
@@ -64,6 +64,11 @@ export const monitorEventSchema = z.object({
     )
     .max(50)
     .optional(),
+  /**
+   * 事件所属的 trace（W3C Trace Context）：SDK 给发往后端的请求加了 traceparent，后端链路记的是同一个 id。
+   * 工作台按它搜索 Issue、跳到链路系统。没有开启传播、或这次页面浏览里还没有请求带过它时没有这个字段。
+   */
+  traceId: z.string().regex(TRACE_ID_PATTERN).optional(),
 });
 
 export const envelopeSchema = z.object({

@@ -114,6 +114,38 @@ test('failed fetch and XHR requests are reported without their query strings', a
   expect(JSON.stringify(await latestEvent(request, payment))).not.toContain('demo-secret');
 });
 
+test('same-origin requests carry a W3C traceparent the issue can be found by', async ({
+  page,
+  request,
+}) => {
+  const project = await createProject(request);
+  await openLab(page, project);
+  // 演练场的故障接口和页面同源，在默认的传播范围之内；上报地址（4318 端口）跨域，不加。
+  const sent = page.waitForRequest((item) => item.url().includes('/__lab/payment'));
+  await trigger(page, 'fetch');
+  const traceparent = (await sent).headers()['traceparent'];
+  expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+  const [, traceId, spanId] = traceparent!.split('-');
+  await flush(page);
+
+  const payment = await waitForIssue(request, project, /^POST \/__lab\/payment → 503$/);
+  const event = (await latestEvent(request, payment)) as StoredEventView & { traceId?: string };
+  // 事件和失败请求记下的，就是后端收到的那个 trace 和 span。
+  expect(event.traceId).toBe(traceId);
+  expect(event.context.payload).toMatchObject({ traceId, spanId });
+  // 后端拿着日志里的 trace id，能搜到这次页面浏览里出的前端问题。
+  const found = await request.get(
+    `${API}/api/v1/projects/${project.id}/issues?search=${traceId!.toUpperCase()}`,
+  );
+  expect(((await found.json()) as { items: IssueSummary[] }).items.map((item) => item.id)).toEqual([
+    payment.id,
+  ]);
+  // 工作台的 Issue 详情显示这个 trace。
+  await page.goto(`/projects/${project.id}/issues/${payment.id}`);
+  await expect(page.getByLabel('Copy trace id')).toBeVisible();
+  await expect(page.locator('.issue-trace')).toContainText(`trace ${traceId!.slice(0, 8)}…`);
+});
+
 test('a 200 response whose business code means failure becomes its own issue', async ({
   page,
   request,

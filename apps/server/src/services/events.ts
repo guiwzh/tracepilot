@@ -428,8 +428,8 @@ export async function ingestEnvelope(
       database.sqlite
         .prepare(
           `INSERT INTO events (id, issue_id, release_id, type, message, stack, original_stack, page_url,
-             user_id, context_json, breadcrumbs_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             user_id, context_json, breadcrumbs_json, created_at, trace_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           rowId,
@@ -445,6 +445,7 @@ export async function ingestEnvelope(
           JSON.stringify(eventContext(event)),
           JSON.stringify(event.breadcrumbs),
           event.timestamp,
+          event.traceId ?? null,
         );
       if (issueId) {
         updateIssueCounters(database, issueId, firstSeenForUser);

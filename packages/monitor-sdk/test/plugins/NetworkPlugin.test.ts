@@ -6,14 +6,16 @@ import type {
   PluginContext,
 } from '../../src/types';
 import { resolveOptions } from '../../src/core/options';
+import { TraceContext } from '../../src/core/trace';
 import { NetworkPlugin } from '../../src/plugins/NetworkPlugin';
 
 const DSN = 'https://ingest.test/api/v1/envelopes';
 
-/** 记录插件交给核心的 breadcrumb 与事件；配置经过与核心相同的规范化。 */
+/** 记录插件交给核心的 breadcrumb 与事件；配置经过与核心相同的规范化。测试环境的页面在 http://localhost:3000/。 */
 function recordingContext(overrides: Partial<MonitorOptions> = {}) {
   const breadcrumbs: BreadcrumbInput[] = [];
-  const events: Array<{ type: string; payload: CapturePayload }> = [];
+  const events: Array<{ type: string; payload: CapturePayload; traceId?: string }> = [];
+  const trace = new TraceContext();
   const context: PluginContext = {
     options: resolveOptions({
       dsn: DSN,
@@ -22,13 +24,14 @@ function recordingContext(overrides: Partial<MonitorOptions> = {}) {
       environment: 'test',
       ...overrides,
     }),
-    captureEvent: (type, payload) => {
-      events.push({ type, payload });
+    captureEvent: (type, payload, options) => {
+      events.push({ type, payload, ...(options?.traceId ? { traceId: options.traceId } : {}) });
       return 'event-id';
     },
     addBreadcrumb: (breadcrumb) => void breadcrumbs.push(breadcrumb),
+    startRequestSpan: () => trace.startRequestSpan(),
   };
-  return { context, breadcrumbs, events };
+  return { context, breadcrumbs, events, trace };
 }
 
 /** 可以手动决定结果的 XHR 替身：插件包装的是它的 prototype。 */
@@ -36,9 +39,13 @@ class FakeXhr extends EventTarget {
   status = 0;
   responseType: XMLHttpRequestResponseType = '';
   responseText = '';
+  readonly requestHeaders: Array<[string, string]> = [];
   private contentType: string | null = null;
   open(_method: string, _url: string | URL): void {}
   send(_body?: unknown): void {}
+  setRequestHeader(name: string, value: string): void {
+    this.requestHeaders.push([name, value]);
+  }
   getResponseHeader(name: string): string | null {
     return name.toLowerCase() === 'content-type' ? this.contentType : null;
   }
@@ -302,5 +309,159 @@ describe('NetworkPlugin', () => {
     expect(theirs).toHaveBeenCalledTimes(1);
     expect(breadcrumbs).toEqual([]);
     window.fetch = original;
+  });
+});
+
+const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/;
+/** 应用自己（或另一个链路 SDK）加的 traceparent，取自 W3C 规范里的例子。 */
+const THEIRS = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+
+/** 底层 fetch 替身第 index 次收到的 traceparent 头；没有时为 null。 */
+function sentTraceparent(fetchMock: ReturnType<typeof vi.mocked<typeof fetch>>, index: number) {
+  const init = fetchMock.mock.calls[index]![1];
+  return new Headers(init?.headers).get('traceparent');
+}
+
+describe('NetworkPlugin trace propagation', () => {
+  it('adds traceparent to same-origin requests by default and records where they sit in the trace', async () => {
+    // 插件装上之后 window.fetch 是它的包装，先拿住底下的替身。
+    const fetchMock = vi.mocked(window.fetch);
+    fetchMock.mockResolvedValue(new Response(null, { status: 503 }));
+    const { breadcrumbs, events } = install();
+
+    await window.fetch('/api/pay', { method: 'POST', headers: { accept: 'application/json' } });
+    await window.fetch('https://api.test/pay');
+
+    const [, traceId, spanId] = TRACEPARENT.exec(sentTraceparent(fetchMock, 0)!)!;
+    // 应用自己的请求头照常带上。
+    expect(new Headers(fetchMock.mock.calls[0]![1]!.headers).get('accept')).toBe(
+      'application/json',
+    );
+    expect(breadcrumbs[0]!.data).toMatchObject({ traceId, spanId });
+    // 失败请求的事件带的是这个请求自己的 trace。
+    expect(events[0]).toMatchObject({ traceId, payload: { traceId, spanId } });
+    // 跨域的请求默认不加：对方没放行这个头时预检会让请求失败，trace id 也不该发给第三方。
+    expect(fetchMock.mock.calls[1]![1]).toBeUndefined();
+    expect(breadcrumbs[1]!.data).not.toHaveProperty('traceId');
+    expect(events[1]).not.toHaveProperty('traceId');
+  });
+
+  it('keeps one trace per page view and gives every request its own span', async () => {
+    const fetchMock = vi.mocked(window.fetch);
+    install();
+
+    await window.fetch('/api/cart');
+    // 只改查询参数不算换页面。
+    history.replaceState({}, '', '/?coupon=SPRING');
+    await window.fetch(new Request('/api/cart', { headers: { 'x-tenant': 'acme' } }));
+    history.pushState({}, '', '/orders');
+    await window.fetch('/api/orders');
+    history.replaceState({}, '', '/');
+
+    const [first, second, third] = [0, 1, 2].map((index) =>
+      TRACEPARENT.exec(sentTraceparent(fetchMock, index)!)!,
+    );
+    expect(second![1]).toBe(first![1]);
+    expect(second![2]).not.toBe(first![2]);
+    expect(third![1]).not.toBe(first![1]);
+    // Request 自己的头没有丢。
+    expect(new Headers(fetchMock.mock.calls[1]![1]!.headers).get('x-tenant')).toBe('acme');
+  });
+
+  it('leaves a traceparent the request already has and records that one', async () => {
+    const fetchMock = vi.mocked(window.fetch);
+    const { breadcrumbs } = install();
+
+    await window.fetch(
+      new Request('/api/pay', { method: 'POST', headers: { traceparent: THEIRS } }),
+    );
+    await window.fetch('/api/cart', { headers: [['TraceParent', THEIRS]] });
+
+    // 原样交给原生 fetch，不换 init。
+    expect(fetchMock.mock.calls.map(([, init]) => init)).toEqual([
+      undefined,
+      { headers: [['TraceParent', THEIRS]] },
+    ]);
+    expect(breadcrumbs.map((item) => item.data?.traceId)).toEqual([
+      '0af7651916cd43dd8448eb211c80319c',
+      '0af7651916cd43dd8448eb211c80319c',
+    ]);
+  });
+
+  it('follows tracePropagationTargets: URL prefixes, patterns, or nothing at all', async () => {
+    const fetchMock = vi.mocked(window.fetch);
+    install({ tracePropagationTargets: ['https://api.test', /^\/graphql$/] });
+
+    await window.fetch('https://api.test/cart');
+    // URL 前缀而不是子串：长得像的域名不算。
+    await window.fetch('https://api.test.evil.example/cart');
+    // 正则对同源请求也测试路径。
+    await window.fetch('/graphql');
+    // 配置之后以配置为准，同源但不在列表里的不加。
+    await window.fetch('/api/cart');
+    // no-cors 请求带不了这个头，浏览器会悄悄丢掉它。
+    await window.fetch('https://api.test/pixel', { mode: 'no-cors' });
+    expect([0, 1, 2, 3, 4].map((index) => sentTraceparent(fetchMock, index) !== null)).toEqual([
+      true,
+      false,
+      true,
+      false,
+      false,
+    ]);
+    plugin!.teardown();
+
+    fetchMock.mockClear();
+    const { breadcrumbs } = install({ tracePropagationTargets: [] });
+    await window.fetch('/api/cart');
+    expect(fetchMock.mock.calls[0]![1]).toBeUndefined();
+    expect(breadcrumbs[0]!.data).not.toHaveProperty('traceId');
+  });
+
+  it('adds traceparent to XHR requests unless the app already set one', () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const { breadcrumbs, events } = install();
+
+    const ours = new FakeXhr();
+    ours.open('get', '/api/inventory');
+    ours.setRequestHeader('accept', 'application/json');
+    ours.send();
+    ours.finish(200);
+
+    const theirs = new FakeXhr();
+    theirs.open('post', '/api/pay');
+    theirs.setRequestHeader('traceparent', THEIRS);
+    theirs.send();
+    theirs.finish(503);
+
+    const thirdParty = new FakeXhr();
+    thirdParty.open('get', 'https://api.test/search');
+    thirdParty.send();
+    thirdParty.finish(200);
+
+    expect(ours.requestHeaders.map(([name]) => name)).toEqual(['accept', 'traceparent']);
+    expect(ours.requestHeaders[1]![1]).toMatch(TRACEPARENT);
+    // 同一个头设置两次，值会被拼成「a, b」：应用加过的不再加。
+    expect(theirs.requestHeaders).toEqual([['traceparent', THEIRS]]);
+    expect(thirdParty.requestHeaders).toEqual([]);
+    expect(breadcrumbs.map((item) => item.data?.traceId)).toEqual([
+      TRACEPARENT.exec(ours.requestHeaders[1]![1])![1],
+      '0af7651916cd43dd8448eb211c80319c',
+      undefined,
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({ traceId: '0af7651916cd43dd8448eb211c80319c' }),
+    ]);
+  });
+
+  it('restores setRequestHeader on teardown and leaves it alone when propagation is off', () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr);
+    const original = FakeXhr.prototype.setRequestHeader;
+    install();
+    expect(FakeXhr.prototype.setRequestHeader).not.toBe(original);
+    plugin!.teardown();
+    expect(FakeXhr.prototype.setRequestHeader).toBe(original);
+
+    install({ tracePropagationTargets: [] });
+    expect(FakeXhr.prototype.setRequestHeader).toBe(original);
   });
 });

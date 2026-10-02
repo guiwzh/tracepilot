@@ -29,6 +29,7 @@ import {
 } from './helpers';
 import { dedupeSignature, isIgnoredError } from './noise';
 import { resolveOptions } from './options';
+import { isTraceId, TraceContext } from './trace';
 
 export class MonitorCore implements MonitorClient {
   readonly options: Readonly<ResolvedMonitorOptions>;
@@ -40,6 +41,8 @@ export class MonitorCore implements MonitorClient {
   private readonly context: PluginContext;
   private readonly breadcrumbs: Breadcrumb[] = [];
   private readonly recentSignals = new Map<string, number>();
+  /** 当前页面浏览的 trace（W3C Trace Context），见 core/trace.ts。 */
+  private readonly trace = new TraceContext();
   private started = false;
   private destroyed = false;
   // 插件是否已经安装。未采样的会话从不安装，销毁时也就不必 teardown。
@@ -89,6 +92,7 @@ export class MonitorCore implements MonitorClient {
       options: this.options,
       captureEvent: (eventType, payload, options) => this.captureEvent(eventType, payload, options),
       addBreadcrumb: (breadcrumb) => this.addBreadcrumb(breadcrumb),
+      startRequestSpan: () => this.trace.startRequestSpan(),
     };
   }
 
@@ -193,6 +197,13 @@ export class MonitorCore implements MonitorClient {
       const redactedPayload = redactPayload(payload);
       // 堆栈里各个产物文件的 Debug ID，服务端按它找 Source Map；应用没用构建插件时没有。
       const debugIds = debugIdsFor(redactedPayload.stack);
+      // 指标样本不属于任何 Issue，带 trace id 也没处可查。
+      const traceId =
+        eventType === 'performance'
+          ? undefined
+          : isTraceId(options.traceId)
+            ? options.traceId
+            : this.trace.eventTraceId();
       const event: MonitorEvent = {
         eventId: createId(),
         eventType,
@@ -210,6 +221,7 @@ export class MonitorCore implements MonitorClient {
         breadcrumbs: eventType === 'performance' ? [] : this.getBreadcrumbs(),
         ...(options.fingerprint?.length ? { fingerprint: [...options.fingerprint] } : {}),
         ...(debugIds ? { debugIds } : {}),
+        ...(traceId ? { traceId } : {}),
       };
       // beforeSend 是业务方最后一次删除字段或取消事件的机会。
       const processed = this.options.beforeSend ? this.options.beforeSend(event) : event;

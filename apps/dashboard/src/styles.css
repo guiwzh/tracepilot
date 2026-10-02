@@ -1164,6 +1164,38 @@ pre {
   color: var(--muted);
   font-size: 10px;
 }
+/* 最新事件所属的后端链路（W3C trace id） */
+.issue-heading > .issue-trace {
+  margin-top: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 10px;
+}
+.trace-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--teal);
+  white-space: nowrap;
+}
+.trace-link code {
+  color: var(--ink);
+  font:
+    400 9px 'DM Mono',
+    monospace;
+}
+.trace-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--teal);
+  font-weight: 600;
+}
+.trace-link .copy-button {
+  min-height: 0;
+  padding: 3px 7px;
+  font-size: 10px;
+}
 .detail-tabs {
   margin: 30px 0 22px;
   display: flex;

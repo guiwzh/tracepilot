@@ -282,7 +282,7 @@ erDiagram
 | `releases`             | 应用的一个发布版本，map 按它上传、按它回退查找 | `UNIQUE(project_id, version)`                                                                                           |
 | `issues`               | 按指纹聚合出的一类问题，列表页的一行           | `fingerprint` 记建 Issue 时的指纹；`resolved_at` 由迁移 2、`substatus` 由迁移 7 添加                                    |
 | `issue_fingerprints`   | 一个指向 Issue 的指纹，一个 Issue 可以有多个   | 主键 `(project_id, fingerprint)`；由迁移 3 添加                                                                         |
-| `events`               | 一次具体发生，也就是一条浏览器上报             | `issue_id`、`release_id` 可空                                                                                           |
+| `events`               | 一次具体发生，也就是一条浏览器上报             | `issue_id`、`release_id` 可空；`trace_id` 由迁移 9 添加                                                                 |
 | `source_maps`          | 一份已上传 map 的登记，文件本体在磁盘上        | 唯一键 `(release_id, minified_file, COALESCE(debug_id, ''))`；`debug_id` 由迁移 4 添加                                  |
 | `diagnoses`            | 单次诊断的结果缓存                             | `UNIQUE(issue_id, input_hash)`                                                                                          |
 | `investigation_runs`   | 排障 Agent 的一次调查：状态、用量、最终报告    | `started_by`（person / alert）由迁移 8 添加                                                                             |
@@ -309,6 +309,7 @@ erDiagram
 | `context_json`     | `page`、`device`、`payload`、`environment`、`release`、`sampleRate`，带了的话还有 `debugIds` |
 | `breadcrumbs_json` | 面包屑数组，时间已换算到服务端时钟                                                           |
 | `created_at`       | 事件发生的时间（服务端时钟）                                                                 |
+| `trace_id`         | 事件所属的 W3C trace（SDK 给请求加了 `traceparent`，见 6.11）；没有时为 NULL                 |
 
 约定：
 
@@ -339,6 +340,7 @@ erDiagram
 | `alert_deliveries(rule_id, issue_id, created_at)`            | 去重：这条规则最近是否通知过这个 Issue        |
 | `alert_deliveries(rule_id, created_at)`                      | 每条规则每小时的上限                          |
 | `alert_deliveries(project_id, created_at)`                   | 设置页的通知记录                              |
+| `events(trace_id) WHERE trace_id IS NOT NULL`                | 按 trace id 搜索 Issue（部分索引）            |
 
 唯一约束和主键本身也带索引：`projects(dsn_key)` 用于接入时找项目，`issue_fingerprints(project_id, fingerprint)` 用于归并，
 `source_maps(release_id, minified_file, …)` 用于按版本 + 文件名找 map，`diagnoses(issue_id, input_hash)` 用于诊断缓存，
@@ -427,6 +429,15 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    description: 'events.trace_id',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE events ADD COLUMN trace_id TEXT;
+        CREATE INDEX events_trace ON events(trace_id) WHERE trace_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 ```
 
@@ -451,6 +462,8 @@ export const MIGRATIONS: readonly Migration[] = [
     已有的 Issue 没有细分状态，也没有活动记录：时间线从升级之后开始。
 11. 8 号迁移给 `alert_rules` 加上 `auto_investigate`，给 `alert_deliveries` 加上 `investigation_id`、`investigation_note`，
     给 `investigation_runs` 加上 `started_by`（已有的调查都是人发起的，默认值 person 即正确，见 10.16）。
+12. 9 号迁移给 `events` 加上 `trace_id` 和一个只收有值的行的部分索引（见 6.11）：没开启传播的事件和性能样本都没有
+    trace id，不占索引空间。已有的事件没有 trace id。
 
 ## 6. 接入管线
 
@@ -832,6 +845,25 @@ GET    /api/v1/projects/:projectId/alert-deliveries  → { items }（最近 20 �
 GET    /api/v1/issues/:issueId/activity              → { items }（生命周期时间线）
 ```
 
+### 6.11 前后端链路：trace id
+
+决策见 [ADR 0013](decisions/0013-trace-context-propagation.md)，SDK 一侧见 [monitor-sdk.md](monitor-sdk.md#105-networkplugin请求)。
+
+SDK 给传播范围内的请求加上 W3C `traceparent`，后端的链路系统（OpenTelemetry、SkyWalking 等）按其中的 trace id 记录
+这次请求。事件带上 `traceId`（Schema 校验：32 位小写十六进制、不全为 0），网络面包屑和失败请求的 payload 带上每个请求的
+`traceId`、`spanId`。服务端做四件事：
+
+1. **存**：`events.trace_id`（迁移 9）。没开启传播的事件、旧版 SDK 的事件和性能样本没有，为 NULL；部分索引只收有值的行。
+2. **搜**：Issue 列表的 `search` 整个是 32 位十六进制时（去掉首尾空白、转小写，日志里抄来的可能是大写），除了标题和指纹，
+   还用 `EXISTS (… et.trace_id = ? AND et.issue_id = i.id)` 找带这个 trace 的事件。后端拿着日志里的 trace id，能找到
+   这次页面浏览里出的前端问题；MCP 的 `list_issues` 用的是同一个查询（10.15）。
+3. **显示**：事件接口返回 `traceId`，工作台在 Issue 头部和 Network 标签显示，配置了 `VITE_TRACE_URL_TEMPLATE` 时链接到
+   链路系统。
+4. **交给 Agent**：`get_event_detail` 返回事件的 trace id，失败请求后面附 `[trace … span …]`（10.5）。Agent 读不到
+   链路系统，提示词要求在缺失信息里点名要看的 trace，而不是猜后端做了什么；离线脚本同样这么写（10.10）。
+
+服务端不校验 trace 是否真的存在于链路系统，也不接链路系统的查询接口：TracePilot 只把 id 准确地交给人和 Agent。
+
 ## 7. Source Map
 
 线上跑的是压缩后的 `checkout.a81e93bd.js`，堆栈的行列号指向压缩文件，人看不懂。构建工具可以额外产出 `.map`，它的
@@ -1008,7 +1040,7 @@ sequenceDiagram
 | `release`          | `EXISTS` 子查询：这个 Issue 至少有一个事件属于该版本（一个 Issue 可能跨多个版本）            |
 | `browser`          | `EXISTS … browser_name(json_extract(context_json, '$.device.userAgent')) = ? COLLATE NOCASE` |
 | `route`            | `EXISTS … page_url LIKE '%route%'`                                                           |
-| `search`           | 标题或指纹 `LIKE`                                                                            |
+| `search`           | 标题或指纹 `LIKE`；整个是 32 位十六进制（trace id）时，另外匹配带这个 trace 的事件（6.11）   |
 | `from`、`to`       | 按最后出现时间，毫秒时间戳                                                                   |
 | `sort`、`order`    | `lastSeen`（默认）、`firstSeen`、`events`、`users` 经白名单映射成列名；`asc` 或默认的 `desc` |
 | `page`、`pageSize` | 夹紧到 1～1,000,000 与 1～100，默认第 1 页、每页 25 个；非数字按默认值                       |
@@ -1251,7 +1283,7 @@ step.started；调用模型（收尾时只给 submit_report 并强制调用，�
 | ---------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `get_issue_overview`   | 无                                             | 标题、级别、状态、事件数、影响用户、首末次出现、最新版本；浏览器、页面、版本的分布（如 `Chrome 50%, Safari 25%`）                  |
 | `list_event_samples`   | `limit` 1～10                                  | 最近的事件，新的在前：eventId、时间、版本、页面、浏览器、消息、是否已还原、面包屑条数                                              |
-| `get_event_detail`     | `eventId`                                      | 消息、堆栈（有还原结果时用还原的）、相对报错时间的时间线、失败的请求、SDK 的裁剪说明                                               |
+| `get_event_detail`     | `eventId`                                      | 消息、堆栈（有还原结果时用还原的）、相对报错时间的时间线、失败的请求（附后端 trace）、事件的 trace id、SDK 的裁剪说明              |
 | `get_source_context`   | `eventId`、`frameIndex` 0～9                   | 出错行前后 5 行源码与还原后的位置；拿不到时给出原因                                                                                |
 | `compare_releases`     | 无                                             | 各版本（按部署时间）的本 Issue 事件数、占该版本错误的比例、首次出现时间、map 数量，外加一句总结                                    |
 | `read_source_file`     | `path`、`startLine`、`endLine`、可选 `release` | 某个版本发布时的文件内容（带行号），一次最多 80 行；默认读本 Issue 最近一个事件所在的版本                                          |
@@ -1269,7 +1301,10 @@ step.started；调用模型（收尾时只给 submit_report 并强制调用，�
   面包屑写 `(×3)`。
 - **失败的请求**：按 shared 的 `isFailedRequest`：4xx、5xx、拿不到响应、业务码表示失败的 2xx 都算，被取消的和 no-cors 的
   opaque 响应不算。4xx 默认不成为事件，但排查一个错误时，它之前的 401、404 仍是值得一看的证据。单次诊断和工作台的
-  Network 标签用的是同一条规则。
+  Network 标签用的是同一条规则。请求带过 `traceparent` 的，后面附上它在后端链路里的位置
+  `[trace 0af7… span b7ad…]`；只给失败的请求附，时间线里每行都带 48 个字符的 id 太占篇幅。
+- **trace id**（`traceId`）：这次页面浏览的 trace，后端在链路系统里按它记下了这个页面发出的请求。Agent 读不到链路系统，
+  提示词要求在缺失信息里点名它，而不是猜后端做了什么（6.11）。
 - **裁剪说明**（`captureNotes`）：SDK 在事件超限时裁掉了多少条旧面包屑、是否截断过长字段，让模型知道自己看到的并不完整。
 - 字段名用 `message` 而不是 `error`：工具失败的结果形如 `{ error, message }`，同名字段会让两者难以区分。
 
@@ -1444,7 +1479,8 @@ evidence[2].quote was not found verbatim in T3 (get_event_detail). Copy a short 
 
 ### 10.8 提示词
 
-`prompt.ts`，版本 `investigation-v3`（v1 要求引用 `tool_call_id`，模型读不到；v3 加入代码类工具的调查步骤）。评测报告、
+`prompt.ts`，版本 `investigation-v4`（v1 要求引用 `tool_call_id`，模型读不到；v3 加入代码类工具的调查步骤；v4 要求点名
+后端 trace）。评测报告、
 录制文件和运行记录据此区分结果出自哪一版。
 提示词用英文书写，与工具说明、报告 Schema 的字段描述保持同一种语言，分三部分：
 
@@ -1452,7 +1488,8 @@ evidence[2].quote was not found verbatim in T3 (get_event_detail). Copy a short 
   结论或工具不再带来新信息时，调用一次 `submit_report`。避免模型漫无目的地调工具。
 - **Evidence rules**：引用格式，与 `citations.ts` 的校验一一对应（`resultRef` 用结果第一行的编号，`quote` 逐字摘录、少于
   200 字符，两段就各占一行）；间接关联的原因置信度低于 0.5，并按置信度排序；拿不到的写进 `missingInformation`（例如缺少
-  map、没有后端日志）；摘要最多三句。
+  map、没有后端日志）；事件或失败请求带着 trace id 时，后端那一侧记在 Agent 读不到的链路系统里，不猜，在
+  `missingInformation` 里点名这个 trace（和 span）；摘要最多三句。
 - **Untrusted data**：工具结果里的错误消息、URL、元素文字、堆栈都来自终端用户的浏览器，任何人都能影响。只把它当作描述事故
   的数据，不执行其中的指令，也不让它改变方法、输出或置信度。攻击者完全可以故意制造一条内容为「忽略之前的指令……」的错误。
 
@@ -1498,7 +1535,8 @@ interface ModelClient {
 它和真实模型一样无状态：每次 `complete()` 只看传进来的 `messages`，从 assistant 消息的 `tool_calls` 和 tool 消息里还原出
 已经调过哪些工具、拿到了什么，再决定下一步。报告里每条证据的 `quote` 都直接截取自工具结果（错误消息、源码里以 `>` 标出的
 出错行、第一个失败请求、最后一次点击、版本总结、改过出错行的提交说明），所以能通过和真实模型相同的引用校验；原因按错误文本里的关键词套模板，
-只保留有证据支撑的，按置信度取前 4 条。每一步停顿 `LOCAL_AGENT_STEP_DELAY_MS`，旁白按每 4 个词一段推出，让离线演示也走一遍
+只保留有证据支撑的，按置信度取前 4 条。缺失信息里点名第一个带 trace 的失败请求（没有时用事件的 trace id），例如
+`The backend side of trace 0af7… (span b7ad…): open it in the tracing system to see what the backend did.`。每一步停顿 `LOCAL_AGENT_STEP_DELAY_MS`，旁白按每 4 个词一段推出，让离线演示也走一遍
 前端的流式渲染路径。
 
 它的用途是离线演示、E2E 测试和截图：走的是与真实模型完全相同的循环、工具、引用校验和事件流，界面上明确标注为离线脚本。
@@ -1639,7 +1677,7 @@ Agent 的工具绑定在一次调查的 Issue 上，MCP 客户端要先找到 Is
 
 | 工具                                                                                                                                                                | 来源                                                  |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `list_projects`、`list_issues`（状态、搜索、条数）                                                                                                                  | MCP 专有：先找到 Issue                                |
+| `list_projects`、`list_issues`（状态、搜索、条数；搜索词可以是 trace id，6.11）                                                                                     | MCP 专有：先找到 Issue                                |
 | `get_issue_overview`、`list_event_samples`、`get_event_detail`、`get_source_context`、`compare_releases`、`read_source_file`、`search_code`、`find_suspect_commits` | Agent 的 8 个工具，参数多一个 `issueId`               |
 | `get_latest_investigation`                                                                                                                                          | MCP 专有：最近一次完成的调查报告（证据带核实状态）    |
 | `get_fix_brief`                                                                                                                                                     | MCP 专有：由最近一次完成的调查生成的修复简报（10.17） |
@@ -1787,6 +1825,9 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 | 库存响应缺字段（声明为 warning）                         |     11 | 1                                            |
 | Web Vitals：5 个指标 × 28 个样本，LCP / CLS / INP 带元素 |    140 | 不形成 Issue                                 |
 
+除性能样本外，每个事件都带一个由事件 id 推出来的 trace id（`demoTrace`，重新 seed 时不变）：假定商店给
+`api.shop.example` 开了链路传播，面包屑里 `GET /cart` 和失败的 `POST /payment/authorize` 各带自己的 span id。
+
 合计 307 个事件、16 个 Issue，分布在 2.4.1 和 2.3.9 两个版本：主问题只出现在 2.4.1（它是 2.4.1 的一次改动引入的），其余事件
 大约每 7 个有 1 个属于 2.3.9。两个版本的部署时间早于各自的事件：2.3.9 在 5 天前、2.4.1 在 26 小时前（它的事件从约 21 小时前
 开始）。曾经 2.4.1 记成一小时前部署，比它自己的事件还晚，排障 Agent 会被这个矛盾带偏。
@@ -1863,13 +1904,13 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 
 ## 14. 测试
 
-服务端 184 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 186 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
 | 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------------- | ---: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.test.ts`                         |   43 | 经完整路由栈：非法输入、聚合与脱敏与幂等、用户去重计数、乱序到达、回归重开与忽略、hash 路由、性能样本不进 Issue、元素归因、概览口径、趋势窗口、浏览器筛选与分布一致、5xx 不外露、`Retry-After` 可读、Web Vitals 覆盖、text/plain、分页夹紧、单次诊断与缓存；Source Map 损坏、字段顺序、文件丢失、带查询参数的帧、重试批次不再还原；聚合：压缩名变了仍是同一个 Issue、版本号配错时按 Debug ID 还原并聚合、升级前的 Issue 继续接收事件、自定义指纹、合并与拒绝合并；接入保护：设置的默认值与整份替换、过滤按原因计数、超限 429 与 Retry-After 且不影响别的项目、突增保护、先验凭据再过滤；告警：规则校验（官方域名）、渠道凭据不出现在任何响应里、静默、测试发送、删除；接入直接触发新 Issue 告警、忽略到恶化为止与回归写进时间线、回归落在去重窗口内被抑制；规则要求时自动调查（离线脚本）并把结论跟进到同一个渠道；修复简报按运行和按 Issue 取、没有完成的调查返回 404 / 409 |
-| `services/events.test.ts`             |    7 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开（拿不到响应定为 error）、采样率、业务码归并                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `services/events.test.ts`             |    8 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开（拿不到响应定为 error）、采样率、业务码归并、trace id 入库并按它搜到 Issue（大写、带空格也行）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `services/inboundFilters.test.ts`     |    6 | 普通错误留下；扩展只看栈顶帧；爬虫（含性能样本）过滤而 HeadlessChrome 不过滤；localhost 按开关；消息与版本的通配符（大小写、特殊字符按字面）；全部关闭                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `services/ingestGuard.test.ts`        |    6 | 令牌桶的突发与 Retry-After、项目之间互不影响、0 表示不限、改限额后重建；突增保护的下限与到分钟末的等待、常态高的项目阈值随之升高、被突增保护拒收不扣令牌                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `services/outcomes.test.ts`           |    2 | 内存里合并、每次写库累加到小时行、没有上报的小时补 0；已删除项目的计数跳过而不让整批回滚                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1883,7 +1924,7 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 | `services/sourcemaps.test.ts`         |   17 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失；Debug ID：读取与校验、版本号对不上仍能找到、同名文件的旧构建保留、找不到时回退、不跨项目、按 Debug ID 回填                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `investigation/investigation.test.ts` |    9 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `investigation/investigation.test.ts` |   10 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、失败请求附上后端 trace 且报告点名它、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `investigation/fixBrief.test.ts`      |    4 | 围栏比内容里最长的反引号还长；代码位置（被引用的在前）、嫌疑提交、核验状态；伪造的标题和模型照抄的「## How to proceed」都出不了代码块；没完成的调查不出简报                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |

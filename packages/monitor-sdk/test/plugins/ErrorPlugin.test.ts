@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../../src/types';
 import { ErrorPlugin } from '../../src/plugins/ErrorPlugin';
 import { PromisePlugin } from '../../src/plugins/PromisePlugin';
+import { TraceContext } from '../../src/core/trace';
 
 function recordingContext() {
   const events: CapturePayload[] = [];
@@ -12,6 +13,7 @@ function recordingContext() {
       return 'event-id';
     },
     addBreadcrumb: () => {},
+    startRequestSpan: () => new TraceContext().startRequestSpan(),
   };
   return { context, events };
 }

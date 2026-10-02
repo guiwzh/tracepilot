@@ -25,6 +25,7 @@ import { Chart, type ChartOption } from '../components/Chart';
 import { ErrorState, LoadingState } from '../components/States';
 import { InvestigationPanel } from '../features/investigation/InvestigationPanel';
 import { IssueStatusBadge, IssueSubstatusBadge, LevelMark } from '../components/Status';
+import { TraceLink } from '../components/TraceLink';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
 import { isFailedRequest, requestOutcome } from '../utils/network';
@@ -251,6 +252,12 @@ export function IssueDetailPage() {
             First seen {absoluteTime(data.firstSeenAt)} · latest evidence{' '}
             {relativeTime(data.lastSeenAt)}
           </p>
+          {sample?.traceId && (
+            <div className="issue-trace">
+              <span>Latest event · backend trace</span>
+              <TraceLink traceId={sample.traceId} />
+            </div>
+          )}
         </div>
         <select
           className="status-select"
@@ -437,6 +444,18 @@ export function IssueDetailPage() {
                     <strong>{String(item.data?.url ?? item.message)}</strong>
                     <small>
                       {Number(item.data?.duration ?? 0).toFixed(1)} ms · {requestOutcome(item.data)}
+                      {typeof item.data?.traceId === 'string' && (
+                        <>
+                          {' · '}
+                          <TraceLink
+                            compact
+                            traceId={item.data.traceId}
+                            spanId={
+                              typeof item.data.spanId === 'string' ? item.data.spanId : undefined
+                            }
+                          />
+                        </>
+                      )}
                     </small>
                   </div>
                 </article>

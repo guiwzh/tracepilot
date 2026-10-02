@@ -57,7 +57,13 @@ const listIssuesParameters = z.object({
     .optional()
     .describe('Project id from list_projects; may be omitted when only one project is visible'),
   status: z.enum(['unresolved', 'resolved', 'ignored', 'all']).default('unresolved'),
-  query: z.string().max(200).optional().describe('Matches issue titles and fingerprints'),
+  query: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      'Matches issue titles and fingerprints; a 32-character W3C trace id also finds the issues whose events carry that trace',
+    ),
   limit: z.number().int().min(1).max(50).default(20),
 });
 

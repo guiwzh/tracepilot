@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -54,12 +55,25 @@ function breadcrumb(
   return { id: `${eventId}-crumb-${index}`, type, category, message, timestamp, data };
 }
 
+/**
+ * 演示事件的 trace：假定商店给 api.shop.example 配置了 tracePropagationTargets，同一次页面浏览里的请求
+ * 共用一个 trace id，各有自己的 span id。由事件 id 推出来，重新 seed 时不变。
+ */
+export function demoTrace(eventId: string): { traceId: string; span: (request: string) => string } {
+  const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+  return {
+    traceId: hash(`trace:${eventId}`).slice(0, 32),
+    span: (request) => hash(`span:${eventId}:${request}`).slice(0, 16),
+  };
+}
+
 function baseEvent(
   id: string,
   timestamp: number,
   index: number,
 ): Omit<MonitorEvent, 'eventType' | 'payload'> {
   const route = index % 4 === 0 ? '/checkout/review' : index % 3 === 0 ? '/cart' : '/checkout';
+  const trace = demoTrace(id);
   return {
     eventId: id,
     timestamp,
@@ -67,6 +81,7 @@ function baseEvent(
     release: index % 7 === 0 ? '2.3.9' : '2.4.1',
     environment: 'production',
     page: { url: `https://shop.example${route}?session=demo-${index}`, route, title: 'Checkout' },
+    traceId: trace.traceId,
     user: { id: `customer-${(index % 18) + 1}` },
     device: {
       userAgent: browsers[index % browsers.length]!,
@@ -95,6 +110,8 @@ function baseEvent(
           url: 'https://api.shop.example/cart?token=removed',
           status: 200,
           duration: 142 + index,
+          traceId: trace.traceId,
+          spanId: trace.span('cart'),
         },
       ),
     ],
@@ -200,6 +217,8 @@ export async function seedDemoData(
   for (let index = 0; index < 42; index += 1) {
     const timestamp = now - (41 - index) * 29 * 60_000;
     const id = `demo-payment-${String(index).padStart(3, '0')}`;
+    // 失败的支付请求和页面里之前的请求同属一个 trace，span 是它自己的。
+    const payment = { traceId: demoTrace(id).traceId, spanId: demoTrace(id).span('payment') };
     events.push({
       ...baseEvent(id, timestamp, index + 100),
       eventType: 'network',
@@ -210,6 +229,7 @@ export async function seedDemoData(
         duration: 1820 + index * 9,
         success: false,
         error: 'upstream unavailable',
+        ...payment,
       },
       breadcrumbs: [
         ...baseEvent(id, timestamp, index + 100).breadcrumbs,
@@ -218,6 +238,7 @@ export async function seedDemoData(
           url: 'https://api.shop.example/payment/authorize',
           status: 503,
           duration: 1820 + index * 9,
+          ...payment,
         }),
       ],
     });
@@ -279,6 +300,8 @@ export async function seedDemoData(
           ...(targets ? { attribution: { target: slower ? targets[0] : targets[1] } } : {}),
         },
         breadcrumbs: [],
+        // 指标样本不属于任何 Issue，SDK 不给它们带 trace。
+        traceId: undefined,
       });
       metricIndex += 1;
     }

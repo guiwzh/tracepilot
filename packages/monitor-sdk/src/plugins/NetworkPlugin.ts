@@ -1,4 +1,5 @@
 import { DEFAULT_FAILED_STATUS_CODES } from '../core/options';
+import { parseTraceparent, shouldPropagate } from '../core/trace';
 import type { BusinessError, MonitorPlugin, PluginContext } from '../types';
 
 /**
@@ -12,12 +13,22 @@ import type { BusinessError, MonitorPlugin, PluginContext } from '../types';
  * - 状态码落在 failedRequestStatusCodes 里（默认只有 5xx），或者拿不到响应的网络错误；
  * - 配置了 detectBusinessError 时，2xx 的 JSON 响应里业务码表示失败的也算；
  * - 被取消的请求（AbortController、组件卸载、查询库取消）和 no-cors 的 opaque 响应不算，只记 breadcrumb。
+ *
+ * 在 tracePropagationTargets 之内的请求还会带上 W3C traceparent 头（见 core/trace.ts），
+ * 记录里的 traceId / spanId 就是后端链路里这次请求的位置。
  */
 interface XhrMeta {
   method: string;
   url: string;
   startedAt: number;
   aborted: boolean;
+  /** 应用自己用 setRequestHeader 设置的 traceparent；有它就不再加。 */
+  traceparent?: string;
+}
+
+interface TraceIds {
+  traceId: string;
+  spanId: string;
 }
 
 interface RequestRecord {
@@ -32,6 +43,9 @@ interface RequestRecord {
   /** detectBusinessError 判定失败时返回的业务码和说明。 */
   businessCode?: string | number;
   businessMessage?: string;
+  /** 请求带的 traceparent 里的 trace id 和 span id：SDK 加的，或者请求本来就带的。 */
+  traceId?: string;
+  spanId?: string;
 }
 
 /** 超过这个大小的响应体不解析业务码，避免在页面上为了监控解析大段 JSON。 */
@@ -83,10 +97,12 @@ export class NetworkPlugin implements MonitorPlugin {
   private originalFetch?: typeof window.fetch;
   private originalOpen?: typeof XMLHttpRequest.prototype.open;
   private originalSend?: typeof XMLHttpRequest.prototype.send;
+  private originalSetRequestHeader?: typeof XMLHttpRequest.prototype.setRequestHeader;
   // 自己装上的包装。teardown 时只有全局引用仍是它们才还原，见 teardown 的说明。
   private wrappedFetch?: typeof window.fetch;
   private wrappedOpen?: typeof XMLHttpRequest.prototype.open;
   private wrappedSend?: typeof XMLHttpRequest.prototype.send;
+  private wrappedSetRequestHeader?: typeof XMLHttpRequest.prototype.setRequestHeader;
   // WeakMap 不阻止 XHR 对象被垃圾回收，适合保存每个实例的请求元数据。
   private readonly xhrMeta = new WeakMap<XMLHttpRequest, XhrMeta>();
 
@@ -107,6 +123,28 @@ export class NetworkPlugin implements MonitorPlugin {
     return this.context !== undefined && !url.includes(this.context.options.dsn);
   }
 
+  /** 这个地址的请求要不要带 traceparent（tracePropagationTargets，见 core/trace.ts）。 */
+  private propagatesTo(url: string): boolean {
+    return (
+      this.context !== undefined &&
+      shouldPropagate(url, this.context.options.tracePropagationTargets)
+    );
+  }
+
+  /**
+   * 范围内一个请求的 trace：已经带了 traceparent 的（应用自己或另一个链路 SDK 加的）不覆盖，
+   * 记下它带的那个；没带的开一个新 span，由 add 加上。
+   */
+  private requestTrace(
+    existing: string | null | undefined,
+    add: (traceparent: string) => void,
+  ): TraceIds | undefined {
+    if (existing != null) return parseTraceparent(existing) ?? undefined;
+    const span = this.context!.startRequestSpan();
+    add(span.traceparent);
+    return { traceId: span.traceId, spanId: span.spanId };
+  }
+
   private patchFetch(): void {
     if (typeof window.fetch !== 'function') return;
     const original = window.fetch;
@@ -115,13 +153,24 @@ export class NetworkPlugin implements MonitorPlugin {
       const url = inputUrl(input);
       // teardown 之后包装可能还留在调用链上（见 teardown），此时只做透传。
       if (!this.shouldObserve(url)) return original.call(window, input, init);
-      const method = (
-        init?.method ?? (input instanceof Request ? input.method : 'GET')
-      ).toUpperCase();
-      const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+      const request = input instanceof Request ? input : undefined;
+      const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
+      const signal = init?.signal ?? request?.signal;
+      // 要加 traceparent 时复制一份请求头、换一个新的 init 交给原生 fetch，不改动调用方传入的对象。
+      // 给了 init.headers 时它整个取代 Request 自己的头，和 fetch 的语义一致。no-cors 请求不加：
+      // 浏览器会悄悄丢掉不在安全列表里的请求头，记下来的 trace 后端根本没收到。
+      let sentInit = init;
+      let ids: TraceIds | undefined;
+      if ((init?.mode ?? request?.mode) !== 'no-cors' && this.propagatesTo(url)) {
+        const headers = new Headers(init?.headers ?? request?.headers);
+        ids = this.requestTrace(headers.get('traceparent'), (traceparent) => {
+          headers.set('traceparent', traceparent);
+          sentInit = { ...init, headers };
+        });
+      }
       const startedAt = performance.now();
       try {
-        const response = await original.call(window, input, init);
+        const response = await original.call(window, input, sentInit);
         // no-cors 请求拿到的是 opaque 响应，状态码固定为 0，看不出成败，不能当作故障。
         const opaque = response.type === 'opaque' || response.type === 'opaqueredirect';
         const request: RequestRecord = {
@@ -130,6 +179,7 @@ export class NetworkPlugin implements MonitorPlugin {
           status: response.status,
           duration: performance.now() - startedAt,
           success: opaque || !this.failedStatus(response.status),
+          ...ids,
         };
         this.record(request);
         if (
@@ -167,6 +217,7 @@ export class NetworkPlugin implements MonitorPlugin {
           ...(aborted
             ? { aborted: true }
             : { error: error instanceof Error ? error.message : String(error) }),
+          ...ids,
         });
         // 采集后仍抛出原异常，不能改变业务代码对 fetch rejection 的处理语义。
         throw error;
@@ -179,8 +230,10 @@ export class NetworkPlugin implements MonitorPlugin {
     if (typeof XMLHttpRequest === 'undefined') return;
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
+    const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
     this.originalOpen = originalOpen;
     this.originalSend = originalSend;
+    this.originalSetRequestHeader = originalSetRequestHeader;
     const xhrMeta = this.xhrMeta;
     // 包装函数里的 this 是 XHR 实例，插件自己的方法通过闭包取用。
     const shouldObserve = (url: string) => this.shouldObserve(url);
@@ -189,6 +242,19 @@ export class NetworkPlugin implements MonitorPlugin {
     const checkBusiness = (request: RequestRecord, body: unknown) =>
       this.checkBusiness(request, body);
     const detectsBusiness = () => this.context?.options.detectBusinessError !== undefined;
+    // XHR 读不到已经设置的请求头，要加 traceparent 之前只能靠包装 setRequestHeader 得知应用自己加过没有：
+    // 同一个头设置两次，值会被拼成「a, b」。关闭传播（[]）时不包装。
+    const traceXhr = (xhr: XMLHttpRequest, meta: XhrMeta): TraceIds | undefined => {
+      if (!this.propagatesTo(meta.url)) return undefined;
+      try {
+        return this.requestTrace(meta.traceparent, (traceparent) =>
+          originalSetRequestHeader.call(xhr, 'traceparent', traceparent),
+        );
+      } catch {
+        // 状态不对（没有 open 或已经 send）时原生 send 自己会抛错，这里不加头就是了。
+        return undefined;
+      }
+    };
     // open 阶段只有 method/url，send 阶段才真正开始计时。
     this.wrappedOpen = function (
       this: XMLHttpRequest,
@@ -210,6 +276,7 @@ export class NetworkPlugin implements MonitorPlugin {
     ) {
       const meta = xhrMeta.get(this);
       if (!meta || !shouldObserve(meta.url)) return originalSend.call(this, body);
+      const ids = traceXhr(this, meta);
       meta.startedAt = performance.now();
       const onAbort = () => {
         meta.aborted = true;
@@ -227,6 +294,7 @@ export class NetworkPlugin implements MonitorPlugin {
           // 另外标记 aborted，只记面包屑、不成为事件。
           success: !meta.aborted && this.status !== 0 && !failedStatus(this.status),
           ...(meta.aborted ? { aborted: true } : {}),
+          ...ids,
         };
         record(request);
         if (
@@ -248,6 +316,14 @@ export class NetworkPlugin implements MonitorPlugin {
     };
     XMLHttpRequest.prototype.open = this.wrappedOpen;
     XMLHttpRequest.prototype.send = this.wrappedSend;
+    if (this.context?.options.tracePropagationTargets?.length !== 0) {
+      this.wrappedSetRequestHeader = function (this: XMLHttpRequest, name: string, value: string) {
+        const meta = xhrMeta.get(this);
+        if (meta && name.toLowerCase() === 'traceparent') meta.traceparent = value;
+        return originalSetRequestHeader.call(this, name, value);
+      };
+      XMLHttpRequest.prototype.setRequestHeader = this.wrappedSetRequestHeader;
+    }
   }
 
   private record(request: RequestRecord): void {
@@ -260,7 +336,9 @@ export class NetworkPlugin implements MonitorPlugin {
       message: `${request.method} ${request.url} → ${outcome}`,
       data: { ...request },
     });
-    if (!request.success && !request.aborted) context.captureEvent('network', { ...request });
+    if (!request.success && !request.aborted) {
+      context.captureEvent('network', { ...request }, { traceId: request.traceId });
+    }
   }
 
   private failedStatus(status: number): boolean {
@@ -299,7 +377,7 @@ export class NetworkPlugin implements MonitorPlugin {
       message: `${request.method} ${request.url} → business error${code === undefined ? '' : ` ${String(code)}`}`,
       data: { ...failed },
     });
-    context.captureEvent('network', { ...failed });
+    context.captureEvent('network', { ...failed }, { traceId: failed.traceId });
   }
 
   teardown(): void {
@@ -317,10 +395,17 @@ export class NetworkPlugin implements MonitorPlugin {
       if (this.wrappedSend && prototype.send === this.wrappedSend) {
         prototype.send = this.originalSend!;
       }
+      if (
+        this.wrappedSetRequestHeader &&
+        prototype.setRequestHeader === this.wrappedSetRequestHeader
+      ) {
+        prototype.setRequestHeader = this.originalSetRequestHeader!;
+      }
     }
     this.context = undefined;
     this.wrappedFetch = undefined;
     this.wrappedOpen = undefined;
     this.wrappedSend = undefined;
+    this.wrappedSetRequestHeader = undefined;
   }
 }

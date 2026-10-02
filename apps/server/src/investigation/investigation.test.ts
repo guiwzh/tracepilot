@@ -8,7 +8,7 @@ import { buildApp, type BuildAppOptions } from '../app';
 import type { ServerConfig } from '../config';
 import { createDatabase } from '../db/client';
 import { buildDiagnosisContext } from '../services/diagnosis';
-import { seedDemoData } from '../seed';
+import { demoTrace, seedDemoData } from '../seed';
 import type { ModelClient, ModelRequest, ModelTurn } from './model';
 import { runTool } from './tools';
 
@@ -157,6 +157,37 @@ describe('investigation agent', () => {
       }),
     );
     expect(stream.at(-1)?.event.type).toBe('run.completed');
+  });
+
+  it('points at the backend trace of a failed request instead of guessing what the backend did', async () => {
+    await start();
+    // 种子数据假定商店给 api.shop.example 开了 trace 传播：失败的支付请求带着 traceparent。
+    const finished = await waitForEnd((await startRun(await issueId('payment/authorize'))).id);
+    expect(finished.status).toBe('completed');
+    const stream = await readStream(finished.id, 0);
+    const detailCall = stream.find(
+      (record) => record.event.type === 'tool.called' && record.event.name === 'get_event_detail',
+    )!.event as Extract<InvestigationStreamEvent['event'], { type: 'tool.called' }>;
+    const detailResult = stream.find(
+      (record) =>
+        record.event.type === 'tool.completed' && record.event.toolCallId === detailCall.toolCallId,
+    )!.event as Extract<InvestigationStreamEvent['event'], { type: 'tool.completed' }>;
+    const detail = JSON.parse(detailResult.output) as {
+      eventId: string;
+      traceId: string;
+      failedRequests: string[];
+    };
+    const trace = demoTrace(detail.eventId);
+    expect(detail.traceId).toBe(trace.traceId);
+    expect(detail.failedRequests[0]).toMatch(
+      new RegExp(
+        `POST https://api.shop.example/payment/authorize → 503 .*\\[trace ${trace.traceId} span ${trace.span('payment')}\\]$`,
+      ),
+    );
+    // 调查读不到链路系统：报告点名要去看的那个 trace 和 span。
+    expect(finished.report?.missingInformation).toContain(
+      `The backend side of trace ${trace.traceId} (span ${trace.span('payment')}): open it in the tracing system to see what the backend did.`,
+    );
   });
 
   it('sends a report back when it cites a call that never happened, and accepts the correction', async () => {

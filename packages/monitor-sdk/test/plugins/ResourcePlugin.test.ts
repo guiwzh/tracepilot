@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CapturePayload, PluginContext, ResolvedMonitorOptions } from '../../src/types';
 import { ResourcePlugin } from '../../src/plugins/ResourcePlugin';
+import { TraceContext } from '../../src/core/trace';
 
 let plugin: ResourcePlugin | undefined;
 
@@ -20,6 +21,7 @@ describe('ResourcePlugin', () => {
         return 'event-id';
       },
       addBreadcrumb: () => {},
+      startRequestSpan: () => new TraceContext().startRequestSpan(),
     };
     plugin = new ResourcePlugin();
     plugin.setup(context);

@@ -215,14 +215,15 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 
 ## 本机实测基线
 
-这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库（SDK 体积与运行时为 2026-09-30 SDK 修订后重测），
+这些数字来自 2026-09-28 依赖升级后的本地构建与临时数据库（SDK 运行时为 2026-09-30 SDK 修订后重测，SDK 体积为
+2026-10-02 加入链路上下文后重测），
 **不代表生产容量**：
 
 | 指标                                     |                       结果 | 复现命令                   |
 | ---------------------------------------- | -------------------------: | -------------------------- |
-| SDK 发布产物 minified / gzip             |        30,478 / 9,777 字节 | `pnpm measure:sdk`         |
-| **业务应用实际接入成本** minified / gzip |       46,575 / 15,491 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals（归因版）                |            5,290 字节 gzip | `pnpm measure:sdk`         |
+| SDK 发布产物 minified / gzip             |       33,134 / 10,593 字节 | `pnpm measure:sdk`         |
+| **业务应用实际接入成本** minified / gzip |       49,225 / 16,331 字节 | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |            5,300 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95¹ |            60 / 190–400 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95¹       |           30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                       0 个 | `pnpm measure:sdk-runtime` |
@@ -233,8 +234,8 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 301 项通过 | `pnpm verify`              |
-| 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
+| 单元 / 集成测试                          |                 312 项通过 | `pnpm verify`              |
+| 浏览器闭环测试                           |             22 / 22 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
 同一台机器上修订前后的对照（初始化多约 20 µs，是新增白屏与控制台两个插件的安装开销；单次采集持平）见性能报告。
@@ -301,8 +302,9 @@ flowchart LR
 [ADR 0008](docs/decisions/0008-code-and-change-context.md)、
 [ADR 0009](docs/decisions/0009-evaluation-reliability.md)、
 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)、
-[ADR 0011](docs/decisions/0011-alert-triggered-investigations.md) 与
-[ADR 0012](docs/decisions/0012-fix-brief.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)、
+[ADR 0012](docs/decisions/0012-fix-brief.md) 与
+[ADR 0013](docs/decisions/0013-trace-context-propagation.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -336,6 +338,9 @@ flowchart LR
   项目级令牌只存哈希，工作台一键给出客户端配置。
 - **修复简报**：把完成的调查整理成交给编码 Agent 的 Markdown（工作台复制、REST、MCP 的 `get_fix_brief` 与 `fix_issue`），
   生产文本按不可信数据隔离；TracePilot 本身不改代码。
+- **前后端链路打通**：SDK 按允许列表给请求加 W3C `traceparent`（默认只有同源，不覆盖已有的头），事件和失败请求带上
+  trace id；工作台显示它、可直接打开后端链路系统，后端拿着日志里的 trace id 也能搜到前端的 Issue；排障 Agent 在
+  报告里点名要看的后端 trace，而不是猜后端做了什么。
 - **评测与质量**：12 个标注事故的诊断评测、单元/接口/E2E、真实浏览器送达回归、基准、体积预算。
 
 ## SDK 接入
@@ -352,6 +357,8 @@ const monitor = createMonitor({
   user: { id: 'fictional-user-42' },
   sampleRate: 1, // 按标签页会话采样，错误也包括在内，一般保持 1
   performanceSampleRate: 1, // 只对 Web Vitals 抽样
+  // 给哪些请求加 W3C traceparent，和后端链路连起来；默认只有同源请求。跨域后端要放行这个请求头。
+  tracePropagationTargets: ['https://api.shop.example', '/api/'],
   beforeSend(event) {
     // 收到的事件已按默认规则脱敏（URL 查询参数、token 等）；这里删除只有业务自己认得出的个人信息。
     return event;
@@ -443,6 +450,19 @@ Markdown——根因与候选、核验过的证据、调查读过的代码位置
 错误消息来自浏览器、任何人都能伪造，所以 `<!channel>`、`<at id=all>` 这类 @所有人 的写法和伪装成链接的 Markdown 都会被转义。
 实现见 [server.md](docs/server.md#610-issue-生命周期与告警)（自动调查见 [10.16](docs/server.md#1016-告警触发的自动调查)），
 决策见 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md) 与 [ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)。
+
+### 和后端链路连起来
+
+SDK 给 `tracePropagationTargets` 范围内的请求加上 W3C `traceparent`（默认只有同源请求），后端的 OpenTelemetry、
+SkyWalking 等沿着它记录这次请求。一次页面浏览一个 trace，每个请求一个 span；事件和失败请求记下 trace id。
+
+- **从前端到后端**：Issue 详情的头部和 Network 标签显示 trace id。在 `apps/dashboard/.env` 里配置
+  `VITE_TRACE_URL_TEMPLATE`（例如 `http://localhost:16686/trace/{traceId}?uiFind={spanId}`），旁边就会出现 **Open trace**。
+- **从后端到前端**：把后端日志里的 trace id 粘进 Issue 搜索框，找到这次页面浏览里出的前端问题；MCP 的 `list_issues` 同样支持。
+- **排障 Agent**：失败请求后面附上它在后端链路里的位置，报告的「还缺什么」点名要看的 trace 和 span。
+
+跨域的后端要在 `Access-Control-Allow-Headers` 里放行 `traceparent`，否则浏览器的预检会让请求失败——这是默认只传播同源请求的原因。
+实现见 [monitor-sdk.md](docs/monitor-sdk.md#105-networkplugin请求)，决策见 [ADR 0013](docs/decisions/0013-trace-context-propagation.md)。
 
 ## 常用命令
 

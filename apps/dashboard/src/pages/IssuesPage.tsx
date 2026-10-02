@@ -254,10 +254,10 @@ export function IssuesPage() {
           >
             <Search size={15} />
             <input
-              aria-label="Search issue title or fingerprint"
+              aria-label="Search issue title, fingerprint or trace id"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search title or fingerprint"
+              placeholder="Search title, fingerprint or trace id"
             />
           </form>
           <select
