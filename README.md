@@ -234,7 +234,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 312 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 317 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             22 / 22 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -303,8 +303,9 @@ flowchart LR
 [ADR 0009](docs/decisions/0009-evaluation-reliability.md)、
 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)、
 [ADR 0011](docs/decisions/0011-alert-triggered-investigations.md)、
-[ADR 0012](docs/decisions/0012-fix-brief.md) 与
-[ADR 0013](docs/decisions/0013-trace-context-propagation.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0012](docs/decisions/0012-fix-brief.md)、
+[ADR 0013](docs/decisions/0013-trace-context-propagation.md) 与
+[ADR 0014](docs/decisions/0014-ag-ui-projection.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -333,7 +334,8 @@ flowchart LR
   私有上传（落盘前完整校验每条映射）、压缩堆栈还原（解析结果跨请求缓存）、读取内联源码片段、map 缺失或损坏时降级为
   压缩堆栈，接入照常返回 202。
 - **排障 Agent**：8 个只读工具（含按版本读代码、搜代码、版本间的嫌疑提交与 blame）、手写循环与硬上限、引用逐条核验与退回修正、注入防护、事件日志与
-  SSE 续传、取消、并发闸门、离线脚本引擎。
+  SSE 续传、取消、并发闸门、离线脚本引擎。事件流同时投影成 AG-UI 1.0 标准事件，并提供 AG-UI 的 Agent 端点：CopilotKit
+  这类前端、官方 `HttpAgent` 不用认识 TracePilot 的事件就能显示和驱动调查。
 - **MCP 服务器**：同一套工具注册表开放给 Claude Code、Cursor 等编码 Agent（Streamable HTTP + stdio），全部只读；
   项目级令牌只存哈希，工作台一键给出客户端配置。
 - **修复简报**：把完成的调查整理成交给编码 Agent 的 Markdown（工作台复制、REST、MCP 的 `get_fix_brief` 与 `fix_issue`），
@@ -503,6 +505,8 @@ pnpm --silent --filter @trace-pilot/server mcp         # MCP 的 stdio 入口（
 | `POST`  | `/api/v1/projects/:projectId/tokens`       | 创建 MCP 令牌（明文只返回这一次）                        |
 | `POST`  | `/api/v1/issues/:issueId/investigations`   | 开始调查（进行中则复用）                                 |
 | `GET`   | `/api/v1/investigations/:runId/events`     | SSE 事件流，支持 Last-Event-ID                           |
+| `GET`   | `/api/v1/investigations/:runId/ag-ui`      | 同一次调查的 AG-UI 事件流，可从任意事件续传              |
+| `POST`  | `/api/v1/ag-ui`                            | AG-UI Agent 端点：`RunAgentInput`（threadId = Issue id） |
 | `POST`  | `/api/v1/investigations/:runId/cancel`     | 取消调查                                                 |
 | `POST`  | `/api/v1/issues/:issueId/diagnoses`        | 单次诊断（对照组）                                       |
 | `GET`   | `/api/v1/projects/:projectId/performance`  | Web Vital 分位数                                         |

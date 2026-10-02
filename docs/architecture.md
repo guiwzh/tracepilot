@@ -20,6 +20,7 @@ flowchart LR
   Maps --> Tools
   Tools <--> Agent[排障 Agent 循环]
   Agent -- 事件日志 + SSE --> Dashboard
+  Agent -- AG-UI 事件 --> AGUI[AG-UI 前端<br/>CopilotKit 等]
   Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
   MCP <--> Coder[编码 Agent<br/>Claude Code / Cursor]
   Agent -- 修复简报 --> Coder
@@ -34,7 +35,8 @@ flowchart LR
 Issue 的回归、恶化与告警见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)，告警顺带调查见
 [ADR 0011](decisions/0011-alert-triggered-investigations.md)；TracePilot 不改代码，调查整理成修复简报交给编码 Agent，见
 [ADR 0012](decisions/0012-fix-brief.md)。SDK 给自家后端的请求加 W3C `traceparent`，前端事件和后端链路共用一个 trace id，见
-[ADR 0013](decisions/0013-trace-context-propagation.md)。
+[ADR 0013](decisions/0013-trace-context-propagation.md)。调查的事件流在出口上投影成 AG-UI 标准事件，见
+[ADR 0014](decisions/0014-ag-ui-projection.md)。
 
 ## 工作区边界
 

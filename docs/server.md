@@ -1168,7 +1168,8 @@ buildDiagnosisContext（取证据、裁剪、脱敏）→ 证据哈希查缓存 
 | `investigation/service.ts`     | `InvestigationService`：发起（人或告警）、并发闸门、总超时、取消、关闭、错误归类、结束回调                        |
 | `investigation/store.ts`       | `InvestigationStore`：运行记录、事件日志、seq、文本合并、发布订阅                                                 |
 | `investigation/fixBrief.ts`    | 修复简报：由完成的调查和它的事件日志生成交给编码 Agent 的 Markdown（10.17）                                       |
-| `routes/investigations.ts`     | REST 接口与 SSE 事件流                                                                                            |
+| `investigation/agui.ts`        | `AgUiEncoder`：把事件日志投影成 AG-UI 1.0 的标准事件（10.18）                                                     |
+| `routes/investigations.ts`     | REST 接口、SSE 事件流（工作台用的领域事件、AG-UI 事件）与 AG-UI 的 Agent 端点                                     |
 
 `investigate()` 不认识 HTTP 和数据库表：它拿到一个 `ModelClient`、一个工具上下文和一个 `emit` 回调，把发生的每件事交给
 `emit`。模型客户端是接口，真实模型、离线脚本和测试替身都实现它，循环因此能在没有密钥时被完整测试（依赖注入，和「组件
@@ -1631,7 +1632,10 @@ SSE 基于普通 HTTP，浏览器的 `EventSource` 自带断线重连，并在�
    订阅之前」产生的事件 → 冲出缓冲。每条消息按 seq 去重，不大于已发送的直接跳过，所以既不漏也不重。当前 SQLite 查询是
    同步的，这个窗口实际为零；换成异步数据库后这个顺序就是必需的。
 6. 每 15 秒写一行注释 `: keep-alive`：长时间没有数据的连接可能被代理或负载均衡当作空闲连接断开。
-7. 发出终止事件后关闭连接。浏览器关页面或断网时清理心跳和订阅——调查本身不受影响，继续在后台跑。
+7. 发出终止事件后关闭连接。浏览器关页面或断网时清理心跳和订阅——调查本身不受影响，继续在后台跑。断开要听**响应**的 `close`：
+   请求对象的 `close` 在请求体读完时就会触发，带请求体的 POST（10.18 的 AG-UI 端点）会在第一批事件之后被当成断开。
+
+AG-UI 的两个出口（10.18）用的是同一个推送函数，只是把每条记录编码成 AG-UI 事件。
 
 线上的报文（节选，同一次离线调查）：
 
@@ -1768,6 +1772,44 @@ TracePilot 不改代码（[ADR 0012](decisions/0012-fix-brief.md)）。一次调
   换行加「## How to proceed」就能伪造出一节新的指示；
 - 标题里不放 Issue 标题（它也是遥测），只放 Issue 的短 id。
 
+### 10.18 AG-UI：给通用的 Agent 前端
+
+工作台读的是 TracePilot 自己的事件。AG-UI（Agent–User Interaction Protocol）1.0 是 Agent 与前端之间的事件协议，
+CopilotKit 这类前端按它显示消息、工具调用和状态。`investigation/agui.ts` 把事件日志投影成 AG-UI 事件，决策见
+[ADR 0014](decisions/0014-ag-ui-projection.md)。事件日志仍是唯一的事实来源，工作台不变。
+
+| 事件日志          | AG-UI                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| `run.started`     | `RUN_STARTED`（`threadId` 是 Issue id，`protocolVersion` 1.0）+ `STATE_SNAPSHOT`（初始共享状态）           |
+| `step.started`    | 上一轮的 `STEP_FINISHED` + `STEP_STARTED`（`step 1`、`step 2`……）                                          |
+| `text.delta`      | 这段旁白的第一块先 `TEXT_MESSAGE_START`（assistant），之后 `TEXT_MESSAGE_CONTENT`                          |
+| `tool.called`     | 先收尾这段旁白（`TEXT_MESSAGE_END`），再 `TOOL_CALL_START`（挂在这一轮的旁白下）、`TOOL_CALL_ARGS`、`_END` |
+| `tool.completed`  | `TOOL_CALL_RESULT`（`metadata.tracepilot` 带成败、是否截断、耗时）                                         |
+| `report.rejected` | `STATE_DELTA`：把驳回原因追加到 `/rejections`                                                              |
+| `run.completed`   | 收尾 → `STATE_DELTA`（状态、报告、用量）→ `RUN_FINISHED`（outcome `success`，`result` 是报告）             |
+| `run.cancelled`   | 收尾 → `STATE_DELTA` → `RUN_FINISHED`（outcome `cancelled`）                                               |
+| `run.failed`      | 收尾 → `STATE_DELTA`（含错误）→ `RUN_ERROR`（`code` 是错误类型）                                           |
+
+共享状态：`{ issueId, runId, engine, model, status, rejections, report, usage, error }`。协议没有「证据核验」这样的概念，
+报告（每条证据带 `verified`）放在状态里，正是协议给领域数据留的位置。用量按协议的 `TokenUsage` 写在结束事件上。
+
+编码器有状态（哪段旁白、哪一轮还开着），但只取决于日志本身：从头重放同一份日志得到同样的事件序列。
+
+```text
+GET  /api/v1/investigations/:runId/ag-ui   回放并续传一次调查。事件 id 是「seq.序号」，Last-Event-ID 或 ?after= 续传；
+                                           总是从头编码、跳过已经发过的，所以从一条记录的中间断开也能正好接上。
+                                           已结束且续传位置之后没有事件 → 204。
+POST /api/v1/ag-ui                         Agent 端点：收 RunAgentInput（按官方 Schema 校验，threadId 是 Issue id），
+                                           发起或接上进行中的调查，推送它的事件。400 / 404 / 429 同发起调查。
+```
+
+- SSE 只写 `id` 和 `data`：AG-UI 的 SSE 约定里没有 `event` 字段，`EventSource` 的 `onmessage` 才收得到；官方客户端也只读
+  `data` 行。
+- `runId` 由服务端生成：同一个 Issue 只跑一个调查，接上别人发起的那次时没法用请求里的 runId（官方客户端接受这一点）。
+- 断开连接不取消调查（与工作台一致），取消走 `/cancel`。
+- 测试用官方实现验收：每个事件过 `@ag-ui/core` 的 Schema；`@ag-ui/client` 的 `HttpAgent` 消费合成的日志和真实的
+  `POST /api/v1/ag-ui`，它会校验事件顺序（结束前消息、工具调用、轮次都要收尾），再把事件应用成消息和共享状态。
+
 ## 11. 诊断评测
 
 `pnpm evaluate:agent` 在 12 个带标注的虚构事故上对比四种引擎：规则（单次、确定性，没有模型时的基线）、离线脚本驱动的
@@ -1898,13 +1940,15 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 | `GET`    | `/api/v1/investigations/:runId/fix-brief`      | 200 修复简报（含 `markdown`）                                     | 404 `INVESTIGATION_NOT_FOUND`；409 `INVESTIGATION_NOT_COMPLETED`                                                   |
 | `GET`    | `/api/v1/issues/:issueId/fix-brief`            | 200 最近一次完成的调查的修复简报                                  | 404 `NO_COMPLETED_INVESTIGATION`                                                                                   |
 | `GET`    | `/api/v1/investigations/:runId/events`         | 200 `text/event-stream`                                           | 204 已结束且没有新事件；404                                                                                        |
+| `GET`    | `/api/v1/investigations/:runId/ag-ui`          | 200 `text/event-stream`，AG-UI 事件（10.18）                      | 204 已结束且没有新事件；404                                                                                        |
+| `POST`   | `/api/v1/ag-ui`                                | 200 `text/event-stream`，发起或接上调查并推送 AG-UI 事件          | 400 `INVALID_RUN_AGENT_INPUT`；404 `ISSUE_NOT_FOUND`；429 `INVESTIGATIONS_BUSY`                                    |
 
 按项目列出 Issue 和 Release 的两个接口不检查项目是否存在，项目不存在时返回空列表。请求体与响应的类型定义在
 `packages/shared/src/types.ts` 与 `schemas.ts`，前后端共用。
 
 ## 14. 测试
 
-服务端 186 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 191 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
 | 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1927,6 +1971,7 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 | `investigation/investigation.test.ts` |   10 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、失败请求附上后端 trace 且报告点名它、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `investigation/fixBrief.test.ts`      |    4 | 围栏比内容里最长的反引号还长；代码位置（被引用的在前）、嫌疑提交、核验状态；伪造的标题和模型照抄的「## How to proceed」都出不了代码块；没完成的调查不出简报                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `investigation/agui.test.ts`          |    5 | 每个 AG-UI 事件过官方 Schema、事件顺序（旁白收尾后才调工具、结束前收尾）；官方 HttpAgent 消费合成的日志并得到消息、工具调用与共享状态；取消与失败的结局；续传位置的写法；HttpAgent 经 `POST /api/v1/ag-ui` 驱动一次真实调查，GET 回放与之一致、从记录中间续传不重不漏、发完 204；非法输入 400 与不存在的 Issue 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `mcp/mcp.test.ts`                     |    7 | 用官方 SDK 的客户端：工具清单由 Agent 注册表生成且全部只读、从 Issue 列表一路查到出错行源码和嫌疑提交、参数错误由同一个校验返回、提示词模板、令牌只看自己的项目且不泄露别的 Issue 是否存在、缺失/无效/吊销的令牌被拒且列表不含明文；stdio 子进程提供同样的 12 个工具、只读连接拒绝写入、结构版本不符拒绝打开；完成一次调查后 get_fix_brief 给出含出错行源码和嫌疑提交的简报、两个提示词模板                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
