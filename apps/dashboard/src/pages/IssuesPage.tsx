@@ -16,7 +16,7 @@ import { Chart, type ChartOption } from '../components/Chart';
 import { PageHeader } from '../components/PageHeader';
 import { Sparkline } from '../components/Sparkline';
 import { ErrorState, EmptyState, LoadingState } from '../components/States';
-import { IssueStatusBadge, LevelMark } from '../components/Status';
+import { IssueStatusBadge, IssueSubstatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { usePreferences } from '../stores/preferences';
 import { formatNumber, relativeTime } from '../utils/format';
@@ -419,7 +419,10 @@ export function IssuesPage() {
                     </small>
                   </span>
                 </span>
-                <IssueStatusBadge status={issue.status} />
+                <span className="status-cell">
+                  <IssueStatusBadge status={issue.status} />
+                  <IssueSubstatusBadge substatus={issue.substatus} />
+                </span>
                 <span className="numeric-cell">{formatNumber(issue.eventCount)}</span>
                 <span className="numeric-cell">{formatNumber(issue.userCount)}</span>
                 <Sparkline values={issue.trend ?? []} />

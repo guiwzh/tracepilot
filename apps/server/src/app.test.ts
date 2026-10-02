@@ -48,6 +48,7 @@ beforeEach(async () => {
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
     repositoryRoot: null,
+    dashboardUrl: 'http://localhost:4173',
   };
   app = await buildApp({ config, logger: false });
 });
@@ -1233,5 +1234,176 @@ describe('ingest protection', () => {
       }),
     );
     expect(response.statusCode).toBe(403);
+  });
+});
+
+describe('issue lifecycle and alerts', () => {
+  /** 本地起一个 HTTP 服务当通知渠道，记下收到的每个请求体。 */
+  async function webhookReceiver() {
+    const { createServer } = await import('node:http');
+    const bodies: string[] = [];
+    const server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk: Buffer) => (body += chunk.toString()));
+      request.on('end', () => {
+        bodies.push(body);
+        response.end('ok');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    return {
+      url: `http://127.0.0.1:${port}/hook`,
+      bodies,
+      close: () => new Promise((resolve) => server.close(resolve)),
+    };
+  }
+
+  function createRule(payload: Record<string, unknown>) {
+    return app.inject({
+      method: 'POST',
+      url: '/api/v1/projects/demo-project/alert-rules',
+      payload: { name: 'On call', triggers: ['new_issue', 'regression'], ...payload },
+    });
+  }
+
+  it('validates rules, masks channel credentials and supports mute, test and delete', async () => {
+    const receiver = await webhookReceiver();
+    try {
+      const wrongHost = await createRule({
+        channel: { type: 'slack', url: 'https://example.com/services/T0/B0/x' },
+      });
+      expect(wrongHost.statusCode).toBe(400);
+      expect(wrongHost.json().message).toBe('channel.url: Use a Slack incoming webhook URL.');
+      expect(
+        (await createRule({ triggers: [], channel: { type: 'webhook', url: receiver.url } }))
+          .statusCode,
+      ).toBe(400);
+
+      const created = await createRule({
+        channel: { type: 'webhook', url: `${receiver.url}?token=abc`, secret: 'shh-secret' },
+      });
+      expect(created.statusCode).toBe(201);
+      const rule = created.json();
+      expect(rule).toMatchObject({
+        enabled: true,
+        minLevel: 'error',
+        intervalMinutes: 60,
+        channel: { type: 'webhook', target: `${new URL(receiver.url).origin}/…`, signed: true },
+      });
+      // 地址里的 token 和签名密钥都不出现在任何响应里。
+      const listed = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/demo-project/alert-rules',
+      });
+      expect(listed.body).not.toContain('token=abc');
+      expect(listed.body).not.toContain('shh-secret');
+
+      const mutedUntil = Date.now() + 3_600_000;
+      const muted = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/alert-rules/${rule.id}`,
+        payload: { mutedUntil },
+      });
+      expect(muted.json()).toMatchObject({ mutedUntil, name: 'On call' });
+      expect(
+        (await app.inject({ method: 'PATCH', url: `/api/v1/alert-rules/${rule.id}`, payload: {} }))
+          .statusCode,
+      ).toBe(400);
+
+      const test = await app.inject({ method: 'POST', url: `/api/v1/alert-rules/${rule.id}/test` });
+      expect(test.json()).toEqual({ ok: true, status: 200, error: null });
+      expect(JSON.parse(receiver.bodies[0]!)).toMatchObject({ trigger: 'test' });
+      const deliveries = await app.inject({
+        method: 'GET',
+        url: '/api/v1/projects/demo-project/alert-deliveries',
+      });
+      expect(deliveries.json().items[0]).toMatchObject({
+        trigger: 'test',
+        status: 'sent',
+        ruleName: 'On call',
+      });
+
+      expect(
+        (await app.inject({ method: 'DELETE', url: `/api/v1/alert-rules/${rule.id}` })).statusCode,
+      ).toBe(204);
+      expect(
+        (await app.inject({ method: 'DELETE', url: `/api/v1/alert-rules/${rule.id}` })).statusCode,
+      ).toBe(404);
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/v1/projects/nope/alert-rules' })).statusCode,
+      ).toBe(404);
+    } finally {
+      await receiver.close();
+    }
+  });
+
+  it('alerts on a new issue and a regression straight from ingestion', async () => {
+    const receiver = await webhookReceiver();
+    try {
+      expect(
+        (await createRule({ channel: { type: 'webhook', url: receiver.url } })).statusCode,
+      ).toBe(201);
+      expect((await send(event('alert-1', '10000001'))).statusCode).toBe(202);
+      // 分发在接入之后异步进行：等它送达。
+      await expect.poll(() => receiver.bodies.length, { timeout: 3_000 }).toBe(1);
+      const issueId = JSON.parse(receiver.bodies[0]!).issue.id as string;
+      expect(JSON.parse(receiver.bodies[0]!)).toMatchObject({ trigger: 'new_issue' });
+
+      // 忽略到恶化为止、再标记解决：状态变更都在时间线上；之后的新事件是回归。
+      const ignored = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/issues/${issueId}/status`,
+        payload: { status: 'ignored', untilEscalating: true },
+      });
+      expect(ignored.json()).toEqual({
+        id: issueId,
+        status: 'ignored',
+        substatus: 'until_escalating',
+      });
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/issues/${issueId}/status`,
+        payload: { status: 'resolved' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect((await send(event('alert-2', '10000002'))).statusCode).toBe(202);
+      const detail = (await app.inject({ method: 'GET', url: `/api/v1/issues/${issueId}` })).json();
+      expect(detail).toMatchObject({ status: 'unresolved', substatus: 'regressed' });
+
+      const activity = await app.inject({
+        method: 'GET',
+        url: `/api/v1/issues/${issueId}/activity`,
+      });
+      expect(activity.json().items.map((item: { kind: string }) => item.kind)).toEqual([
+        'regressed',
+        'status_changed',
+        'status_changed',
+        'created',
+      ]);
+      // 回归落在同一个 Issue 一小时的去重窗口里（和 Sentry 的 action interval 一样按 Issue 计，不分触发条件）：
+      // 记为 interval，不再发。
+      await expect
+        .poll(
+          async () =>
+            (
+              await app.inject({
+                method: 'GET',
+                url: '/api/v1/projects/demo-project/alert-deliveries',
+              })
+            )
+              .json()
+              .items.map(
+                (item: { trigger: string; status: string }) => `${item.trigger}:${item.status}`,
+              ),
+          { timeout: 3_000 },
+        )
+        .toEqual(['regression:suppressed', 'new_issue:sent']);
+      expect(
+        (await app.inject({ method: 'GET', url: '/api/v1/issues/nope/activity' })).statusCode,
+      ).toBe(404);
+    } finally {
+      await receiver.close();
+    }
   });
 });

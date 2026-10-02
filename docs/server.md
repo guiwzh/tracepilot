@@ -35,9 +35,10 @@ apps/server/
 │   ├── routes/                  HTTP 层：取参数、校验、决定状态码
 │   │   ├── events.ts            POST /envelopes：授权 → 入站过滤 → 限流 → 接入；text/plain 解析器只在这个封装作用域里生效
 │   │   ├── settings.ts          项目设置（入站过滤、限流）与上报去向统计
-│   │   └── tokens.ts            MCP 客户端用的只读 API 令牌：创建、列出、吊销
+│   │   ├── tokens.ts            MCP 客户端用的只读 API 令牌：创建、列出、吊销
+│   │   ├── alerts.ts            告警规则、测试发送、通知记录
 │   │   ├── projects.ts          项目、Release、项目概览、性能
-│   │   ├── issues.ts            Issue 列表、详情、事件样本、处理状态
+│   │   ├── issues.ts            Issue 列表、详情、事件样本、处理状态、生命周期时间线、合并
 │   │   ├── sourcemaps.ts        Source Map 上传（multipart）与列表
 │   │   ├── diagnosis.ts         单次诊断（评测里的对照组）
 │   │   └── investigations.ts    调查：发起、查询、取消、SSE 事件流
@@ -47,6 +48,10 @@ apps/server/
 │   │   ├── sourcemaps.ts        map 校验与保存、按 Debug ID 或版本 + 文件名找 map、逐帧还原、回填、源码片段
 │   │   ├── sourceMapCache.ts    已解析 map 的 LRU 缓存：借出与归还、手动释放 WebAssembly 内存
 │   │   ├── issues.ts            Issue 合并
+│   │   ├── lifecycle.ts         Issue 状态与细分（回归、恶化、忽略到恶化为止）、活动记录
+│   │   ├── escalation.ts        恶化检测：最近一小时 vs 它自己过去 7 天的常态
+│   │   ├── alerts.ts            告警规则与分发器（事务性发件箱、去重、静默、重试）
+│   │   ├── alertChannels.ts     通用 Webhook、Slack、飞书、钉钉的消息格式、签名与回执判断
 │   │   ├── apiTokens.ts         API 令牌：只存 SHA-256、按哈希认出项目
 │   │   ├── repository.ts        只读 git：按版本读文件、搜代码、版本间提交、blame、diff
 │   │   ├── inboundFilters.ts    入站过滤：浏览器扩展、爬虫、localhost、错误消息、版本
@@ -175,6 +180,7 @@ flowchart LR
 | `INGEST_RATE_LIMIT_PER_MINUTE` | `6000`                                   | 每个项目每分钟最多接收的事件数（项目设置可单独调）；`0` 表示不限                       |
 | `SPIKE_PROTECTION`             | 开启（只有 `false` 关闭）                | 突增保护的总开关；关闭时项目设置里的开关不起作用                                       |
 | `REPOSITORY_ROOT`              | `apps/server/.tracepilot/repos`          | 被监控应用的 git 仓库放在 `<这里>/<项目 id>`，代码类工具只读它；空字符串关闭代码类工具 |
+| `DASHBOARD_URL`                | `http://localhost:4173`                  | 工作台的地址，告警消息里的链接指向它                                                   |
 | `EVAL_JUDGE_API_URL`           | 同 `MODEL_API_URL`                       | 只用于评测：LLM 裁判的端点，指向另一家服务商时裁判与被测模型不同源                     |
 | `EVAL_JUDGE_API_KEY`           | 同 `MODEL_API_KEY`                       | 只用于评测：LLM 裁判的密钥                                                             |
 | `EVAL_JUDGE_MODEL`             | 同 `MODEL_NAME`                          | 只用于评测：LLM 裁判的模型                                                             |
@@ -220,8 +226,10 @@ flowchart LR
 
 1. `investigations.shutdown()`：以 `shutdown` 为原因中止所有进行中的调查，用 `Promise.allSettled` 等它们都写完终止事件
    （`run.failed`，错误码 `SERVER_SHUTDOWN`）；
-2. 关闭 SQLite；
-3. 释放 Source Map 缓存：解析结果在 WebAssembly 内存里，垃圾回收管不到。
+2. 停止告警分发器，等正在进行的这一轮结束；还没发出的通知留在库里，下次启动接着发（6.10）；
+3. 写完内存里的上报去向计数；
+4. 关闭 SQLite；
+5. 释放 Source Map 缓存：解析结果在 WebAssembly 内存里，垃圾回收管不到。
 
 顺序不能反，调查写终止事件还要用数据库。`index.ts` 在收到 SIGTERM（部署平台停止实例）或 SIGINT（Ctrl+C）时调用
 `app.close()`，成功后以 0 退出；退出过程中再收到一次信号，立即以 1 强制退出。缺了这一步，进程被直接结束，调查记录会
@@ -261,13 +269,17 @@ erDiagram
   investigation_runs ||--o{ investigation_events : "事件日志"
   projects ||--o{ ingest_outcomes : "上报去向"
   projects ||--o{ api_tokens : "MCP 令牌"
+  issues ||--o{ issue_activity : "生命周期"
+  projects ||--o{ alert_rules : "告警规则"
+  alert_rules ||--o{ alert_deliveries : "通知"
+  issues |o--o{ alert_deliveries : "issue_id（可空）"
 ```
 
 | 表                     | 一行是什么                                     | 键与约束                                                                               |
 | ---------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `projects`             | 一个接入 SDK 的前端应用                        | `dsn_key` 唯一；`settings_json` 由迁移 5 添加                                          |
 | `releases`             | 应用的一个发布版本，map 按它上传、按它回退查找 | `UNIQUE(project_id, version)`                                                          |
-| `issues`               | 按指纹聚合出的一类问题，列表页的一行           | `fingerprint` 记建 Issue 时的指纹；`resolved_at` 由迁移 2 添加                         |
+| `issues`               | 按指纹聚合出的一类问题，列表页的一行           | `fingerprint` 记建 Issue 时的指纹；`resolved_at` 由迁移 2、`substatus` 由迁移 7 添加   |
 | `issue_fingerprints`   | 一个指向 Issue 的指纹，一个 Issue 可以有多个   | 主键 `(project_id, fingerprint)`；由迁移 3 添加                                        |
 | `events`               | 一次具体发生，也就是一条浏览器上报             | `issue_id`、`release_id` 可空                                                          |
 | `source_maps`          | 一份已上传 map 的登记，文件本体在磁盘上        | 唯一键 `(release_id, minified_file, COALESCE(debug_id, ''))`；`debug_id` 由迁移 4 添加 |
@@ -276,6 +288,9 @@ erDiagram
 | `investigation_events` | 调查中发生的一件事                             | 主键 `(run_id, seq)`                                                                   |
 | `ingest_outcomes`      | 一个项目一小时里某种去向的上报数               | 主键 `(project_id, hour, outcome, reason)`；由迁移 5 添加                              |
 | `api_tokens`           | 一个项目的只读 API 令牌（MCP 用）              | `token_hash` 唯一（只存 SHA-256）；由迁移 6 添加                                       |
+| `issue_activity`       | Issue 的一次生命周期变化，也是告警的发件箱     | 自增 `id`；`processed` 标记告警是否处理过；由迁移 7 添加                               |
+| `alert_rules`          | 一条告警规则：触发条件、级别、渠道、去重、静默 | 渠道的地址和密钥存在 `channel_json`，接口不回显；由迁移 7 添加                         |
+| `alert_deliveries`     | 一次通知（含被静默、去重而没有发出的）         | `status` 为 pending / sent / failed / suppressed；由迁移 7 添加                        |
 
 `events` 是最大的表，各列的含义：
 
@@ -305,17 +320,24 @@ erDiagram
 
 ### 5.3 索引
 
-| 索引                                       | 服务于                                        |
-| ------------------------------------------ | --------------------------------------------- |
-| `issues(project_id, last_seen_at)`         | Issue 列表：按项目筛选、按最后出现时间排序    |
-| `events(issue_id, created_at)`             | 某个 Issue 最近的事件、趋势                   |
-| `events(release_id)`                       | 上传 map 后回填某个版本的事件                 |
-| `events(created_at)`                       | 概览按时间窗口统计                            |
-| `events(issue_id, user_id)`                | 接入时判定「该用户是否已在这个 Issue 出现过」 |
-| `diagnoses(issue_id, created_at)`          | 诊断历史                                      |
-| `investigation_runs(issue_id, started_at)` | 调查历史、找进行中的调查                      |
-| `issue_fingerprints(issue_id)`             | 合并时迁移某个 Issue 的全部指纹               |
-| `source_maps(debug_id)`                    | 还原时按 Debug ID 找 map                      |
+| 索引                                                         | 服务于                                        |
+| ------------------------------------------------------------ | --------------------------------------------- |
+| `issues(project_id, last_seen_at)`                           | Issue 列表：按项目筛选、按最后出现时间排序    |
+| `events(issue_id, created_at)`                               | 某个 Issue 最近的事件、趋势                   |
+| `events(release_id)`                                         | 上传 map 后回填某个版本的事件                 |
+| `events(created_at)`                                         | 概览按时间窗口统计                            |
+| `events(issue_id, user_id)`                                  | 接入时判定「该用户是否已在这个 Issue 出现过」 |
+| `diagnoses(issue_id, created_at)`                            | 诊断历史                                      |
+| `investigation_runs(issue_id, started_at)`                   | 调查历史、找进行中的调查                      |
+| `issue_fingerprints(issue_id)`                               | 合并时迁移某个 Issue 的全部指纹               |
+| `source_maps(debug_id)`                                      | 还原时按 Debug ID 找 map                      |
+| `issue_activity(issue_id, id)`                               | Issue 详情的生命周期时间线                    |
+| `issue_activity(id) WHERE processed = 0`                     | 告警分发找待处理的记录（部分索引）            |
+| `alert_rules(project_id, created_at)`                        | 规则列表、分发时取项目的规则                  |
+| `alert_deliveries(next_attempt_at) WHERE status = 'pending'` | 找到期要发（重试）的通知（部分索引）          |
+| `alert_deliveries(rule_id, issue_id, created_at)`            | 去重：这条规则最近是否通知过这个 Issue        |
+| `alert_deliveries(rule_id, created_at)`                      | 每条规则每小时的上限                          |
+| `alert_deliveries(project_id, created_at)`                   | 设置页的通知记录                              |
 
 唯一约束和主键本身也带索引：`projects(dsn_key)` 用于接入时找项目，`issue_fingerprints(project_id, fingerprint)` 用于归并，
 `source_maps(release_id, minified_file, …)` 用于按版本 + 文件名找 map，`diagnoses(issue_id, input_hash)` 用于诊断缓存，
@@ -378,6 +400,20 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    description: 'issue lifecycle and alerts',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE issues ADD COLUMN substatus TEXT;
+        ALTER TABLE issues ADD COLUMN substatus_at INTEGER;
+        CREATE TABLE issue_activity (id INTEGER PRIMARY KEY AUTOINCREMENT, …, processed INTEGER NOT NULL DEFAULT 0, …);
+        CREATE INDEX issue_activity_pending ON issue_activity(id) WHERE processed = 0;
+        CREATE TABLE alert_rules (…);
+        CREATE TABLE alert_deliveries (…);
+        …
+      `);
+    },
+  },
 ];
 ```
 
@@ -398,6 +434,8 @@ export const MIGRATIONS: readonly Migration[] = [
 8. 5 号迁移给 `projects` 加上 `settings_json`（入站过滤、限流的项目设置，NULL 表示全部用默认值），新建按小时汇总上报去向的
    `ingest_outcomes`（见 6.9）。
 9. 6 号迁移新建 `api_tokens`：MCP 客户端用的只读令牌，只存 SHA-256（见 10.15）。
+10. 7 号迁移给 `issues` 加上 `substatus`、`substatus_at`，新建 `issue_activity`、`alert_rules`、`alert_deliveries`（见 6.10）。
+    已有的 Issue 没有细分状态，也没有活动记录：时间线从升级之后开始。
 
 ## 6. 接入管线
 
@@ -598,25 +636,25 @@ Cannot read properties of undefined (reading 'total') — order {id}
    同时计算新旧两个哈希的做法。自定义指纹不走这一步，自定义正是为了改变聚合结果；
 3. 找到就更新这个 Issue，找不到就新建 Issue 并登记指纹。
 
-更新用一条 UPDATE：
+更新之前先读出它的状态和解决时间，判断这个事件是不是让它回归了（`@regressed`），再用一条 UPDATE：
 
 ```sql
 UPDATE issues SET
   first_seen_at = MIN(first_seen_at, @timestamp),
   last_seen_at = MAX(last_seen_at, @timestamp),
   title = CASE WHEN @timestamp >= last_seen_at THEN @title ELSE title END,
-  status = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
-    THEN 'unresolved' ELSE status END,
-  resolved_at = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
-    THEN NULL ELSE resolved_at END
+  status = CASE WHEN @regressed THEN 'unresolved' ELSE status END,
+  resolved_at = CASE WHEN @regressed THEN NULL ELSE resolved_at END,
+  substatus = CASE WHEN @regressed THEN 'regressed' ELSE substatus END,
+  substatus_at = CASE WHEN @regressed THEN @receivedAt ELSE substatus_at END
 WHERE id = @id
 ```
 
-- `SET` 右边读到的都是更新之前的旧值，所以几个 `CASE` 判断的是同一个旧状态。
 - **出现时间**取最早和最晚：事件乱序到达（重试、beacon）也不会把时间改错。只有不早于已知最晚一次的事件才改写标题。
-- **回归**：已解决的 Issue 又发生了新事件——发生时间晚于标记解决的时间——重新打开为 unresolved。只看发生时间，所以
-  解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）不会把它重新打开。已忽略的 Issue 保持忽略。
-  标记解决的时间由 `PATCH /issues/:issueId/status` 写入。
+- **回归**：已解决的 Issue 又发生了新事件——发生时间晚于标记解决的时间——重新打开为 unresolved，细分状态记为
+  regressed。只看发生时间，所以解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）不会把它重新打开。
+  已忽略的 Issue 保持忽略。标记解决的时间由 `PATCH /issues/:issueId/status` 写入。
+- 新建和回归各写一条活动记录（`issue_activity`），与 Issue 的变化在同一个事务里，告警从那里取（6.10）。
 - 查找、更新和新建都在接入事务里；SQLite 同一时刻只有一个写事务，不会有两个请求同时为同一个指纹建 Issue。
 
 **合并**（`POST /api/v1/issues/:issueId/merge`，工作台的 Issue 列表可以勾选后合并）：聚合算法再好也会把同一个问题拆开
@@ -681,6 +719,102 @@ DSN Key 写在浏览器代码里，不是密钥：任何人都能拿它往这个
 GET /api/v1/projects/:projectId/settings      → { settings, serverDefaults }
 PUT /api/v1/projects/:projectId/settings      ← 完整的 settings（整份替换，不定义部分更新的合并规则）
 GET /api/v1/projects/:projectId/ingest-stats  → { accepted, filtered, rateLimited, hourly }（先写完内存里的计数）
+```
+
+### 6.10 Issue 生命周期与告警
+
+决策见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)。
+
+**状态与细分**（`services/lifecycle.ts`，参照 Sentry 的 substatus）：
+
+| status       | substatus          | 含义                                 | 由谁设置    |
+| ------------ | ------------------ | ------------------------------------ | ----------- |
+| `unresolved` | —                  | 正在发生                             | 新建；人    |
+| `unresolved` | `regressed`        | 标记解决之后又出现                   | 接入（6.7） |
+| `unresolved` | `escalating`       | 最近一小时的事件量远超它自己的常态   | 恶化检测    |
+| `resolved`   | —                  | 已解决；之后发生的事件触发回归       | 人          |
+| `ignored`    | —                  | 永久忽略：不回归、不恶化、不告警     | 人          |
+| `ignored`    | `until_escalating` | 忽略到它恶化为止，恶化时自动重新打开 | 人          |
+
+人改状态时细分状态清除（看过了，「刚回归」「正在恶化」的提示完成了使命）。每次变化写一条 `issue_activity`：新建、回归在
+接入事务里写入，恶化由恶化检测写入，状态变更、合并由人的操作写入。Issue 详情的 Lifecycle 面板按时间列出它们。
+
+**恶化检测**（`services/escalation.ts`）：接入之后（响应已经返回）对这一批涉及的 Issue 检查一遍，每个 Issue 每分钟最多一次。
+
+```text
+最近一小时的事件数 ≥ max(20, ⌈5 × 过去 7 天（不含最近一小时）平均每小时事件数⌉)
+```
+
+- 只看未解决且还没标为恶化的、以及忽略到恶化为止的；已解决的再出现走回归，永久忽略的不管；
+- 出现不到 24 小时的不判断：没有基线，任何量都像突增，而它们已经有新 Issue 告警；
+- 两次计数都走 `events(issue_id, created_at)` 索引；先数最近一小时，不到 20 就不必再数 7 天；
+- 以 Issue 自己的历史为基线，和 Sentry 的 escalating 同一思路：每小时 2 个涨到 40 个是事故，每小时 500 个涨到 520 个
+  不是。Sentry 用过去几周的数据做逐日预测，这里简化成一个倍数：好解释、好测，对有明显昼夜周期的问题不够精细（倍数取 5
+  留出了余量）。
+
+**告警分发**（`services/alerts.ts`）是一个事务性发件箱（transactional outbox）：
+
+```mermaid
+flowchart LR
+  ingest["接入事务"] -->|新建 / 回归| activity[("issue_activity<br/>processed = 0")]
+  escalation["恶化检测"] -->|恶化| activity
+  activity -->|"每 5 秒一轮，接入后立即补一轮"| match["匹配规则：触发条件、级别下限"]
+  match -->|"静默 / 去重 / 每小时上限"| suppressed[("alert_deliveries<br/>suppressed")]
+  match --> pending[("alert_deliveries<br/>pending")]
+  pending -->|"2xx，且飞书、钉钉的 code 为 0"| sent["sent"]
+  pending -->|"失败：30 秒起指数退避，最多 5 次"| failed["failed"]
+```
+
+- 要发的通知先和业务数据一起落库，再由后台发出：Issue 变了就一定有通知，进程崩溃也不丢（重启后接着发）；发通知的网络
+  请求不拖慢接入，也不在数据库事务里等待。代价是晚几秒，以及至少一次投递——发送成功但还没来得及记下就崩溃了，重启后会
+  再发一次，接收方可以按 `x-tracepilot-delivery` 去重。
+- 活动记录写入时先查项目有没有启用的规则订阅了它（`json_each` 展开规则的触发条件）：有才进入「待处理」，没有就直接标为
+  已处理。没有配置告警的项目，每个新 Issue 只多写一行时间线，不多一轮分发；之后才建的规则不追溯之前的变化。
+- 恶化检查和「立即补一轮」都在响应返回之后的下一轮事件循环里做，不算进接入请求的耗时；分发器和恶化检查的语句只编译一次。
+  同机对照见[性能报告](reports/performance.md)。
+- 同一时间只有一轮在处理；接入后的「立即补一轮」在当前这一轮结束后执行，不会并发地把同一条通知发两次。
+- **规则**：触发条件（新 Issue、回归、恶化）、级别下限（error > warning > info）、渠道、去重间隔、静默。
+- **去重**：同一条规则对同一个 Issue 在间隔内（默认 60 分钟）只通知一次，不分触发条件——和 Sentry 的 action interval 相同。
+  一个 Issue 在解决与回归之间来回跳，不会刷屏。
+- **静默**：规则静默到某个时间（发版、维护窗口）；Issue 级别的静默就是忽略。
+- **每小时上限**：一条规则每小时最多 20 条，一次发布引入几十个新 Issue 时超出的记为 `rate_limited`。
+- 被抑制的也记一行（原因 `muted`、`interval`、`rate_limited`；规则在通知发出前被停用时为 `disabled`），设置页的通知记录
+  答得上「为什么没收到」。
+- 超过一小时还没处理的活动记录不再告警：告警说的是「现在」，别的进程（种子脚本）写入的旧记录也因此不会告警。
+
+**渠道**（`services/alertChannels.ts`）：
+
+| 渠道         | 接受的地址                                                      | 格式          | 签名（可选）                                                                                                 |
+| ------------ | --------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------ |
+| 通用 Webhook | 任意 http(s)                                                    | JSON          | `x-tracepilot-signature: sha256=HMAC-SHA256(secret, "<时间戳>.<请求体>")`，时间戳在 `x-tracepilot-timestamp` |
+| Slack        | `https://hooks.slack.com/services/…`                            | text + blocks | 无，地址本身就是凭据                                                                                         |
+| 飞书         | `https://open.feishu.cn`、`open.larksuite.com` 的 `bot/v2/hook` | 消息卡片      | 请求体里的 `timestamp`（秒）和 `sign` = Base64(HMAC-SHA256(密钥 = "时间戳\n密钥", 内容为空))                 |
+| 钉钉         | `https://oapi.dingtalk.com/robot/send?access_token=…`           | markdown      | 查询参数 `timestamp`（毫秒）和 `sign` = URL 编码的 Base64(HMAC-SHA256(密钥, "时间戳\n密钥"))                 |
+
+通用 Webhook 签名的是「时间戳.请求体」（和 Stripe 相同）：接收方用同一个密钥验签，并拒绝时间戳太旧的请求，防止截获的请求
+被重放。飞书和钉钉出错时（例如签名不对）HTTP 状态码照样是 200，错误在响应体的 `code` / `errcode` 里，只看状态码会把失败
+当成成功。
+
+**安全**：
+
+- 告警内容里有用户能控制的文本：错误消息来自浏览器，任何拿到 DSN 的人都能伪造上报。Slack 的 `<!channel>`、飞书卡片里的
+  `<at id=all></at>` 会 @所有人，所以尖括号和 `&` 一律转义成实体；Markdown 的 `[文字](链接)` 能把钓鱼地址伪装成可点的链接，
+  所以 `](` 之间插入零宽空格把它拆开——和排障 Agent 把遥测当不可信数据是同一个原则。
+- 服务端会向配置的地址发请求（SSRF 的入口）。Slack、飞书、钉钉只接受官方域名；通用 Webhook 接受任意地址，而管理接口没有
+  鉴权（本地 MVP），能打开工作台的人就能让服务端向内网地址发 POST。不跟随重定向（`redirect: manual`）、5 秒超时、响应体
+  只读 2 KB。部署到公网之前要给管理接口加鉴权，并给 Webhook 的目标加允许列表。
+- 渠道地址和签名密钥是凭据，存在本地库里（签名要用原文）。接口只返回打了码的地址和「是否签名」，所以改渠道要删掉重建。
+
+接口：
+
+```text
+GET    /api/v1/projects/:projectId/alert-rules       → { items }（渠道地址打码）
+POST   /api/v1/projects/:projectId/alert-rules       ← { name, triggers, minLevel?, intervalMinutes?, channel }
+PATCH  /api/v1/alert-rules/:ruleId                   ← { name?, enabled?, triggers?, minLevel?, intervalMinutes?, mutedUntil? }
+DELETE /api/v1/alert-rules/:ruleId
+POST   /api/v1/alert-rules/:ruleId/test              → { ok, status, error }：立即发一条示例告警，不经过发件箱
+GET    /api/v1/projects/:projectId/alert-deliveries  → { items }（最近 20 条，含被抑制的）
+GET    /api/v1/issues/:issueId/activity              → { items }（生命周期时间线）
 ```
 
 ## 7. Source Map
@@ -881,8 +1015,10 @@ sequenceDiagram
   三个维度的分布，各取数量最多的 8 项。分布的 SQL 表达式只由代码里固定调用传入，从不接受 HTTP 参数。
 - `GET /api/v1/issues/:issueId/events?limit=`：最近的事件，新的在前，默认 50、最多 200。Issue 不存在时返回 404，而不是一个
   让人误以为「没有事件」的空列表。
-- `PATCH /api/v1/issues/:issueId/status`：`unresolved`、`resolved` 或 `ignored`。标记为已解决时写入 `resolved_at`（回归
-  判断的基准），改成其他状态时清空。一条 UPDATE 同时完成「是否存在」和「修改」：受影响 0 行即 404。
+- `PATCH /api/v1/issues/:issueId/status`：`{ status, untilEscalating? }`，状态为 `unresolved`、`resolved` 或 `ignored`；
+  `ignored` 加上 `untilEscalating: true` 是「忽略到恶化为止」。标记为已解决时写入 `resolved_at`（回归判断的基准），改成其他
+  状态时清空；细分状态随之清除，并写一条 `status_changed` 活动记录（6.10）。返回 `{ id, status, substatus }`。
+- `GET /api/v1/issues/:issueId/activity`：生命周期时间线，新的在前。
 - `POST /api/v1/issues/:issueId/merge`：把 `issueIds` 里的 Issue 合并进路径里的这个（最多 50 个，同一项目），见 6.7。
   返回合并后的标题、事件数和影响用户数。
 
@@ -1605,70 +1741,81 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 
 ## 13. API 一览
 
-| 方法     | 路径                                       | 成功                                                              | 其他状态码                                                                                                         |
-| -------- | ------------------------------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `GET`    | `/health`                                  | 200 `{ status, service, time }`                                   |                                                                                                                    |
-| `POST`   | `/api/v1/envelopes`                        | 202 `{ accepted, duplicates, metricUpdates, filtered, issueIds }` | 400 `INVALID_ENVELOPE` 或非法 JSON；403 `INVALID_DSN`、`PROJECT_DSN_MISMATCH`；413；429 `RATE_LIMITED`             |
-| `GET`    | `/api/v1/projects`                         | 200 `{ items }`                                                   |                                                                                                                    |
-| `POST`   | `/api/v1/projects`                         | 201 项目（含 `dsnKey`）                                           | 400 `INVALID_PROJECT`                                                                                              |
-| `GET`    | `/api/v1/projects/:projectId/overview`     | 200                                                               | 404 `PROJECT_NOT_FOUND`                                                                                            |
-| `GET`    | `/api/v1/projects/:projectId/performance`  | 200                                                               | 404 `PROJECT_NOT_FOUND`                                                                                            |
-| `GET`    | `/api/v1/projects/:projectId/releases`     | 200 `{ items }`                                                   |                                                                                                                    |
-| `GET`    | `/api/v1/projects/:projectId/settings`     | 200 `{ settings, serverDefaults }`                                | 404 `PROJECT_NOT_FOUND`                                                                                            |
-| `PUT`    | `/api/v1/projects/:projectId/settings`     | 200 `{ settings, serverDefaults }`                                | 400 `INVALID_SETTINGS`；404 `PROJECT_NOT_FOUND`                                                                    |
-| `GET`    | `/api/v1/projects/:projectId/ingest-stats` | 200 上报去向（`?hours=`，默认 24，最多 168）                      | 404 `PROJECT_NOT_FOUND`                                                                                            |
-| `GET`    | `/api/v1/projects/:projectId/tokens`       | 200 `{ items }`（不含明文和哈希）                                 | 404 `PROJECT_NOT_FOUND`                                                                                            |
-| `POST`   | `/api/v1/projects/:projectId/tokens`       | 201 令牌（含只出现这一次的 `token`）                              | 400 `INVALID_TOKEN_REQUEST`；404 `PROJECT_NOT_FOUND`                                                               |
-| `DELETE` | `/api/v1/tokens/:tokenId`                  | 204                                                               | 404 `TOKEN_NOT_FOUND`                                                                                              |
-| `POST`   | `/mcp`                                     | MCP 的 JSON-RPC 响应（Streamable HTTP，无状态）                   | 401 令牌缺失或无效；GET、DELETE 返回 405                                                                           |
-| `POST`   | `/api/v1/projects/:projectId/releases`     | 201 Release                                                       | 400 `INVALID_RELEASE`；404 `PROJECT_NOT_FOUND`；409 `RELEASE_EXISTS`                                               |
-| `GET`    | `/api/v1/projects/:projectId/issues`       | 200 `{ items, total, page, pageSize }`                            |                                                                                                                    |
-| `GET`    | `/api/v1/issues/:issueId`                  | 200 Issue 详情                                                    | 404 `ISSUE_NOT_FOUND`                                                                                              |
-| `GET`    | `/api/v1/issues/:issueId/events`           | 200 `{ items }`                                                   | 404 `ISSUE_NOT_FOUND`                                                                                              |
-| `PATCH`  | `/api/v1/issues/:issueId/status`           | 200 `{ id, status }`                                              | 400 `INVALID_ISSUE_STATUS`；404 `ISSUE_NOT_FOUND`                                                                  |
-| `POST`   | `/api/v1/issues/:issueId/merge`            | 200 `{ id, title, merged, eventCount, userCount }`                | 400 `INVALID_MERGE`；404 `ISSUE_NOT_FOUND`；409 `DIFFERENT_PROJECT`、`INVESTIGATION_RUNNING`                       |
-| `GET`    | `/api/v1/releases/:releaseId/source-maps`  | 200 `{ items }`                                                   | 404 `RELEASE_NOT_FOUND`                                                                                            |
-| `POST`   | `/api/v1/releases/:releaseId/source-maps`  | 201 map 登记（含 `debugId`）                                      | 400 `SOURCE_MAP_REQUIRED`、`MINIFIED_FILE_REQUIRED`、`INVALID_SOURCE_MAP`；404；413；415 `INVALID_SOURCE_MAP_FILE` |
-| `GET`    | `/api/v1/issues/:issueId/diagnoses`        | 200 `{ items }`                                                   | 404 `ISSUE_NOT_FOUND`                                                                                              |
-| `POST`   | `/api/v1/issues/:issueId/diagnoses`        | 201 诊断（含 `cached`）                                           | 400 `INVALID_DIAGNOSIS_REQUEST`；404；502 `DIAGNOSIS_FAILED`                                                       |
-| `GET`    | `/api/v1/diagnoses/:diagnosisId`           | 200                                                               | 404 `DIAGNOSIS_NOT_FOUND`                                                                                          |
-| `POST`   | `/api/v1/issues/:issueId/investigations`   | 201 新的运行；200 进行中的那次                                    | 404 `ISSUE_NOT_FOUND`；429 `INVESTIGATIONS_BUSY`                                                                   |
-| `GET`    | `/api/v1/issues/:issueId/investigations`   | 200 `{ items }`（最近 20 次）                                     |                                                                                                                    |
-| `GET`    | `/api/v1/investigations/:runId`            | 200 运行记录（含报告）                                            | 404 `INVESTIGATION_NOT_FOUND`                                                                                      |
-| `POST`   | `/api/v1/investigations/:runId/cancel`     | 202 `{ status: 'cancelling' }`                                    | 404；409 `INVESTIGATION_NOT_RUNNING`                                                                               |
-| `GET`    | `/api/v1/investigations/:runId/events`     | 200 `text/event-stream`                                           | 204 已结束且没有新事件；404                                                                                        |
+| 方法     | 路径                                           | 成功                                                              | 其他状态码                                                                                                         |
+| -------- | ---------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/health`                                      | 200 `{ status, service, time }`                                   |                                                                                                                    |
+| `POST`   | `/api/v1/envelopes`                            | 202 `{ accepted, duplicates, metricUpdates, filtered, issueIds }` | 400 `INVALID_ENVELOPE` 或非法 JSON；403 `INVALID_DSN`、`PROJECT_DSN_MISMATCH`；413；429 `RATE_LIMITED`             |
+| `GET`    | `/api/v1/projects`                             | 200 `{ items }`                                                   |                                                                                                                    |
+| `POST`   | `/api/v1/projects`                             | 201 项目（含 `dsnKey`）                                           | 400 `INVALID_PROJECT`                                                                                              |
+| `GET`    | `/api/v1/projects/:projectId/overview`         | 200                                                               | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `GET`    | `/api/v1/projects/:projectId/performance`      | 200                                                               | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `GET`    | `/api/v1/projects/:projectId/releases`         | 200 `{ items }`                                                   |                                                                                                                    |
+| `GET`    | `/api/v1/projects/:projectId/settings`         | 200 `{ settings, serverDefaults }`                                | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `PUT`    | `/api/v1/projects/:projectId/settings`         | 200 `{ settings, serverDefaults }`                                | 400 `INVALID_SETTINGS`；404 `PROJECT_NOT_FOUND`                                                                    |
+| `GET`    | `/api/v1/projects/:projectId/ingest-stats`     | 200 上报去向（`?hours=`，默认 24，最多 168）                      | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `GET`    | `/api/v1/projects/:projectId/tokens`           | 200 `{ items }`（不含明文和哈希）                                 | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `POST`   | `/api/v1/projects/:projectId/tokens`           | 201 令牌（含只出现这一次的 `token`）                              | 400 `INVALID_TOKEN_REQUEST`；404 `PROJECT_NOT_FOUND`                                                               |
+| `DELETE` | `/api/v1/tokens/:tokenId`                      | 204                                                               | 404 `TOKEN_NOT_FOUND`                                                                                              |
+| `POST`   | `/mcp`                                         | MCP 的 JSON-RPC 响应（Streamable HTTP，无状态）                   | 401 令牌缺失或无效；GET、DELETE 返回 405                                                                           |
+| `POST`   | `/api/v1/projects/:projectId/releases`         | 201 Release                                                       | 400 `INVALID_RELEASE`；404 `PROJECT_NOT_FOUND`；409 `RELEASE_EXISTS`                                               |
+| `GET`    | `/api/v1/projects/:projectId/issues`           | 200 `{ items, total, page, pageSize }`                            |                                                                                                                    |
+| `GET`    | `/api/v1/issues/:issueId`                      | 200 Issue 详情                                                    | 404 `ISSUE_NOT_FOUND`                                                                                              |
+| `GET`    | `/api/v1/issues/:issueId/events`               | 200 `{ items }`                                                   | 404 `ISSUE_NOT_FOUND`                                                                                              |
+| `PATCH`  | `/api/v1/issues/:issueId/status`               | 200 `{ id, status, substatus }`                                   | 400 `INVALID_ISSUE_STATUS`；404 `ISSUE_NOT_FOUND`                                                                  |
+| `GET`    | `/api/v1/issues/:issueId/activity`             | 200 `{ items }`                                                   | 404 `ISSUE_NOT_FOUND`                                                                                              |
+| `GET`    | `/api/v1/projects/:projectId/alert-rules`      | 200 `{ items }`（渠道地址打码）                                   | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `POST`   | `/api/v1/projects/:projectId/alert-rules`      | 201 规则                                                          | 400 `INVALID_ALERT_RULE`；404 `PROJECT_NOT_FOUND`；409 `TOO_MANY_RULES`                                            |
+| `PATCH`  | `/api/v1/alert-rules/:ruleId`                  | 200 规则                                                          | 400 `INVALID_ALERT_RULE`；404 `ALERT_RULE_NOT_FOUND`                                                               |
+| `DELETE` | `/api/v1/alert-rules/:ruleId`                  | 204                                                               | 404 `ALERT_RULE_NOT_FOUND`                                                                                         |
+| `POST`   | `/api/v1/alert-rules/:ruleId/test`             | 200 `{ ok, status, error }`（渠道不通也是 200）                   | 404 `ALERT_RULE_NOT_FOUND`                                                                                         |
+| `GET`    | `/api/v1/projects/:projectId/alert-deliveries` | 200 `{ items }`（`?limit=`，默认 20，最多 100）                   | 404 `PROJECT_NOT_FOUND`                                                                                            |
+| `POST`   | `/api/v1/issues/:issueId/merge`                | 200 `{ id, title, merged, eventCount, userCount }`                | 400 `INVALID_MERGE`；404 `ISSUE_NOT_FOUND`；409 `DIFFERENT_PROJECT`、`INVESTIGATION_RUNNING`                       |
+| `GET`    | `/api/v1/releases/:releaseId/source-maps`      | 200 `{ items }`                                                   | 404 `RELEASE_NOT_FOUND`                                                                                            |
+| `POST`   | `/api/v1/releases/:releaseId/source-maps`      | 201 map 登记（含 `debugId`）                                      | 400 `SOURCE_MAP_REQUIRED`、`MINIFIED_FILE_REQUIRED`、`INVALID_SOURCE_MAP`；404；413；415 `INVALID_SOURCE_MAP_FILE` |
+| `GET`    | `/api/v1/issues/:issueId/diagnoses`            | 200 `{ items }`                                                   | 404 `ISSUE_NOT_FOUND`                                                                                              |
+| `POST`   | `/api/v1/issues/:issueId/diagnoses`            | 201 诊断（含 `cached`）                                           | 400 `INVALID_DIAGNOSIS_REQUEST`；404；502 `DIAGNOSIS_FAILED`                                                       |
+| `GET`    | `/api/v1/diagnoses/:diagnosisId`               | 200                                                               | 404 `DIAGNOSIS_NOT_FOUND`                                                                                          |
+| `POST`   | `/api/v1/issues/:issueId/investigations`       | 201 新的运行；200 进行中的那次                                    | 404 `ISSUE_NOT_FOUND`；429 `INVESTIGATIONS_BUSY`                                                                   |
+| `GET`    | `/api/v1/issues/:issueId/investigations`       | 200 `{ items }`（最近 20 次）                                     |                                                                                                                    |
+| `GET`    | `/api/v1/investigations/:runId`                | 200 运行记录（含报告）                                            | 404 `INVESTIGATION_NOT_FOUND`                                                                                      |
+| `POST`   | `/api/v1/investigations/:runId/cancel`         | 202 `{ status: 'cancelling' }`                                    | 404；409 `INVESTIGATION_NOT_RUNNING`                                                                               |
+| `GET`    | `/api/v1/investigations/:runId/events`         | 200 `text/event-stream`                                           | 204 已结束且没有新事件；404                                                                                        |
 
 按项目列出 Issue 和 Release 的两个接口不检查项目是否存在，项目不存在时返回空列表。请求体与响应的类型定义在
 `packages/shared/src/types.ts` 与 `schemas.ts`，前后端共用。
 
 ## 14. 测试
 
-服务端 151 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 173 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
-| 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------- | ---: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.test.ts`                         |   39 | 经完整路由栈：非法输入、聚合与脱敏与幂等、用户去重计数、乱序到达、回归重开与忽略、hash 路由、性能样本不进 Issue、元素归因、概览口径、趋势窗口、浏览器筛选与分布一致、5xx 不外露、`Retry-After` 可读、Web Vitals 覆盖、text/plain、分页夹紧、单次诊断与缓存；Source Map 损坏、字段顺序、文件丢失、带查询参数的帧、重试批次不再还原；聚合：压缩名变了仍是同一个 Issue、版本号配错时按 Debug ID 还原并聚合、升级前的 Issue 继续接收事件、自定义指纹、合并与拒绝合并；接入保护：设置的默认值与整份替换、过滤按原因计数、超限 429 与 Retry-After 且不影响别的项目、突增保护、先验凭据再过滤 |
-| `services/events.test.ts`             |    7 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开（拿不到响应定为 error）、采样率、业务码归并                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `services/inboundFilters.test.ts`     |    6 | 普通错误留下；扩展只看栈顶帧；爬虫（含性能样本）过滤而 HeadlessChrome 不过滤；localhost 按开关；消息与版本的通配符（大小写、特殊字符按字面）；全部关闭                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `services/ingestGuard.test.ts`        |    6 | 令牌桶的突发与 Retry-After、项目之间互不影响、0 表示不限、改限额后重建；突增保护的下限与到分钟末的等待、常态高的项目阈值随之升高、被突增保护拒收不扣令牌                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `services/outcomes.test.ts`           |    2 | 内存里合并、每次写库累加到小时行、没有上报的小时补 0；已删除项目的计数跳过而不让整批回滚                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `services/repository.test.ts`         |    6 | 只在配置的根目录下找仓库、按版本读文件、拒绝越界路径与伪装成选项的提交号、字面搜索（正则字符按字面、限定目录）、map 路径对到仓库文件、版本间提交与 blame 和 diff                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `lib/fingerprint.test.ts`             |    8 | 动态 ID 与哈希归一化、Vite 哈希与普通单词、展示标题、取真正的栈顶帧、失败请求按方法和状态码分开；按源码位置而不是压缩名和行列号聚合、跳过依赖包的帧、自定义指纹                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `db/migrations.test.ts`               |    5 | 新库、引入迁移之前的旧库升级且数据保留（指纹搬进指纹表、已有 map 没有 Debug ID）、每个迁移只跑一次、失败回滚并写明是哪一个、拒绝打开更新的库                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `services/sourcemaps.test.ts`         |   17 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失；Debug ID：读取与校验、版本号对不上仍能找到、同名文件的旧构建保留、找不到时回退、不跨项目、按 Debug ID 回填                                                                                                                                                                                                                                                                                                                                           |
-| `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `investigation/investigation.test.ts` |    9 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                     |
-| `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `mcp/mcp.test.ts`                     |    6 | 用官方 SDK 的客户端：工具清单由 Agent 注册表生成且全部只读、从 Issue 列表一路查到出错行源码和嫌疑提交、参数错误由同一个校验返回、提示词模板、令牌只看自己的项目且不泄露别的 Issue 是否存在、缺失/无效/吊销的令牌被拒且列表不含明文；stdio 子进程提供同样的 11 个工具、只读连接拒绝写入、结构版本不符拒绝打开                                                                                                                                                                                                                                                                           |
-| `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `eval/metrics.test.ts`                |    6 | pass^k 与 pass@k 的教科书数值、非法的试验次数；Cohen's kappa 的完全一致、扣除碰巧一致、没有定义的情况；轨迹指标：重复调用（参数顺序不同也算）、失败调用、被驳回的报告、关键证据工具召回                                                                                                                                                                                                                                                                                                                                                                                                |
-| `eval/replay.test.ts`                 |    4 | 离线脚本现场录制再回放：同一时钟下行为与工具输出都一致、换了时钟只提示漂移、改动引用的原文被发现、录制轮数不够时报错；recordings/ 下的真实模型录制逐个回放（没有录制时这一组为空）                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------- | ---: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.test.ts`                         |   41 | 经完整路由栈：非法输入、聚合与脱敏与幂等、用户去重计数、乱序到达、回归重开与忽略、hash 路由、性能样本不进 Issue、元素归因、概览口径、趋势窗口、浏览器筛选与分布一致、5xx 不外露、`Retry-After` 可读、Web Vitals 覆盖、text/plain、分页夹紧、单次诊断与缓存；Source Map 损坏、字段顺序、文件丢失、带查询参数的帧、重试批次不再还原；聚合：压缩名变了仍是同一个 Issue、版本号配错时按 Debug ID 还原并聚合、升级前的 Issue 继续接收事件、自定义指纹、合并与拒绝合并；接入保护：设置的默认值与整份替换、过滤按原因计数、超限 429 与 Retry-After 且不影响别的项目、突增保护、先验凭据再过滤；告警：规则校验（官方域名）、渠道凭据不出现在任何响应里、静默、测试发送、删除；接入直接触发新 Issue 告警、忽略到恶化为止与回归写进时间线、回归落在去重窗口内被抑制 |
+| `services/events.test.ts`             |    7 | 时钟校正的三种情况、DSN 不符的错误类型、失败请求按方法和状态码分开（拿不到响应定为 error）、采样率、业务码归并                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `services/inboundFilters.test.ts`     |    6 | 普通错误留下；扩展只看栈顶帧；爬虫（含性能样本）过滤而 HeadlessChrome 不过滤；localhost 按开关；消息与版本的通配符（大小写、特殊字符按字面）；全部关闭                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `services/ingestGuard.test.ts`        |    6 | 令牌桶的突发与 Retry-After、项目之间互不影响、0 表示不限、改限额后重建；突增保护的下限与到分钟末的等待、常态高的项目阈值随之升高、被突增保护拒收不扣令牌                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `services/outcomes.test.ts`           |    2 | 内存里合并、每次写库累加到小时行、没有上报的小时补 0；已删除项目的计数跳过而不让整批回滚                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `services/lifecycle.test.ts`          |    6 | 新建与回归在接入事务里记录、迟到的事件不算回归、只有新建/回归/恶化待告警；人改状态清除细分并记住「忽略到恶化为止」；恶化阈值（5 倍、下限 20）、只触发一次且每分钟最多检查一次、按 Issue 自己的常态判断、重新打开「忽略到恶化为止」的而不动永久忽略和出现不到一天的                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `services/alertChannels.test.ts`      |    7 | 通用 Webhook 的签名可验、飞书与钉钉按各自文档的算法签名、转义 @所有人 的写法；飞书钉钉 200 里的错误码、渠道地址打码、只接受官方机器人域名                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `services/alerts.test.ts`             |    7 | 本地 HTTP 服务当渠道：新 Issue 变成一次签名的 Webhook 且不重发；去重窗口与静默被抑制并记下原因；按触发条件和级别匹配；失败退避重试、用完次数标记失败；每小时上限与过期记录；发出前被停用的规则；测试发送                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `services/repository.test.ts`         |    6 | 只在配置的根目录下找仓库、按版本读文件、拒绝越界路径与伪装成选项的提交号、字面搜索（正则字符按字面、限定目录）、map 路径对到仓库文件、版本间提交与 blame 和 diff                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `lib/fingerprint.test.ts`             |    8 | 动态 ID 与哈希归一化、Vite 哈希与普通单词、展示标题、取真正的栈顶帧、失败请求按方法和状态码分开；按源码位置而不是压缩名和行列号聚合、跳过依赖包的帧、自定义指纹                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `db/migrations.test.ts`               |    5 | 新库、引入迁移之前的旧库升级且数据保留（指纹搬进指纹表、已有 map 没有 Debug ID）、每个迁移只跑一次、失败回滚并写明是哪一个、拒绝打开更新的库                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `services/sourcemaps.test.ts`         |   17 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失；Debug ID：读取与校验、版本号对不上仍能找到、同名文件的旧构建保留、找不到时回退、不跨项目、按 Debug ID 回填                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `investigation/investigation.test.ts` |    9 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `mcp/mcp.test.ts`                     |    6 | 用官方 SDK 的客户端：工具清单由 Agent 注册表生成且全部只读、从 Issue 列表一路查到出错行源码和嫌疑提交、参数错误由同一个校验返回、提示词模板、令牌只看自己的项目且不泄露别的 Issue 是否存在、缺失/无效/吊销的令牌被拒且列表不含明文；stdio 子进程提供同样的 11 个工具、只读连接拒绝写入、结构版本不符拒绝打开                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `eval/metrics.test.ts`                |    6 | pass^k 与 pass@k 的教科书数值、非法的试验次数；Cohen's kappa 的完全一致、扣除碰巧一致、没有定义的情况；轨迹指标：重复调用（参数顺序不同也算）、失败调用、被驳回的报告、关键证据工具召回                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `eval/replay.test.ts`                 |    4 | 离线脚本现场录制再回放：同一时钟下行为与工具输出都一致、换了时钟只提示漂移、改动引用的原文被发现、录制轮数不够时报错；recordings/ 下的真实模型录制逐个回放（没有录制时这一组为空）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 跨进程的行为由仓库根目录的 E2E 覆盖：`tests/e2e/tracepilot.spec.ts` 验证调查流式推进并以全部核实的引用结束、调查进行中刷新
-页面接回同一次运行且没有重复步骤、通过 API 上传 map 后新接入的浏览器堆栈被还原；演练场和 SDK 送达两组 E2E 核对服务端最终
+页面接回同一次运行且没有重复步骤、通过 API 上传 map 后新接入的浏览器堆栈被还原、新 Issue 的告警送到测试里起的签名 Webhook
+并出现在设置页的通知记录里；演练场和 SDK 送达两组 E2E 核对服务端最终
 收到的内容。`pnpm smoke:production` 加载构建产物、启动构建后的服务端、检查 `/health` 并验证 SIGTERM 优雅退出。
 
 ## 15. 性能
@@ -1692,7 +1839,7 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 ## 16. 已知限制
 
 - **没有身份认证、租户隔离和数据保留策略**：管理类接口在本地是开放的，CORS 回显任意来源，部署到公网前必须先处理。
-  事件、调查事件、上报去向只增不删。
+  事件、调查事件、上报去向、Issue 活动记录和通知记录只增不删。
 - **DSN Key 不是密钥**：它能挡住配错项目的上报，挡不住有人故意伪造上报。限流（6.9）兜住了伪造上报能造成的最坏程度，
   防伪本身需要签名，当前没有做。
 - **单进程、单写者**：同时进行的调查、SSE 订阅者、Source Map 缓存都在进程内存里，多实例部署需要共享的发布订阅和运行归属。
@@ -1712,6 +1859,10 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
   文件，出现多个同名候选时放弃。
 - **MCP 的鉴权是静态令牌**：MCP 规范里完整的 OAuth 2.1 流程（受保护资源元数据、授权服务器、动态客户端注册）没有实现；
   令牌由同样没有鉴权的管理接口签发，能打开工作台的人就能发令牌。令牌没有过期时间，只能手动吊销。
+- **告警是单进程的简化版**：恶化检测的节流和分发器都在进程里，多实例时要选一个实例分发（或把发件箱换成队列）。恶化阈值是
+  「常态的 5 倍、至少 20 个」，不是 Sentry 那样的逐日预测，对昼夜周期明显的问题不够精细。投递是「至少一次」。渠道只有
+  Webhook、Slack、飞书、钉钉，没有邮件和短信；渠道凭据明文存在本地库里。通用 Webhook 能指向任意地址，管理接口又没有鉴权，
+  部署到公网前要加鉴权和目标允许列表（6.10）。
 - **调查不能跨进程恢复**：进程重启时进行中的调查被标记为 `SERVER_RESTARTED`，需要重新发起。工具超时只是不再等它，工具本身
   不会被中断。
 - **引用核验的边界**：能抓住编造的调用和改写过的原文，抓不住「原文属实但推理错误」。被截断的工具结果不是合法 JSON，只能按

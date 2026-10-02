@@ -2,10 +2,11 @@ import type { FastifyInstance } from 'fastify';
 import { issueStatusSchema, mergeIssuesSchema, updateIssueStatusSchema } from '@trace-pilot/shared';
 import type { TraceDatabase } from '../db/client';
 import { MergeError, mergeIssues } from '../services/issues';
+import { listActivity, setIssueStatus } from '../services/lifecycle';
 import { getIssue, listIssueEvents, listIssues } from '../services/queries';
 
 /**
- * Issue 相关接口：列表（筛选、分页）、详情、事件样本、修改处理状态、合并。
+ * Issue 相关接口：列表（筛选、分页）、详情、事件样本、修改处理状态、生命周期时间线、合并。
  *
  * 一个请求的输入来自三处：
  * - request.params：路径里的变量，例如 /api/v1/issues/:issueId 中的 issueId；
@@ -80,18 +81,28 @@ export function registerIssueRoutes(app: FastifyInstance, database: TraceDatabas
         message: 'Status must be unresolved, resolved, or ignored.',
       });
     }
-    // prepared statement 的占位符确保状态和 ID 不会被解释为 SQL。
-    // 标记为已解决时记下时间：之后发生的新事件会把它重新打开（见 services/events.ts 的 upsertIssue）。
-    const resolvedAt = parsed.data.status === 'resolved' ? Date.now() : null;
-    const result = database.sqlite
-      .prepare('UPDATE issues SET status = ?, resolved_at = ? WHERE id = ?')
-      .run(parsed.data.status, resolvedAt, issueId);
-    // run() 返回受影响的行数；0 行说明没有这个 id 的 Issue。一条 UPDATE 同时完成了
-    // 「是否存在」和「修改」，不需要先查一次。
-    if (result.changes === 0) {
+    // 标记为已解决时记下时间，之后发生的新事件会把它重新打开（回归，见 services/events.ts 的 resolveIssue）；
+    // 选择「忽略到恶化为止」时，恶化会把它重新打开（services/escalation.ts）。细节见 services/lifecycle.ts。
+    const updated = setIssueStatus(
+      database,
+      issueId,
+      parsed.data.status,
+      parsed.data.untilEscalating === true,
+    );
+    if (!updated) {
       return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
     }
-    return { id: issueId, status: parsed.data.status };
+    return updated;
+  });
+
+  // 生命周期时间线：新建、回归、恶化、状态变更、合并。
+  app.get('/api/v1/issues/:issueId/activity', async (request, reply) => {
+    const issueId = stringParam(request.params, 'issueId');
+    const issue = database.sqlite.prepare('SELECT 1 FROM issues WHERE id = ?').get(issueId);
+    if (!issue)
+      return reply.code(404).send({ error: 'ISSUE_NOT_FOUND', message: 'Issue not found.' });
+    const limit = positiveInteger(queryRecord(request.query).limit, 50, 200);
+    return { items: listActivity(database, issueId, limit) };
   });
 
   // 把 body 里列出的 Issue 合并进路径里的这个 Issue，见 services/issues.ts。

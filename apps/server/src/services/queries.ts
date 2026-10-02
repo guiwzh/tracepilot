@@ -44,6 +44,8 @@ function mapIssue(row: Row): Issue {
     fingerprint: String(row.fingerprint),
     title: String(row.title),
     status: row.status as Issue['status'],
+    substatus: (row.substatus as Issue['substatus']) ?? null,
+    substatusAt: row.substatus_at === null || row.substatus_at === undefined ? null : number(row.substatus_at),
     level: row.level as Issue['level'],
     firstSeenAt: number(row.first_seen_at),
     lastSeenAt: number(row.last_seen_at),

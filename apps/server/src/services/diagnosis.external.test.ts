@@ -148,6 +148,7 @@ async function buildModelApp(modelApiUrl: string) {
     ingestRateLimitPerMinute: 6_000,
     spikeProtection: true,
     repositoryRoot: null,
+    dashboardUrl: 'http://localhost:4173',
     modelApiKey: 'test-only-key',
     modelApiUrl,
   };

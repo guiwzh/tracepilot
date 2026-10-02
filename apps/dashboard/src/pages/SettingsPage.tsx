@@ -4,6 +4,7 @@ import { Filter, Gauge, ShieldCheck } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import type { IngestStats, ProjectSettings, ProjectSettingsResponse } from '@trace-pilot/shared';
 import { PageHeader } from '../components/PageHeader';
+import { AlertRules } from '../features/alerts/AlertRules';
 import { McpAccess } from '../features/mcp/McpAccess';
 import { ErrorState, LoadingState } from '../components/States';
 import { api } from '../services/api';
@@ -315,7 +316,7 @@ export function SettingsPage() {
       <PageHeader
         eyebrow="Ingest / protection"
         title="Settings"
-        description="Decide which reports never become issues, and how much one project may send before the server pushes back."
+        description="Decide which reports never become issues, how much one project may send before the server pushes back, and who hears about new, regressed or escalating issues."
       />
       {stats.data && <IngestHealth stats={stats.data} />}
       {settings.isLoading ? (
@@ -331,6 +332,7 @@ export function SettingsPage() {
           onSaved={(value) => setSavedSettings(JSON.stringify(value))}
         />
       ) : null}
+      <AlertRules projectId={projectId} />
       <McpAccess projectId={projectId} />
     </main>
   );

@@ -28,6 +28,7 @@ const config: ServerConfig = {
   ingestRateLimitPerMinute: 6_000,
   spikeProtection: true,
   repositoryRoot: null,
+  dashboardUrl: 'http://localhost:4173',
 };
 
 try {

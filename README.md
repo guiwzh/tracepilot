@@ -233,7 +233,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 268 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 290 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             20 / 20 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；
@@ -279,6 +279,8 @@ flowchart LR
   Agent -- 事件日志 + SSE --> UI
   Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
   MCP <--> Coder[Claude Code / Cursor]
+  Ingest -- 新建 · 回归 · 恶化 --> Alerts[告警发件箱与分发]
+  Alerts --> Chat[Webhook / Slack / 飞书 / 钉钉]
 ```
 
 核心原则：模型不可用时监控仍然可用；每条证据必须指向一次真实的工具调用并经服务端核对；遥测文本
@@ -295,8 +297,10 @@ flowchart LR
 [ADR 0004](docs/decisions/0004-grouping-after-symbolication.md)、
 [ADR 0005](docs/decisions/0005-debug-ids.md)、
 [ADR 0006](docs/decisions/0006-ingest-protection.md)、
-[ADR 0007](docs/decisions/0007-mcp-server.md) 与
-[ADR 0008](docs/decisions/0008-code-and-change-context.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
+[ADR 0007](docs/decisions/0007-mcp-server.md)、
+[ADR 0008](docs/decisions/0008-code-and-change-context.md)、
+[ADR 0009](docs/decisions/0009-evaluation-reliability.md) 与
+[ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)，构建插件见 [vite-plugin.md](docs/vite-plugin.md)。
 
 ## 已实现
 
@@ -314,6 +318,9 @@ flowchart LR
   按编号迁移升级表结构。
 - **接入保护**：按项目的入站过滤（浏览器扩展、爬虫、localhost、消息与版本的通配规则）、令牌桶限流与自适应的突增保护
   （超出返回 429 + `Retry-After`），上报去向按原因计数（内存里累加、定期写库），工作台的 Settings 页可查看和修改。
+- **Issue 生命周期与告警**：回归、恶化（最近一小时对比 Issue 自己过去 7 天的常态）、忽略到恶化为止；新 Issue、回归、
+  恶化通知到通用 Webhook（HMAC 签名）、Slack、飞书、钉钉（按官方算法签名）。事务性发件箱、按 Issue 去重、静默、每小时
+  上限、退避重试，被抑制的通知也记下原因；Issue 详情有生命周期时间线。
 - **调查工作台**：项目、筛选/分页 Issue（可勾选合并）、趋势、影响用户、浏览器/路由/Release 分布、源码堆栈、
   证据链、网络、事件、性能（按版本、路由、浏览器比较，列出 p75 最差的元素）、Release、项目设置与上报去向，
   以及实时调查时间线。
@@ -411,6 +418,16 @@ claude mcp add tracepilot -- node /path/to/tracepilot/apps/server/dist/mcp.js --
 （`readOnlyHint`）；另有提示词模板 `investigate_issue`。
 实现见 [server.md](docs/server.md#1015-mcp把同一套工具开放给编码-agent)，决策见 [ADR 0007](docs/decisions/0007-mcp-server.md)。
 
+### 告警：新 Issue、回归、恶化
+
+在工作台的 **Settings → Alerts** 建规则：什么时候通知（新 Issue、解决之后又出现、最近一小时超过它自己常态的 5 倍）、
+最低级别、通知到哪（通用 Webhook、Slack、飞书、钉钉机器人）、同一个 Issue 多久最多通知一次，以及临时静默。「Test」按钮立即
+发一条示例告警，下面的通知记录连被静默、去重的也列出来，答得上「为什么没收到」。
+
+通知走事务性发件箱：Issue 的变化和待发的通知在同一个事务里落库，后台每 5 秒发一轮、失败退避重试，进程崩溃也不丢。
+错误消息来自浏览器、任何人都能伪造，所以 `<!channel>`、`<at id=all>` 这类 @所有人 的写法和伪装成链接的 Markdown 都会被转义。
+实现见 [server.md](docs/server.md#610-issue-生命周期与告警)，决策见 [ADR 0010](docs/decisions/0010-issue-lifecycle-and-alerts.md)。
+
 ## 常用命令
 
 ```bash
@@ -438,7 +455,10 @@ pnpm --silent --filter @trace-pilot/server mcp         # MCP 的 stdio 入口（
 | `POST`  | `/api/v1/envelopes`                        | 批量事件接入（JSON 或 text/plain）                       |
 | `GET`   | `/api/v1/projects/:projectId/issues`       | 分页与筛选 Issue                                         |
 | `GET`   | `/api/v1/issues/:issueId`                  | Issue 和最新现场                                         |
-| `PATCH` | `/api/v1/issues/:issueId/status`           | 更新处理状态                                             |
+| `PATCH` | `/api/v1/issues/:issueId/status`           | 更新处理状态（可「忽略到恶化为止」）                     |
+| `GET`   | `/api/v1/issues/:issueId/activity`         | 生命周期时间线：新建、回归、恶化、状态变更、合并         |
+| `POST`  | `/api/v1/projects/:projectId/alert-rules`  | 告警规则（Webhook / Slack / 飞书 / 钉钉）                |
+| `POST`  | `/api/v1/alert-rules/:ruleId/test`         | 立即发一条示例告警                                       |
 | `POST`  | `/api/v1/issues/:issueId/merge`            | 合并 Issue                                               |
 | `POST`  | `/api/v1/releases/:releaseId/source-maps`  | 私有 Source Map 上传                                     |
 | `PUT`   | `/api/v1/projects/:projectId/settings`     | 入站过滤与限流设置（整份替换）                           |
@@ -456,9 +476,10 @@ pnpm --silent --filter @trace-pilot/server mcp         # MCP 的 stdio 入口（
 - SDK 发出之前、服务端入库时、发给模型之前各脱敏一次：清理 URL 查询参数与片段（`#/cart` 这样的 hash 路由
   保留路由本身）、Authorization、Cookie、密码、Token、Secret 和 API Key 形态字段。点击 Breadcrumb 不记录容器里的页面文字。
 - 请求体默认不采集；Source Map 目录、SQLite 文件和 `.env` 均被 Git 忽略。
-- 排障 Agent 没有 Shell、文件、Git、浏览器或任何写入工具；源码片段会发给模型服务商，可关闭。
-- **当前是本地单用户 MVP**：没有身份认证、租户隔离、生产限流和数据保留策略。管理类接口在本地是开放的，
-  部署到公网前必须先处理。
+- 排障 Agent 没有 Shell、浏览器或任何写入工具；读代码只能通过三个只读工具，它们以参数数组调用固定的几条 git 读命令
+  （不经过 shell，路径和提交号都经过校验）。源码片段会发给模型服务商，可关闭。
+- **当前是本地单用户 MVP**：没有身份认证、租户隔离和数据保留策略，限流和告警分发都在单个进程里。管理类接口在本地是开放的，
+  告警的通用 Webhook 又能指向任意地址，部署到公网前必须先加鉴权和目标允许列表。
 - Issue 列表为每个 Issue 单独查询趋势桶（语句只编译一次；SQLite 在进程内执行，这比合并成一条查询更快，
   换成网络数据库要改成一条查询），性能查询会把窗口内样本全部读入内存；Source Map 的解析结果常驻服务进程
   内存（按 map 原始大小计上限 32 MB，约合 150 MB 解析后内存）；SQLite 单写者模型掩盖了并发计数的竞态，

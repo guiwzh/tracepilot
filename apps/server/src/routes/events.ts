@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { envelopeSchema, type FilterReason } from '@trace-pilot/shared';
 import type { ServerConfig } from '../config';
 import type { TraceDatabase } from '../db/client';
+import type { AlertDispatcher } from '../services/alerts';
+import type { EscalationDetector } from '../services/escalation';
 import { authorizeEnvelope, IngestError, ingestEnvelope } from '../services/events';
 import { inboundFilter } from '../services/inboundFilters';
 import type { IngestGuard } from '../services/ingestGuard';
@@ -21,8 +23,17 @@ export interface IngestProtection {
 }
 
 /**
+ * 接入之后的告警环节：检查涉及的 Issue 有没有恶化；有 Issue 新建、回归或恶化时让分发器立即处理一轮，
+ * 不必等下一个 5 秒的轮询。app.ts 创建一份。
+ */
+export interface IngestAlerting {
+  escalation: EscalationDetector;
+  dispatcher: AlertDispatcher;
+}
+
+/**
  * 浏览器遥测入口：运行时校验 → 授权 → 入站过滤 → 限流 → Source Map 还原 → 聚合与入库
- * （后两步见 services/events.ts）。
+ * （后两步见 services/events.ts）→ 恶化检查与告警（services/escalation.ts、alerts.ts）。
  *
  * 授权靠 DSN Key：SDK 初始化时配置的公开接入键，服务端据此确认事件属于哪个项目。
  * 它必然出现在浏览器代码里，所以不是密钥——它能挡住配错项目的上报，挡不住有人故意伪造上报。
@@ -32,6 +43,7 @@ export function registerEventRoutes(
   app: FastifyInstance,
   database: TraceDatabase,
   protection: IngestProtection,
+  alerting: IngestAlerting,
 ): void {
   // Fastify 按请求头的 Content-Type 选择「内容解析器」，把原始请求体变成 request.body。
   // 默认的 text/plain 解析器只给出字符串；SDK 却用 text/plain 发送 JSON：它是 CORS 安全列表类型，
@@ -50,7 +62,7 @@ export function registerEventRoutes(
         done(invalidJson(), undefined);
       }
     });
-    registerEnvelopeRoute(scope, database, protection);
+    registerEnvelopeRoute(scope, database, protection, alerting);
   });
 }
 
@@ -58,6 +70,7 @@ function registerEnvelopeRoute(
   app: FastifyInstance,
   database: TraceDatabase,
   { guard, outcomes, config }: IngestProtection,
+  alerting: IngestAlerting,
 ): void {
   app.post('/api/v1/envelopes', async (request, reply) => {
     // request.body 来自网络，必须先通过 Zod 才能作为 EventEnvelope 使用。
@@ -116,7 +129,7 @@ function registerEnvelopeRoute(
 
       // 还原在入库之前、事务之外进行（聚合要用还原后的栈帧）。还原失败或找不到 map 都只是少了原始栈，
       // 事件照常入库：这里绝不能返回 500，否则 SDK 会把已经收下的一批反复重发。
-      const { result, symbolicationFailures } = await ingestEnvelope(database, {
+      const { result, symbolicationFailures, alertsQueued } = await ingestEnvelope(database, {
         ...parsed.data,
         events: kept,
       });
@@ -124,6 +137,16 @@ function registerEnvelopeRoute(
       if (symbolicationFailures > 0) {
         request.log.warn({ failed: symbolicationFailures }, 'source map symbolication failed');
       }
+      // 恶化检查和告警分发都不算进这次请求的耗时：响应先返回，下一轮事件循环再做（服务正在关闭、
+      // 数据库已经关上时只记日志）。恶化检查每个 Issue 每分钟最多一次，是一两次走索引的计数。
+      setImmediate(() => {
+        try {
+          const escalated = alerting.escalation.check(result.issueIds);
+          if (alertsQueued > 0 || escalated.length > 0) alerting.dispatcher.nudge();
+        } catch (error) {
+          request.log.error({ err: error }, 'escalation check failed');
+        }
+      });
       return reply.code(202).send({ ...result, filtered: filteredCount });
     } catch (error) {
       // DSN Key 不存在，或事件声明的项目与 Key 不符：凭据问题，返回 403，SDK 不会重试。

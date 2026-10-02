@@ -81,7 +81,88 @@ export const createReleaseSchema = z.object({
   commitSha: z.string().trim().max(80).optional(),
 });
 
-export const updateIssueStatusSchema = z.object({ status: issueStatusSchema });
+/**
+ * Issue 状态的细分（参照 Sentry 的 substatus）：
+ * - 未解决时：regressed（解决之后又出现）、escalating（事件量远超它自己的常态）；
+ * - 忽略时：until_escalating（忽略到它恶化为止，恶化时自动重新打开并告警）。
+ * 人改状态时清除，表示「看过了」。
+ */
+export const issueSubstatusSchema = z.enum(['regressed', 'escalating', 'until_escalating']);
+
+export const updateIssueStatusSchema = z.object({
+  status: issueStatusSchema,
+  /** 只对 ignored 有意义：忽略到它恶化为止。 */
+  untilEscalating: z.boolean().optional(),
+});
+
+/** 告警的触发条件：新 Issue、回归、恶化。 */
+export const alertTriggerSchema = z.enum(['new_issue', 'regression', 'escalating']);
+
+const url = z.string().trim().max(2_000);
+const signingSecret = z.string().trim().min(1).max(200).optional();
+
+/**
+ * 通知渠道。Slack、飞书、钉钉的机器人地址只接受各自官方的域名：地址本身就是凭据，
+ * 限定域名也避免把服务端变成任意地址的请求代理（SSRF）。通用 Webhook 接受任意 http(s) 地址，
+ * 配了 secret 时请求带 HMAC 签名，接收方据此确认来源。
+ */
+export const alertChannelSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('webhook'),
+    url: url.regex(/^https?:\/\/[^\s/]+/i, 'Use an http(s) URL.'),
+    secret: signingSecret,
+  }),
+  z.object({
+    type: z.literal('slack'),
+    url: url.regex(/^https:\/\/hooks\.slack\.com\/services\//, 'Use a Slack incoming webhook URL.'),
+  }),
+  z.object({
+    type: z.literal('feishu'),
+    url: url.regex(
+      /^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/open-apis\/bot\/v2\/hook\//,
+      'Use a Feishu / Lark custom bot webhook URL.',
+    ),
+    secret: signingSecret,
+  }),
+  z.object({
+    type: z.literal('dingtalk'),
+    url: url.regex(
+      /^https:\/\/oapi\.dingtalk\.com\/robot\/send\?access_token=/,
+      'Use a DingTalk custom robot webhook URL.',
+    ),
+    secret: signingSecret,
+  }),
+]);
+
+const alertRuleFields = {
+  name: z.string().trim().min(1).max(80),
+  triggers: z.array(alertTriggerSchema).min(1).max(3),
+  /** 只对这个级别及以上的 Issue 告警（error > warning > info）。 */
+  minLevel: issueLevelSchema,
+  /** 同一个 Issue 在这段时间内最多通知一次（去重），单位分钟。 */
+  intervalMinutes: z.number().int().min(1).max(10_080),
+};
+
+export const createAlertRuleSchema = z.object({
+  ...alertRuleFields,
+  minLevel: issueLevelSchema.default('error'),
+  intervalMinutes: alertRuleFields.intervalMinutes.default(60),
+  channel: alertChannelSchema,
+});
+
+/** 修改规则。渠道不能改（地址和密钥是凭据，接口不回显），要换渠道就删掉重建。 */
+export const updateAlertRuleSchema = z
+  .object({
+    name: alertRuleFields.name,
+    enabled: z.boolean(),
+    triggers: alertRuleFields.triggers,
+    minLevel: alertRuleFields.minLevel,
+    intervalMinutes: alertRuleFields.intervalMinutes,
+    /** 静默到这个时间（毫秒时间戳）；null 取消静默。 */
+    mutedUntil: z.number().int().positive().nullable(),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, 'Change at least one field.');
 
 /**
  * 项目设置：服务端在接入时按它过滤和限流（PUT 时整份替换）。
@@ -142,6 +223,11 @@ export type Breadcrumb = z.infer<typeof breadcrumbSchema>;
 export type MonitorEvent = z.infer<typeof monitorEventSchema>;
 export type EventEnvelope = z.infer<typeof envelopeSchema>;
 export type IssueStatus = z.infer<typeof issueStatusSchema>;
+export type IssueSubstatus = z.infer<typeof issueSubstatusSchema>;
+export type AlertTrigger = z.infer<typeof alertTriggerSchema>;
+export type AlertChannel = z.infer<typeof alertChannelSchema>;
+export type CreateAlertRule = z.input<typeof createAlertRuleSchema>;
+export type UpdateAlertRule = z.infer<typeof updateAlertRuleSchema>;
 export type IssueLevel = z.infer<typeof issueLevelSchema>;
 export type DiagnosisResult = z.infer<typeof diagnosisResultSchema>;
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;

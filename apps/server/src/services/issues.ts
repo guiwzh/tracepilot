@@ -1,4 +1,5 @@
 import type { TraceDatabase } from '../db/client';
+import { recordActivity } from './lifecycle';
 
 /** 合并被拒绝的原因，路由据此返回 400 / 404 / 409。 */
 export class MergeError extends Error {
@@ -78,7 +79,18 @@ export function mergeIssues(
          WHERE id = ?`,
       )
       .run(...all, ...all, ...all, targetId, targetId, targetId);
+    const sourceTitles = database.sqlite
+      .prepare(`SELECT title FROM issues WHERE id IN (${inSources})`)
+      .all(...sources) as Array<{ title: string }>;
+    // 被合并的 Issue 连同它们自己的活动记录一起删除；目标 Issue 的时间线上记一笔合并了哪些。
     database.sqlite.prepare(`DELETE FROM issues WHERE id IN (${inSources})`).run(...sources);
+    recordActivity(
+      database,
+      { id: targetId, projectId: rows[0]!.project_id },
+      'merged',
+      { merged: sources.length, titles: sourceTitles.map((row) => row.title).slice(0, 10) },
+      Date.now(),
+    );
     const merged = database.sqlite
       .prepare('SELECT title, event_count, user_count FROM issues WHERE id = ?')
       .get(targetId) as { title: string; event_count: number; user_count: number };

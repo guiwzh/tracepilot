@@ -10,6 +10,7 @@ import {
   ExternalLink,
   GitCommitHorizontal,
   Globe2,
+  History,
   MousePointer2,
   Network,
   Route,
@@ -19,17 +20,58 @@ import {
   UserRound,
 } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import type { Breadcrumb } from '@trace-pilot/shared';
+import type { Breadcrumb, IssueActivity, IssueStatus } from '@trace-pilot/shared';
 import { Chart, type ChartOption } from '../components/Chart';
 import { ErrorState, LoadingState } from '../components/States';
 import { InvestigationPanel } from '../features/investigation/InvestigationPanel';
-import { IssueStatusBadge, LevelMark } from '../components/Status';
+import { IssueStatusBadge, IssueSubstatusBadge, LevelMark } from '../components/Status';
 import { api } from '../services/api';
 import { absoluteTime, formatNumber, relativeTime } from '../utils/format';
 import { isFailedRequest, requestOutcome } from '../utils/network';
 
 const tabs = ['overview', 'stack', 'breadcrumbs', 'network', 'events', 'investigation'] as const;
 type Tab = (typeof tabs)[number];
+
+/** 状态选择框的取值：三种状态，外加「忽略到恶化为止」。 */
+type StatusChoice = IssueStatus | 'ignored-until-escalating';
+
+/** 生命周期时间线上的一行：发生了什么，用数据里的细节说清楚。 */
+function describeActivity(item: IssueActivity): string {
+  const data = item.data;
+  const release = typeof data.release === 'string' ? ` in release ${data.release}` : '';
+  switch (item.kind) {
+    case 'created':
+      return `First seen${release}.`;
+    case 'regressed':
+      return `Regressed${release} after it was marked resolved.`;
+    case 'escalating':
+      return `Escalating: ${String(data.recentEvents)} events in the last hour against a usual ${String(data.baselinePerHour)} per hour (threshold ${String(data.threshold)}).${data.reopened ? ' Reopened from ignored.' : ''}`;
+    case 'status_changed':
+      return `Status changed from ${String(data.from)} to ${String(data.to)}${data.substatus === 'until_escalating' ? ' until it escalates' : ''}.`;
+    case 'merged':
+      return `${String(data.merged)} issue${data.merged === 1 ? '' : 's'} merged into this one.`;
+  }
+}
+
+function ActivityTimeline({ items }: { items: IssueActivity[] }) {
+  if (items.length === 0) return <p className="empty-note">No lifecycle changes recorded yet.</p>;
+  return (
+    <ol className="activity-timeline">
+      {items.map((item) => (
+        <li key={item.id} className={`activity-${item.kind}`}>
+          <i />
+          <span>{describeActivity(item)}</span>
+          <time
+            dateTime={new Date(item.createdAt).toISOString()}
+            title={absoluteTime(item.createdAt)}
+          >
+            {relativeTime(item.createdAt)}
+          </time>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 function DistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
   // 分布数据不变时复用 option 对象，避免命令式 ECharts 实例无谓重建。
@@ -154,12 +196,21 @@ export function IssueDetailPage() {
     queryFn: () => api.issueEvents(issueId),
     enabled: activeTab === 'events',
   });
+  const activity = useQuery({
+    queryKey: ['issue-activity', issueId],
+    queryFn: () => api.issueActivity(issueId),
+    enabled: activeTab === 'overview',
+  });
   const update = useMutation({
-    mutationFn: (status: string) => api.updateIssue(issueId, status),
+    mutationFn: (choice: StatusChoice) =>
+      choice === 'ignored-until-escalating'
+        ? api.updateIssue(issueId, 'ignored', true)
+        : api.updateIssue(issueId, choice),
     onSuccess: async () => {
-      // 状态既出现在详情也出现在列表，因此两个 queryKey 都需要失效。
+      // 状态出现在详情、列表和时间线上，三个 queryKey 都需要失效。
       await queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
       await queryClient.invalidateQueries({ queryKey: ['issues', projectId] });
+      await queryClient.invalidateQueries({ queryKey: ['issue-activity', issueId] });
     },
   });
 
@@ -192,6 +243,7 @@ export function IssueDetailPage() {
         <div className="issue-heading">
           <div>
             <IssueStatusBadge status={data.status} />
+            <IssueSubstatusBadge substatus={data.substatus} />
             <span className="issue-key">ISS-{data.id.slice(0, 6).toUpperCase()}</span>
           </div>
           <h1>{data.title}</h1>
@@ -203,13 +255,18 @@ export function IssueDetailPage() {
         <select
           className="status-select"
           aria-label="Change issue status"
-          value={data.status}
+          value={
+            data.status === 'ignored' && data.substatus === 'until_escalating'
+              ? 'ignored-until-escalating'
+              : data.status
+          }
           disabled={update.isPending}
-          onChange={(event) => update.mutate(event.target.value)}
+          onChange={(event) => update.mutate(event.target.value as StatusChoice)}
         >
           <option value="unresolved">Unresolved</option>
           <option value="resolved">Resolved</option>
           <option value="ignored">Ignored</option>
+          <option value="ignored-until-escalating">Ignored until escalating</option>
         </select>
       </header>
 
@@ -302,6 +359,16 @@ export function IssueDetailPage() {
               <DistributionChart data={data.releaseDistribution} />
             </section>
           </div>
+          <section className="panel issue-activity" aria-label="Lifecycle">
+            <header className="panel-title">
+              <div>
+                <History size={14} />
+                <h2>Lifecycle</h2>
+              </div>
+              <small>New · regressed · escalating · status</small>
+            </header>
+            <ActivityTimeline items={activity.data?.items ?? []} />
+          </section>
           <section className="panel source-preview">
             <header className="panel-title">
               <div>

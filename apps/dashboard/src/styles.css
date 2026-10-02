@@ -2848,3 +2848,240 @@ pre {
   gap: 5px;
   white-space: nowrap;
 }
+
+/* 告警规则与通知记录 */
+.alert-rules {
+  margin-top: 18px;
+}
+.pattern-field select {
+  padding: 7px 8px;
+  border: 1px solid var(--line-dark);
+  background: #fff;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.alert-rule-form {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+.alert-triggers {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.alert-triggers legend {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font:
+    500 9px 'DM Mono',
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.alert-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.alert-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.alert-rule-actions small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.alert-rule-list li {
+  flex-wrap: wrap;
+}
+.alert-rule-list li.is-disabled .alert-rule-summary {
+  opacity: 0.55;
+}
+.alert-rule-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.alert-rule-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.alert-rule-switch input {
+  accent-color: var(--signal);
+}
+.alert-rule-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.alert-rule-buttons .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.alert-rule-list .form-error {
+  flex-basis: 100%;
+}
+.alert-test-ok {
+  color: var(--success) !important;
+}
+.alert-test-failed {
+  color: var(--signal) !important;
+}
+.alert-deliveries h3 {
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font:
+    500 9px 'DM Mono',
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.alert-deliveries ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+.alert-deliveries li {
+  padding: 8px 0;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 2px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.alert-deliveries li small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 11px;
+}
+.delivery-what {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+.delivery-what a,
+.delivery-what > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delivery-status {
+  align-self: start;
+  justify-self: start;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  font:
+    500 9px 'DM Mono',
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.delivery-sent {
+  color: var(--success);
+}
+.delivery-failed {
+  color: var(--signal);
+}
+.delivery-pending {
+  color: var(--warning);
+}
+.delivery-suppressed {
+  color: var(--faint);
+}
+@media (max-width: 900px) {
+  .alert-triggers,
+  .alert-rule-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Issue 状态细分与生命周期时间线 */
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.substatus-badge {
+  width: fit-content;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font:
+    500 9px 'DM Mono',
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.substatus-regressed {
+  color: var(--white);
+  background: var(--warning);
+}
+.substatus-escalating {
+  color: var(--white);
+  background: var(--signal);
+}
+.substatus-until_escalating {
+  color: var(--muted);
+  border: 1px solid var(--line-dark);
+}
+.issue-heading > div {
+  flex-wrap: wrap;
+}
+.issue-activity {
+  margin-top: 18px;
+}
+.activity-timeline {
+  margin: 0;
+  padding: 10px 17px 14px;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.activity-timeline li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+.activity-timeline i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-dark);
+}
+.activity-created i {
+  background: var(--teal);
+}
+.activity-regressed i {
+  background: var(--warning);
+}
+.activity-escalating i {
+  background: var(--signal);
+}
+.activity-timeline time {
+  color: var(--muted);
+  font:
+    400 10px 'DM Mono',
+    monospace;
+  white-space: nowrap;
+}
+.empty-note {
+  margin: 0;
+  padding: 12px 17px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}

@@ -29,6 +29,7 @@ const config: ServerConfig = {
   ingestRateLimitPerMinute: 0,
   spikeProtection: false,
   repositoryRoot: null,
+  dashboardUrl: 'http://localhost:4173',
 };
 // 不配置模型密钥、关闭日志：只测接入和查询本身。
 const app = await buildApp({ config, logger: false });

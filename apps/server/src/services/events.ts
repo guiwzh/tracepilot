@@ -14,6 +14,7 @@ import {
   normalizeDisplayTitle,
   requestOutcome,
 } from '../lib/fingerprint';
+import { recordActivity } from './lifecycle';
 import { resolveStack, type ResolvedStack } from './sourcemaps';
 
 /** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
@@ -35,6 +36,8 @@ export interface IngestOutcome {
    * 只是少了原始栈；这个数只用来记日志。
    */
   symbolicationFailures: number;
+  /** 这一批的新建、回归里，有几条活动记录在等待告警（有启用的规则订阅了它）。大于 0 时分发器应尽快处理。 */
+  alertsQueued: number;
 }
 
 /** 接入被拒绝的原因。路由据此返回 403；其余错误按服务端问题处理。 */
@@ -194,17 +197,20 @@ function ensureRelease(database: TraceDatabase, event: MonitorEvent): string {
  *
  * 更新时：
  * - 出现时间取最早和最晚；事件乱序到达时，只有不早于已知最晚一次的事件才改写标题。
- * - 回归：已解决的 Issue 又发生了新事件（发生时间晚于标记解决的时间），重新打开为未解决。
- *   只看发生时间，所以解决之前就发生、只是迟到的事件（例如服务端故障期间积压在 SDK 队列里的）
- *   不会把它重新打开。已忽略的 Issue 保持忽略。
- * - SET 右边读到的都是更新之前的旧值，所以几个 CASE 判断的是同一个旧状态。
+ * - 回归：已解决的 Issue 又发生了新事件（发生时间晚于标记解决的时间），重新打开为未解决，
+ *   substatus 记为 regressed。只看发生时间，所以解决之前就发生、只是迟到的事件（例如服务端故障期间
+ *   积压在 SDK 队列里的）不会把它重新打开。已忽略的 Issue 保持忽略。
  * - 计数（event_count、user_count）从 0 起步，统一由 updateIssueCounters 在事件落库后增量累加。
+ *
+ * 新建和回归各写一条活动记录（services/lifecycle.ts），和 Issue 的变化在同一个事务里，告警从那里取。
+ * 返回 Issue id，以及这次的新建或回归是否有告警规则在等。
  */
 function resolveIssue(
   database: TraceDatabase,
   event: MonitorEvent,
   resolved: ResolvedStack | undefined,
-): string | null {
+  receivedAt: number,
+): { id: string; alertQueued: boolean } | null {
   if (!shouldCreateIssue(event)) return null;
   const { fingerprint, algorithm } = issueFingerprint(event, resolved?.frames);
   const find = database.sqlite.prepare(
@@ -225,20 +231,34 @@ function resolveIssue(
 
   const values = { title: eventTitle(event), level: eventLevel(event), timestamp: event.timestamp };
   if (issueId) {
+    const before = database.sqlite
+      .prepare('SELECT status, resolved_at FROM issues WHERE id = ?')
+      .get(issueId) as { status: string; resolved_at: number | null };
+    const regressed = before.status === 'resolved' && event.timestamp > (before.resolved_at ?? 0);
     database.sqlite
       .prepare(
         `UPDATE issues SET
            first_seen_at = MIN(first_seen_at, @timestamp),
            last_seen_at = MAX(last_seen_at, @timestamp),
            title = CASE WHEN @timestamp >= last_seen_at THEN @title ELSE title END,
-           status = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
-             THEN 'unresolved' ELSE status END,
-           resolved_at = CASE WHEN status = 'resolved' AND @timestamp > COALESCE(resolved_at, 0)
-             THEN NULL ELSE resolved_at END
+           status = CASE WHEN @regressed THEN 'unresolved' ELSE status END,
+           resolved_at = CASE WHEN @regressed THEN NULL ELSE resolved_at END,
+           substatus = CASE WHEN @regressed THEN 'regressed' ELSE substatus END,
+           substatus_at = CASE WHEN @regressed THEN @receivedAt ELSE substatus_at END
          WHERE id = @id`,
       )
-      .run({ ...values, id: issueId });
-    return issueId;
+      // SQLite 没有布尔类型，绑定参数用 1 / 0。
+      .run({ ...values, id: issueId, regressed: regressed ? 1 : 0, receivedAt });
+    const alertQueued =
+      regressed &&
+      recordActivity(
+        database,
+        { id: issueId, projectId: event.projectId },
+        'regressed',
+        { release: event.release, resolvedAt: before.resolved_at },
+        receivedAt,
+      );
+    return { id: issueId, alertQueued };
   }
   const id = randomUUID();
   // issues.fingerprint 记下建 Issue 时的指纹，供搜索和展示；归并只查 issue_fingerprints。
@@ -249,7 +269,14 @@ function resolveIssue(
     )
     .run({ ...values, id, projectId: event.projectId, fingerprint });
   register.run(event.projectId, fingerprint, id, algorithm, event.timestamp);
-  return id;
+  const alertQueued = recordActivity(
+    database,
+    { id, projectId: event.projectId },
+    'created',
+    { release: event.release },
+    receivedAt,
+  );
+  return { id, alertQueued };
 }
 
 function isFirstEventForUser(
@@ -365,6 +392,7 @@ export async function ingestEnvelope(
   let accepted = 0;
   let duplicates = 0;
   let metricUpdates = 0;
+  let alertsQueued = 0;
   const issueIds = new Set<string>();
   // transaction() 把回调包装成一个事务函数：调用时先 BEGIN，回调正常结束则 COMMIT（提交生效），
   // 回调里任何地方抛错则 ROLLBACK（全部撤销），错误继续向外抛给路由处理。
@@ -390,7 +418,9 @@ export async function ingestEnvelope(
       }
 
       const releaseId = ensureRelease(database, event);
-      const issueId = resolveIssue(database, event, resolved);
+      const issue = resolveIssue(database, event, resolved, receivedAt);
+      const issueId = issue?.id ?? null;
+      if (issue?.alertQueued) alertsQueued += 1;
       const userId = event.user?.id ?? event.user?.anonymousId ?? null;
       // 必须在事件落库之前判定，否则会查到本条刚写入的记录。
       const firstSeenForUser = issueId ? isFirstEventForUser(database, issueId, userId) : false;
@@ -428,5 +458,6 @@ export async function ingestEnvelope(
   return {
     result: { accepted, duplicates, metricUpdates, issueIds: [...issueIds] },
     symbolicationFailures,
+    alertsQueued,
   };
 }

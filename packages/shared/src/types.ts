@@ -1,8 +1,11 @@
 import type {
+  AlertChannel,
+  AlertTrigger,
   Breadcrumb,
   DiagnosisResult,
   IssueLevel,
   IssueStatus,
+  IssueSubstatus,
   MonitorEvent,
   ProjectSettings,
 } from './schemas';
@@ -35,6 +38,10 @@ export interface Issue {
   fingerprint: string;
   title: string;
   status: IssueStatus;
+  /** 状态的细分：刚回归、正在恶化、忽略到恶化为止；没有时为 null。见 issueSubstatusSchema。 */
+  substatus?: IssueSubstatus | null;
+  /** substatus 变成当前值的时间。 */
+  substatusAt?: number | null;
   level: IssueLevel;
   firstSeenAt: number;
   lastSeenAt: number;
@@ -198,4 +205,59 @@ export interface ApiToken {
 /** 创建令牌的响应：多了令牌明文，只出现这一次。 */
 export interface CreatedApiToken extends ApiToken {
   token: string;
+}
+
+/**
+ * Issue 的生命周期记录：新建、回归、恶化由接入流程写入，状态变更、合并由人的操作写入。
+ * 前三种同时是告警的来源（services/alerts.ts）。
+ */
+export interface IssueActivity {
+  id: number;
+  kind: 'created' | 'regressed' | 'escalating' | 'status_changed' | 'merged';
+  /** 每种记录的细节：恶化时的事件量与阈值、状态变更前后的值、合并了几个 Issue……  */
+  data: Record<string, unknown>;
+  createdAt: number;
+}
+
+/** 一条告警规则。渠道的地址和密钥是凭据，接口只返回打了码的地址和「是否签名」。 */
+export interface AlertRule {
+  id: string;
+  projectId: string;
+  name: string;
+  enabled: boolean;
+  triggers: AlertTrigger[];
+  minLevel: IssueLevel;
+  channel: { type: AlertChannel['type']; target: string; signed: boolean };
+  intervalMinutes: number;
+  /** 静默到这个时间；null 表示没有静默。 */
+  mutedUntil: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 一次通知。suppressed 表示规则匹配了但没有发出（静默中、去重窗口内、超出每小时上限），
+ * 记下来是为了在界面上看得到「为什么没收到」。
+ */
+export interface AlertDelivery {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  issueId: string | null;
+  issueTitle: string;
+  trigger: AlertTrigger | 'test';
+  status: 'pending' | 'sent' | 'failed' | 'suppressed';
+  /** suppressed 的原因（muted、interval、rate_limited），或最近一次发送失败的原因。 */
+  reason: string | null;
+  attempts: number;
+  createdAt: number;
+  sentAt: number | null;
+}
+
+/** 测试发送的结果：渠道返回了什么。 */
+export interface AlertTestResult {
+  ok: boolean;
+  /** 渠道的 HTTP 状态码；请求没有发出去（超时、连不上）时为 null。 */
+  status: number | null;
+  error: string | null;
 }

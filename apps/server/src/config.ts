@@ -36,6 +36,8 @@ export interface ServerConfig {
    * 找嫌疑提交）只读这里的仓库；null 表示不提供代码上下文。
    */
   repositoryRoot: string | null;
+  /** 工作台的地址，告警消息里的链接指向它。 */
+  dashboardUrl: string;
 }
 
 /** 非负整数；没有设置或不是数字时用默认值（写错的值不应悄悄变成 0，也就是「不限」）。 */
@@ -73,5 +75,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       env.REPOSITORY_ROOT === ''
         ? null
         : resolve(env.REPOSITORY_ROOT ?? resolve(serverRoot, '.tracepilot/repos')),
+    dashboardUrl: env.DASHBOARD_URL || 'http://localhost:4173',
   };
 }

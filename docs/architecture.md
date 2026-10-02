@@ -19,11 +19,15 @@ flowchart LR
   Agent -- 事件日志 + SSE --> Dashboard
   Tools <--> MCP[MCP 服务器<br/>只读 · 项目令牌]
   MCP <--> Coder[编码 Agent<br/>Claude Code / Cursor]
+  Ingest -- 新建 · 回归 · 恶化 --> Outbox[(活动记录<br/>告警发件箱)]
+  Outbox --> Alerts[告警分发<br/>去重 · 静默 · 重试]
+  Alerts --> Chat[Webhook / Slack / 飞书 / 钉钉]
 ```
 
 排障 Agent 的设计与边界见 [ADR 0003](decisions/0003-read-only-investigation-agent.md)，实现见
 [server.md](server.md#10-排障-agent)。同一套只读工具经 MCP 开放给编码 Agent，见
 [ADR 0007](decisions/0007-mcp-server.md)；按版本读代码、找嫌疑提交见 [ADR 0008](decisions/0008-code-and-change-context.md)。
+Issue 的回归、恶化与告警见 [ADR 0010](decisions/0010-issue-lifecycle-and-alerts.md)。
 
 ## 工作区边界
 
@@ -47,5 +51,7 @@ flowchart LR
    保留压缩堆栈、按压缩帧聚合，接入照常返回 202。
 6. 上报方不可信：服务端先按项目过滤、再限流（见 [ADR 0006](decisions/0006-ingest-protection.md)），超出时返回 429 让 SDK
    退避；任何丢弃都按原因计数，Issue 计数与真实发生之间的差额看得见。
-7. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。表结构只在
+7. 告警不在接入路径上发：Issue 的变化和待发的通知在同一个事务里落库（事务性发件箱），后台发送并重试，接入不等网络请求；
+   告警里来自浏览器的文本同样不可信，@所有人 的写法会被转义。
+8. SQLite 是 MVP 阶段的存储适配器，并不代表长期扩展性承诺。表结构只在
    `apps/server/src/db/migrations.ts` 一处定义，按编号迁移升级已有数据库；已发布的迁移不再修改。

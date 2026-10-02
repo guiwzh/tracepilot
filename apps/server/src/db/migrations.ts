@@ -11,8 +11,11 @@ import type BetterSqlite3 from 'better-sqlite3';
  *     │    └─ source_maps       该版本上传的 .map 文件登记（文件本体存在磁盘目录里），可带 Debug ID
  *     ├─ ingest_outcomes        每小时的上报去向：收下、被过滤、被限流
  *     ├─ api_tokens             MCP 客户端用的只读令牌（只存哈希）
+ *     ├─ alert_rules            告警规则：触发条件、通知渠道、去重与静默
+ *     │    └─ alert_deliveries  每一次通知及其重试状态（也记被静默、去重的）
  *     └─ issues → projects      按「错误指纹」聚合出的一类问题，列表页的一行
  *          ├─ issue_fingerprints 指向这个 Issue 的指纹，一个 Issue 可以有多个（合并、算法升级）
+ *          ├─ issue_activity    生命周期记录：新建、回归、恶化、状态变更、合并；告警从这里取
  *          ├─ events            一次具体发生（一条浏览器上报），同时关联到它所在的 release
  *          ├─ diagnoses         单次诊断的结果缓存
  *          └─ investigation_runs → investigation_events   排障 Agent 的一次调查及其完整事件流
@@ -205,6 +208,65 @@ export const MIGRATIONS: readonly Migration[] = [
           last_used_at INTEGER
         );
         CREATE INDEX api_tokens_project ON api_tokens(project_id, created_at);
+      `);
+    },
+  },
+  {
+    // Issue 生命周期与告警（services/lifecycle.ts、escalation.ts、alerts.ts）。
+    // - issues.substatus：状态的细分（regressed / escalating / until_escalating），substatus_at 是它变化的时间。
+    // - issue_activity：生命周期记录。新建、回归在接入的同一个事务里写入，告警从这里取（事务性发件箱）：
+    //   Issue 变了就一定有记录，发通知在事务之外慢慢做，进程崩溃也不会丢。processed 标记告警是否已经处理过；
+    //   只有「待处理」的行进入部分索引，处理过的行不占这个索引。
+    // - alert_rules：触发条件、级别下限、通知渠道（地址和密钥是凭据，存在本地库里，接口不回显）、去重间隔、静默。
+    // - alert_deliveries：每一次通知（含被静默、去重而没有发出的），带重试状态。
+    description: 'issue lifecycle and alerts',
+    up: (sqlite) => {
+      sqlite.exec(`
+        ALTER TABLE issues ADD COLUMN substatus TEXT;
+        ALTER TABLE issues ADD COLUMN substatus_at INTEGER;
+        CREATE TABLE issue_activity (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL,
+          data_json TEXT NOT NULL,
+          processed INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX issue_activity_issue ON issue_activity(issue_id, id);
+        CREATE INDEX issue_activity_pending ON issue_activity(id) WHERE processed = 0;
+        CREATE TABLE alert_rules (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          enabled INTEGER NOT NULL,
+          triggers_json TEXT NOT NULL,
+          min_level TEXT NOT NULL,
+          channel_json TEXT NOT NULL,
+          interval_minutes INTEGER NOT NULL,
+          muted_until INTEGER,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX alert_rules_project ON alert_rules(project_id, created_at);
+        CREATE TABLE alert_deliveries (
+          id TEXT PRIMARY KEY,
+          rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          issue_id TEXT REFERENCES issues(id) ON DELETE SET NULL,
+          trigger_type TEXT NOT NULL,
+          status TEXT NOT NULL,
+          reason TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER,
+          payload_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          sent_at INTEGER
+        );
+        CREATE INDEX alert_deliveries_due ON alert_deliveries(next_attempt_at) WHERE status = 'pending';
+        CREATE INDEX alert_deliveries_rule_issue ON alert_deliveries(rule_id, issue_id, created_at);
+        CREATE INDEX alert_deliveries_rule_created ON alert_deliveries(rule_id, created_at);
+        CREATE INDEX alert_deliveries_project ON alert_deliveries(project_id, created_at);
       `);
     },
   },

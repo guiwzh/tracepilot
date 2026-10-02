@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { createHmac } from 'node:crypto';
 import { rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 
 /**
@@ -249,5 +252,82 @@ test('source map upload maps a newly ingested browser stack through the API', as
     await rm(resolve('apps/server/.tracepilot/source-maps', `${sourceMap.id}.map`), {
       force: true,
     });
+  }
+});
+
+test('a new issue reaches a signed webhook and shows up in the alert log', async ({
+  page,
+  request,
+}) => {
+  // 本机起一个接收端当通知渠道：服务端真的把告警 POST 过来，才算通过。
+  const received: Array<{ headers: Record<string, unknown>; body: string }> = [];
+  const receiver = createServer((incoming, response) => {
+    let body = '';
+    incoming.on('data', (chunk: Buffer) => (body += chunk.toString()));
+    incoming.on('end', () => {
+      received.push({ headers: incoming.headers, body });
+      response.end('ok');
+    });
+  });
+  await new Promise<void>((done) => receiver.listen(0, '127.0.0.1', done));
+  const port = (receiver.address() as AddressInfo).port;
+  const created = await request.post(
+    'http://127.0.0.1:4318/api/v1/projects/demo-project/alert-rules',
+    {
+      data: {
+        name: 'E2E webhook',
+        triggers: ['new_issue'],
+        channel: { type: 'webhook', url: `http://127.0.0.1:${port}/hook`, secret: 'e2e-secret' },
+      },
+    },
+  );
+  expect(created.status()).toBe(201);
+  const ruleId = ((await created.json()) as { id: string }).id;
+
+  try {
+    const now = Date.now();
+    const ingest = await request.post('http://127.0.0.1:4318/api/v1/envelopes', {
+      data: {
+        dsnKey: 'demo-dsn-key',
+        sentAt: now,
+        events: [
+          {
+            eventId: `e2e-alert-${now}`,
+            eventType: 'error',
+            timestamp: now,
+            projectId: 'demo-project',
+            release: '2.4.1',
+            environment: 'production',
+            page: { url: 'https://shop.test/checkout/gift-card', route: '/checkout/gift-card' },
+            device: { userAgent: 'Mozilla/5.0 Chrome/130.0' },
+            payload: {
+              name: 'TypeError',
+              message: `Gift card balance was not loaded (${now})`,
+            },
+            breadcrumbs: [],
+          },
+        ],
+      },
+    });
+    expect(ingest.status()).toBe(202);
+
+    await expect.poll(() => received.length, { timeout: 10_000 }).toBe(1);
+    const [alert] = received;
+    const timestamp = String(alert!.headers['x-tracepilot-timestamp']);
+    expect(alert!.headers['x-tracepilot-signature']).toBe(
+      `sha256=${createHmac('sha256', 'e2e-secret').update(`${timestamp}.${alert!.body}`).digest('hex')}`,
+    );
+    expect(JSON.parse(alert!.body)).toMatchObject({
+      trigger: 'new_issue',
+      issue: { title: expect.stringContaining('Gift card balance') },
+    });
+
+    await page.goto('/projects/demo-project/settings');
+    const log = page.locator('.alert-deliveries li').filter({ hasText: 'Gift card balance' });
+    await expect(log).toContainText('E2E webhook');
+    await expect(log.locator('.delivery-sent')).toBeVisible();
+  } finally {
+    await request.delete(`http://127.0.0.1:4318/api/v1/alert-rules/${ruleId}`);
+    await new Promise((done) => receiver.close(done));
   }
 });

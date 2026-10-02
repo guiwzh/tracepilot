@@ -11,6 +11,7 @@ import {
   type ModelClientFactory,
 } from './investigation/service';
 import { InvestigationStore } from './investigation/store';
+import { registerAlertRoutes } from './routes/alerts';
 import { registerEventRoutes } from './routes/events';
 import { registerIssueRoutes } from './routes/issues';
 import { registerProjectRoutes } from './routes/projects';
@@ -20,6 +21,8 @@ import { registerMcpRoutes } from './mcp/http';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerSourceMapRoutes } from './routes/sourcemaps';
 import { registerTokenRoutes } from './routes/tokens';
+import { AlertDispatcher } from './services/alerts';
+import { EscalationDetector } from './services/escalation';
 import { IngestGuard } from './services/ingestGuard';
 import { OutcomeRecorder } from './services/outcomes';
 import { clearSourceMapCache } from './services/sourcemaps';
@@ -106,6 +109,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     config: options.config,
   };
 
+  // 告警：接入之后检查恶化；分发器把 Issue 的新建、回归、恶化变成通知，每 5 秒一轮，接入后立即补一轮。
+  const alerting = {
+    escalation: new EscalationDetector(database),
+    dispatcher: new AlertDispatcher(database, {
+      dashboardUrl: options.config.dashboardUrl,
+      onError: (error) => app.log.error({ err: error }, 'alert dispatch failed'),
+    }),
+  };
+  alerting.dispatcher.start();
+
   // 插件要先注册完成（await），依赖它们的路由才能正常工作。
   // origin: true 表示把请求的 Origin 原样回显为允许来源，也就是允许任何网页跨域调用。
   // 本地单用户的 MVP 可以接受；部署到公网前必须改成明确的域名白名单。
@@ -129,10 +142,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     time: Date.now(),
   }));
 
-  registerEventRoutes(app, database, ingestProtection);
+  registerEventRoutes(app, database, ingestProtection, alerting);
   registerProjectRoutes(app, database);
   registerSettingsRoutes(app, database, ingestProtection);
   registerTokenRoutes(app, database);
+  registerAlertRoutes(app, database, options.config);
   registerMcpRoutes(app, database, options.config);
   registerIssueRoutes(app, database);
   registerSourceMapRoutes(app, database, options.config);
@@ -161,10 +175,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   // app.close() 时执行：测试结束、index.ts 收到 SIGTERM / SIGINT（部署停止、tsx watch 重启、Ctrl+C）
-  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，写完内存里的上报去向计数，再关闭 SQLite 文件句柄，
-  // 最后释放缓存的 Source Map 解析结果（它们在 WebAssembly 内存里，垃圾回收管不到）。
+  // 都会走到这里。先中止进行中的调查并等它们写完终止事件，等告警分发的这一轮结束（没发完的留在库里，
+  // 下次启动接着发），写完内存里的上报去向计数，再关闭 SQLite 文件句柄，最后释放缓存的 Source Map
+  // 解析结果（它们在 WebAssembly 内存里，垃圾回收管不到）。
   app.addHook('onClose', async () => {
     await investigations.shutdown();
+    await alerting.dispatcher.close();
     ingestProtection.outcomes.close();
     database.close();
     clearSourceMapCache();

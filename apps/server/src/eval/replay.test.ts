@@ -31,6 +31,7 @@ const config: ServerConfig = {
   ingestRateLimitPerMinute: 0,
   spikeProtection: false,
   repositoryRoot: null,
+  dashboardUrl: 'http://localhost:4173',
 };
 
 let directory: string;

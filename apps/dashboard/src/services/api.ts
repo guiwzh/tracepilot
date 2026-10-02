@@ -1,10 +1,17 @@
 import type {
+  AlertDelivery,
+  AlertRule,
+  AlertTestResult,
   ApiToken,
+  CreateAlertRule,
   CreatedApiToken,
   IngestStats,
   InvestigationRun,
+  IssueActivity,
   IssueDetail,
   IssueListResponse,
+  IssueStatus,
+  IssueSubstatus,
   PerformanceOverview,
   Project,
   ProjectOverview,
@@ -13,6 +20,7 @@ import type {
   Release,
   SourceMapRecord,
   StoredEvent,
+  UpdateAlertRule,
 } from '@trace-pilot/shared';
 
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4318';
@@ -66,11 +74,13 @@ export const api = {
   issue: (issueId: string) => request<IssueDetail>(`/api/v1/issues/${issueId}`),
   issueEvents: (issueId: string) =>
     request<{ items: StoredEvent[] }>(`/api/v1/issues/${issueId}/events?limit=100`),
-  updateIssue: (issueId: string, status: string) =>
-    request<{ id: string; status: string }>(`/api/v1/issues/${issueId}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    }),
+  updateIssue: (issueId: string, status: IssueStatus, untilEscalating = false) =>
+    request<{ id: string; status: IssueStatus; substatus: IssueSubstatus | null }>(
+      `/api/v1/issues/${issueId}/status`,
+      { method: 'PATCH', body: JSON.stringify({ status, untilEscalating }) },
+    ),
+  issueActivity: (issueId: string) =>
+    request<{ items: IssueActivity[] }>(`/api/v1/issues/${issueId}/activity`),
   mergeIssues: (targetId: string, issueIds: string[]) =>
     request<{ id: string; title: string; merged: number; eventCount: number; userCount: number }>(
       `/api/v1/issues/${targetId}/merge`,
@@ -112,6 +122,24 @@ export const api = {
     }),
   revokeToken: (tokenId: string) =>
     request<void>(`/api/v1/tokens/${tokenId}`, { method: 'DELETE' }),
+  alertRules: (projectId: string) =>
+    request<{ items: AlertRule[] }>(`/api/v1/projects/${projectId}/alert-rules`),
+  createAlertRule: (projectId: string, rule: CreateAlertRule) =>
+    request<AlertRule>(`/api/v1/projects/${projectId}/alert-rules`, {
+      method: 'POST',
+      body: JSON.stringify(rule),
+    }),
+  updateAlertRule: (ruleId: string, patch: UpdateAlertRule) =>
+    request<AlertRule>(`/api/v1/alert-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteAlertRule: (ruleId: string) =>
+    request<void>(`/api/v1/alert-rules/${ruleId}`, { method: 'DELETE' }),
+  testAlertRule: (ruleId: string) =>
+    request<AlertTestResult>(`/api/v1/alert-rules/${ruleId}/test`, { method: 'POST' }),
+  alertDeliveries: (projectId: string) =>
+    request<{ items: AlertDelivery[] }>(`/api/v1/projects/${projectId}/alert-deliveries`),
   ingestStats: (projectId: string) =>
     request<IngestStats>(`/api/v1/projects/${projectId}/ingest-stats`),
   investigations: (issueId: string) =>
