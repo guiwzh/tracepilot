@@ -125,7 +125,7 @@ export function IssuesPage() {
     setRoute(searchParams.get('route') ?? '');
   }
 
-  // ECharts option 只在服务端趋势数据变化时重建，避免 Chart effect 反复 dispose/init。
+  // ECharts option 只在服务端趋势数据变化时重建，避免每次渲染都重新 setOption。
   const trendOption = useMemo<ChartOption>(
     () => ({
       animationDuration: 450,

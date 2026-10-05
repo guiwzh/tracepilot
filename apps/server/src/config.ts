@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 export const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * 服务端的全部配置。环境变量只在 loadConfig 里读一次，其余代码只接收这个对象：
- * 测试可以直接构造一份配置（临时数据库、不同的上限），不必改动全局的 process.env。
+ * 服务端的全部配置。环境变量只在 loadConfig 里读一次（只给评测用的 EVAL_JUDGE_* 由 eval/scoring.ts 读），
+ * 其余代码只接收这个对象：测试可以直接构造一份配置（临时数据库、不同的上限），不必改动全局的 process.env。
  */
 export interface ServerConfig {
   host: string;
@@ -72,7 +72,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // 默认每分钟 6,000 个（每秒 100 个）：单机 SQLite 每秒能接入上万个事件，留出余量给别的项目和查询。
     ingestRateLimitPerMinute: nonNegative(env.INGEST_RATE_LIMIT_PER_MINUTE, 6_000),
     spikeProtection: env.SPIKE_PROTECTION !== 'false',
-    // 设为空字符串可以关掉代码类工具；默认目录不存在时它们如实回答「没有配置仓库」。
+    // 设为空字符串可以关掉代码类工具。项目在这里没有仓库（包括默认目录不存在）时，排障 Agent 拿不到
+    // 这三个工具，MCP 调用它们则如实回答「没有配置仓库」。
     repositoryRoot:
       env.REPOSITORY_ROOT === ''
         ? null

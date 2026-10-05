@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,6 +64,10 @@ describe('read-only repository access', () => {
     ).rejects.toMatchObject({
       code: 'COMMIT_NOT_FOUND',
     });
+    // 版本的提交号由接口登记，可以是任意字符串。
+    await expect(
+      resolveRepositoryFile(repository, '--all', 'src/checkout/total.ts'),
+    ).rejects.toMatchObject({ code: 'COMMIT_NOT_FOUND' });
     await expect(readFileAt(repository, null, 'src/checkout/total.ts', 1, 2)).rejects.toMatchObject(
       {
         code: 'NO_COMMIT',
@@ -130,5 +136,41 @@ describe('read-only repository access', () => {
     const diff = await fileDiff(repository, between[1]!.sha, 'src/checkout/total.ts');
     expect(diff).toContain('-  const subtotal = cart.summary?.total ?? sumItems(cart);');
     expect(diff).toContain('+  const subtotal = cart.summary.total;');
+  });
+
+  it('never runs a textconv driver while blaming', async () => {
+    // .gitattributes 能给文件指定 diff 驱动，驱动的 textconv 是任意命令；git blame 默认会执行它。
+    const directory = join(root, 'textconv-project');
+    const marker = join(root, 'textconv-ran');
+    const run = (...args: string[]) =>
+      execFileSync('git', args, {
+        cwd: directory,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_AUTHOR_NAME: 'Mei Chen',
+          GIT_AUTHOR_EMAIL: 'mei.chen@shop.example',
+          GIT_COMMITTER_NAME: 'Mei Chen',
+          GIT_COMMITTER_EMAIL: 'mei.chen@shop.example',
+        },
+      }).trim();
+    mkdirSync(directory);
+    run('init', '--quiet');
+    writeFileSync(join(directory, '.gitattributes'), 'notes.txt diff=evil\n');
+    writeFileSync(join(directory, 'notes.txt'), 'first line\n');
+    run('add', '--all');
+    run('-c', 'commit.gpgsign=false', 'commit', '--quiet', '--no-verify', '-m', 'add notes');
+    const sha = run('rev-parse', 'HEAD');
+    run('config', 'diff.evil.textconv', `touch '${marker}' && cat`);
+
+    const blame = await blameLine(
+      projectRepository(root, 'textconv-project')!,
+      sha,
+      'notes.txt',
+      1,
+    );
+    expect(blame).toMatchObject({ sha, code: 'first line' });
+    expect(existsSync(marker)).toBe(false);
   });
 });

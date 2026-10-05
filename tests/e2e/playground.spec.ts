@@ -252,7 +252,7 @@ test('events still queued when the page unloads reach the server', async ({ page
 });
 
 test('the lab reports failed delivery instead of claiming success', async ({ page, request }) => {
-  // 回归：服务端不可达时，界面仍显示 "Buffer flushed" 和 "SDK armed"。
+  // 回归：服务端不可达时，界面曾仍显示 "Buffer flushed" 和 "SDK armed"。
   const project = await createProject(request);
   await page.route('**/api/v1/envelopes', (route) => route.abort('connectionrefused'));
   await openLab(page, project);

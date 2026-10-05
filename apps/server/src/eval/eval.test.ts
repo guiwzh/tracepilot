@@ -45,7 +45,7 @@ describe('evaluation cases', () => {
 
 describe('release timing', () => {
   it('says when an old release keeps failing after the next one was deployed', async () => {
-    // 2026-10-02 的真实模型评测里，Agent 三次都没注意到报错页面加载于 3.2.0 部署之前。
+    // 2026-10-02 的真实模型评测（提示词 v4）里，Agent 三次中有两次没注意到报错页面加载于 3.2.0 部署之前。
     const stale = EVAL_CASES.find((item) => item.id === 'stale-chunk-after-deploy')!;
     // 上面的用例测试已经在 directory 里建过这个用例的库，换一个目录。
     const prepared = await prepareCase(stale, await mkdtemp(join(directory, 'timing-')));

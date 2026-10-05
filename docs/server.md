@@ -18,8 +18,9 @@ Source Map、查询、单次诊断与排障 Agent 的实现，以及评测、测
 5. **过程可回放**：调查的每个事件先落库、再推送。调查与 HTTP 连接解耦，断线或刷新页面都能从事件日志续上。
 6. **每一行都讲得清**：SQLite 单文件、手写 SQL、编号迁移，本地运行不需要 Docker；Agent 循环手写，不用框架。
 
-运行时依赖只有 9 个：`fastify` 与它的 `@fastify/cors`、`@fastify/multipart` 插件，`better-sqlite3`、`source-map`、
-`openai`、`zod`、`dotenv`，以及工作区里的 `@trace-pilot/shared`。
+运行时依赖只有 11 个：`fastify` 与它的 `@fastify/cors`、`@fastify/multipart` 插件，`better-sqlite3`、`source-map`、
+`openai`、`zod`、`dotenv`，MCP 的 `@modelcontextprotocol/sdk`、AG-UI 的事件类型与输入 Schema `@ag-ui/core`，以及工作区里的
+`@trace-pilot/shared`。
 
 ## 2. 代码结构
 
@@ -28,7 +29,7 @@ apps/server/
 ├── src/
 │   ├── index.ts                 进程入口：读配置、监听端口、SIGTERM / SIGINT 时优雅退出
 │   ├── app.ts                   buildApp：Fastify 实例、插件、路由、统一错误处理、关闭时的清理
-│   ├── config.ts                环境变量 → ServerConfig（唯一读取 process.env 的地方）
+│   ├── config.ts                环境变量 → ServerConfig（服务端的配置只在这里读取，例外见 4.2）
 │   ├── db/
 │   │   ├── client.ts            打开 SQLite、PRAGMA、注册 browser_name()、演示项目
 │   │   └── migrations.ts        表结构与编号迁移（PRAGMA user_version）
@@ -41,7 +42,7 @@ apps/server/
 │   │   ├── issues.ts            Issue 列表、详情、事件样本、处理状态、生命周期时间线、合并
 │   │   ├── sourcemaps.ts        Source Map 上传（multipart）与列表
 │   │   ├── diagnosis.ts         单次诊断（评测里的对照组）
-│   │   └── investigations.ts    调查：发起、查询、取消、SSE 事件流
+│   │   └── investigations.ts    调查：发起、查询、取消、SSE 事件流、修复简报、AG-UI 出口
 │   ├── services/                业务逻辑，读写数据库
 │   │   ├── events.ts            ingestEnvelope：规范化 → 还原 → 聚合入库；幂等、时钟校正、计数
 │   │   ├── queries.ts           工作台的全部读查询
@@ -51,6 +52,7 @@ apps/server/
 │   │   ├── lifecycle.ts         Issue 状态与细分（回归、恶化、忽略到恶化为止）、活动记录
 │   │   ├── escalation.ts        恶化检测：最近一小时 vs 它自己过去 7 天的常态
 │   │   ├── alerts.ts            告警规则与分发器（事务性发件箱、去重、静默、重试）
+│   │   ├── autoInvestigation.ts 告警顺带发起的调查：冷却、每日上限、调查结束后的跟进通知
 │   │   ├── alertChannels.ts     通用 Webhook、Slack、飞书、钉钉的消息格式、签名与回执判断
 │   │   ├── apiTokens.ts         API 令牌：只存 SHA-256、按哈希认出项目
 │   │   ├── repository.ts        只读 git：按版本读文件、搜代码、版本间提交、blame、diff
@@ -74,7 +76,7 @@ apps/server/
 │   ├── seed.ts                  pnpm seed：演示数据
 │   ├── benchmark.ts             pnpm benchmark：接入、查询与 Source Map 基准
 │   └── evaluate.ts              pnpm evaluate:diagnosis：单次诊断的契约冒烟
-├── tsdown.config.ts             构建成一个 Node ESM 入口 dist/index.js，依赖保持 external
+├── tsdown.config.ts             构建成两个 Node ESM 入口：服务端 dist/index.js、MCP 的 stdio 进程 dist/mcp.js，依赖保持 external
 └── vitest.config.ts
 ```
 
@@ -155,16 +157,19 @@ flowchart LR
    解析之前就返回 413；`requestTimeout` 20 秒，是接收一个完整请求的时限，不影响 SSE 这种长时间推送的响应。
 2. 打开数据库并升级到最新结构，确保演示项目 `demo-project`（DSN Key `demo-dsn-key`）和它的 Release `2.4.1` 存在。
 3. 创建 `InvestigationStore`（启动时把上次进程遗留的 running 调查标记为失败，见 10.12）和 `InvestigationService`。
-4. 注册插件：CORS、multipart。插件要先 `await` 注册完，依赖它们的路由才能工作。
-5. 注册 `/health` 与全部路由，设置统一错误处理，挂上 `onClose` 清理钩子。
+4. 创建接入保护（每个项目的限流令牌桶与突增基线、上报去向计数，6.9）和告警（恶化检测、分发器，6.10）；告警发起的调查
+   结束时排一条跟进通知（10.16）。分发器随即启动，每 5 秒一轮。
+5. 注册插件：CORS、multipart。插件要先 `await` 注册完，依赖它们的路由才能工作。
+6. 注册 `/health` 与全部路由，设置统一错误处理，挂上 `onClose` 清理钩子。
 
 `buildApp` 只返回实例、不监听端口。测试和基准脚本用 `app.inject` 在进程内模拟 HTTP 请求，走完整的路由栈，却不占用端口。
 模型客户端工厂和 Agent 上限也是 `buildApp` 的参数，测试据此注入替身。
 
 ### 4.2 配置
 
-`loadConfig` 是唯一读取 `process.env` 的地方，其余代码只接收 `ServerConfig` 对象：测试可以直接构造一份（临时数据库、
-零延迟），不必改全局环境。
+服务端的配置只在 `loadConfig` 里读取，其余代码只接收 `ServerConfig` 对象：测试可以直接构造一份（临时数据库、
+零延迟），不必改全局环境。例外有两处：只给评测用的 `EVAL_JUDGE_*` 由 `eval/scoring.ts` 自己读；`services/repository.ts`
+调用 git 时把 `PATH`、`HOME` 传给子进程（其余环境变量不传）。
 
 | 环境变量                       | 默认值                                   | 作用                                                                                   |
 | ------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -205,21 +210,23 @@ flowchart LR
 
 本服务用到的状态码：
 
-| 状态码 | 含义                       | 例子                                        |
-| -----: | -------------------------- | ------------------------------------------- |
-|    200 | 成功                       | 查询；对已有进行中调查的 Issue 再次发起调查 |
-|    201 | 创建了新资源               | 项目、Release、Source Map、调查、诊断       |
-|    202 | 已接收，处理可能还在进行   | 遥测接入、取消调查                          |
-|    204 | 成功但没有内容             | SSE：调查已结束且没有新事件                 |
-|    400 | 请求本身不合法             | Schema 校验失败、非法 JSON                  |
-|    403 | 凭据与项目不匹配           | DSN Key 不存在，或事件声明的项目与它不符    |
-|    404 | 资源不存在                 | Issue、Release、调查不存在                  |
-|    409 | 与现有状态冲突             | Release 已存在、调查已经结束                |
-|    413 | 请求体过大                 | 超过 1 MiB 的信封、超过 10 MB 的 map        |
-|    415 | 文件类型不对               | 上传的文件不是 `.map`                       |
-|    429 | 太忙，稍后重试             | 项目的接入被限流、同时进行的调查已达上限    |
-|    500 | 服务端 bug                 | 未预期的异常                                |
-|    502 | 依赖的上游出错，本服务正常 | 单次诊断的模型调用失败                      |
+| 状态码 | 含义                       | 例子                                                       |
+| -----: | -------------------------- | ---------------------------------------------------------- |
+|    200 | 成功                       | 查询；对已有进行中调查的 Issue 再次发起调查                |
+|    201 | 创建了新资源               | 项目、Release、Source Map、调查、诊断、告警规则、令牌      |
+|    202 | 已接收，处理可能还在进行   | 遥测接入、取消调查                                         |
+|    204 | 成功但没有内容             | 删除告警规则、吊销令牌；SSE：调查已结束且没有新事件        |
+|    400 | 请求本身不合法             | Schema 校验失败、非法 JSON                                 |
+|    401 | 缺少或无效的 API 令牌      | `POST /mcp` 不带令牌，或令牌已吊销                         |
+|    403 | 凭据与项目不匹配           | DSN Key 不存在，或事件声明的项目与它不符                   |
+|    404 | 资源不存在                 | Issue、Release、调查不存在                                 |
+|    405 | 方法不支持                 | `GET`、`DELETE /mcp`：无状态模式没有 SSE 流和会话（10.15） |
+|    409 | 与现有状态冲突             | Release 已存在、调查已经结束、告警规则已达上限             |
+|    413 | 请求体过大                 | 超过 1 MiB 的信封、超过 10 MB 的 map                       |
+|    415 | 文件类型不对               | 上传的文件不是 `.map`                                      |
+|    429 | 太忙，稍后重试             | 项目的接入被限流、同时进行的调查已达上限                   |
+|    500 | 服务端 bug                 | 未预期的异常                                               |
+|    502 | 依赖的上游出错，本服务正常 | 单次诊断的模型调用失败                                     |
 
 ### 4.4 优雅退出
 
@@ -331,6 +338,7 @@ erDiagram
 | `events(issue_id, user_id)`                                  | 接入时判定「该用户是否已在这个 Issue 出现过」 |
 | `diagnoses(issue_id, created_at)`                            | 诊断历史                                      |
 | `investigation_runs(issue_id, started_at)`                   | 调查历史、找进行中的调查                      |
+| `investigation_runs(started_by, started_at)`                 | 告警自动发起的调查的每日上限（10.16）         |
 | `issue_fingerprints(issue_id)`                               | 合并时迁移某个 Issue 的全部指纹               |
 | `source_maps(debug_id)`                                      | 还原时按 Debug ID 找 map                      |
 | `issue_activity(issue_id, id)`                               | Issue 详情的生命周期时间线                    |
@@ -340,11 +348,13 @@ erDiagram
 | `alert_deliveries(rule_id, issue_id, created_at)`            | 去重：这条规则最近是否通知过这个 Issue        |
 | `alert_deliveries(rule_id, created_at)`                      | 每条规则每小时的上限                          |
 | `alert_deliveries(project_id, created_at)`                   | 设置页的通知记录                              |
+| `alert_deliveries(investigation_id)`                         | 调查结束后找到发起它的那条告警，发跟进通知    |
+| `api_tokens(project_id, created_at)`                         | 项目的令牌列表                                |
 | `events(trace_id) WHERE trace_id IS NOT NULL`                | 按 trace id 搜索 Issue（部分索引）            |
 
 唯一约束和主键本身也带索引：`projects(dsn_key)` 用于接入时找项目，`issue_fingerprints(project_id, fingerprint)` 用于归并，
 `source_maps(release_id, minified_file, …)` 用于按版本 + 文件名找 map，`diagnoses(issue_id, input_hash)` 用于诊断缓存，
-`investigation_events(run_id, seq)` 用于回放。
+`investigation_events(run_id, seq)` 用于回放，`api_tokens(token_hash)` 用于按令牌认出项目。
 
 ### 5.4 迁移
 
@@ -773,6 +783,8 @@ GET /api/v1/projects/:projectId/ingest-stats  → { accepted, filtered, rateLimi
 最近一小时的事件数 ≥ max(20, ⌈5 × 过去 7 天（不含最近一小时）平均每小时事件数⌉)
 ```
 
+出现不满 7 天的 Issue，基线从它首次出现算起，平均值按实际经过的小时数算。
+
 - 只看未解决且还没标为恶化的、以及忽略到恶化为止的；已解决的再出现走回归，永久忽略的不管；
 - 出现不到 24 小时的不判断：没有基线，任何量都像突增，而它们已经有新 Issue 告警；
 - 两次计数都走 `events(issue_id, created_at)` 索引；先数最近一小时，不到 20 就不必再数 7 天；
@@ -829,8 +841,8 @@ flowchart LR
   `<at id=all></at>` 会 @所有人，所以尖括号和 `&` 一律转义成实体；Markdown 的 `[文字](链接)` 能把钓鱼地址伪装成可点的链接，
   所以 `](` 之间插入零宽空格把它拆开——和排障 Agent 把遥测当不可信数据是同一个原则。
 - 服务端会向配置的地址发请求（SSRF 的入口）。Slack、飞书、钉钉只接受官方域名；通用 Webhook 接受任意地址，而管理接口没有
-  鉴权（本地 MVP），能打开工作台的人就能让服务端向内网地址发 POST。不跟随重定向（`redirect: manual`）、5 秒超时、响应体
-  只读 2 KB。部署到公网之前要给管理接口加鉴权，并给 Webhook 的目标加允许列表。
+  鉴权（本地 MVP），能打开工作台的人就能让服务端向内网地址发 POST。不跟随重定向（`redirect: manual`）、5 秒超时（含读取
+  响应体），响应体只保留前 2,048 个字符。部署到公网之前要给管理接口加鉴权，并给 Webhook 的目标加允许列表。
 - 渠道地址和签名密钥是凭据，存在本地库里（签名要用原文）。接口只返回打了码的地址和「是否签名」，所以改渠道要删掉重建。
 
 接口：
@@ -1325,9 +1337,10 @@ step.started；调用模型（收尾时只给 submit_report 并强制调用，�
   或仓库里找不到这个提交，工具如实回答 `NO_COMMIT` / `COMMIT_NOT_FOUND`。
 - **只读与隔离**：仓库只能是 `REPOSITORY_ROOT/<项目 id>`（部署者把仓库克隆或链接到那里），没有接口能设置路径——管理接口没有
   鉴权，能设置任意路径就能让工具读服务器上的任意目录。调用 git 用 `execFile` 传参数数组，不经过 shell；提交号只接受十六进制，
-  路径拒绝绝对路径、`..` 和以 `-` 开头的写法（会被当成 git 选项），一律放在 `--` 之后；关掉 `core.fsmonitor`、外部 diff、
-  textconv 这些会执行外部程序的配置，不读系统级 git 配置，不弹认证提示，`GIT_OPTIONAL_LOCKS=0` 不在仓库里留锁文件；每条命令
-  5 秒超时、输出有上限。
+  并先确认仓库里有这个提交，之后一律用完整的 40 位提交号（版本的提交号由接口登记，可以是任意字符串）；路径拒绝绝对路径、`..`
+  和以 `-` 开头的写法（会被当成 git 选项），放在 `--` 之后，或接在提交号后面（`<提交号>:<路径>`）；关掉 `core.fsmonitor`、
+  外部 diff、textconv 这些会执行外部程序的配置（`git blame` 默认会执行仓库配置的 textconv，所以显式加 `--no-textconv`），
+  不读系统级 git 配置，不弹认证提示，`GIT_OPTIONAL_LOCKS=0` 不在仓库里留锁文件；每条命令 5 秒超时、输出有上限。
 - **源码外发**：读源码、搜代码和 diff 受 `AGENT_SOURCE_CONTEXT` 同一个开关控制；关闭时 `find_suspect_commits` 只给提交元数据。
 - **没有仓库就不提供**：项目没有配置仓库时，这三个工具不在交给模型的清单里（`toolSpecsFor`），第一条任务消息写明「没有配置
   git 仓库，代码类工具不可用」。改之前（提示词 v4）的真实模型评测里，没有仓库时 Agent 平均每次调查仍会调用它们约 3 次，只能得到「没有配置仓库」。
@@ -1352,10 +1365,12 @@ before that deployment and still running 3.1.0.`。事件带的版本号就是�
 
 三条约束由代码保证，而不是靠提示词：
 
-- **只读**：没有任何工具能改数据、改代码、执行命令或访问外部网络。模型即使被注入，也造不成写操作。
-- **作用域绑定**：工具上下文（数据库、Issue id、项目 id、是否允许源码外发）由服务端在调查开始时确定，模型无法修改；模型能
-  传的只有 `eventId`、`frameIndex`、`limit`。`eventId` 按 `id = ? AND issue_id = ?` 查，别的 Issue、别的项目的事件对它来说
-  等于不存在。
+- **只读**：没有任何工具能改数据、改代码或访问外部网络，也没有让模型执行命令的工具（代码类工具在内部只调用固定的几条
+  git 读命令）。模型即使被注入，也造不成写操作。
+- **作用域绑定**：工具上下文（数据库、Issue id、项目 id、仓库目录、是否允许源码外发）由服务端在调查开始时确定，模型无法修改；
+  模型能传的只有 `eventId`、`frameIndex`、`limit`，以及代码类工具的 `path`、`startLine`、`endLine`、`query`、`release`。
+  `eventId` 按 `id = ? AND issue_id = ?` 查，别的 Issue、别的项目的事件对它来说等于不存在；`release` 只在本项目的版本里找，
+  `path` 经过上面的路径校验。
 - **输出可引用**：关键事实用可读的句子表达（`-3.1s network POST … → 503`），模型交报告时要从这里逐字摘出原文。
 
 生成给模型的工具清单时关闭 `strict`：国产 OpenAI 兼容端点对严格模式支持不一，形状最终由服务端的 Zod 兜底。说明书与服务端
@@ -1387,6 +1402,7 @@ ref: T3 (get_event_detail)
     "-0.4s error cart.summary was undefined in calculateTotal"
   ],
   "failedRequests": [],
+  "traceId": "8ad3ded196117a0a021f0912cabbb3e5",
   "captureNotes": []
 }
 ```
@@ -1488,22 +1504,26 @@ evidence[2].quote was not found verbatim in T3 (get_event_detail). Copy a short 
 
 ### 10.8 提示词
 
-`prompt.ts`，版本 `investigation-v5`（v1 要求引用 `tool_call_id`，模型读不到；v3 加入代码类工具的调查步骤；v4 要求点名
-后端 trace；v5 规定栈还原不了时以「缺少 map」为首要结论，并配合没有仓库时不提供代码类工具）。评测报告、
-录制文件和运行记录据此区分结果出自哪一版。
+`prompt.ts`，版本 `investigation-v6`（v1 要求引用 `tool_call_id`，模型读不到；v3 加入代码类工具的调查步骤；v4 要求点名
+后端 trace；v5 规定栈还原不了时以「缺少 map」为首要结论，并配合没有仓库时不提供代码类工具；v6 把这条规则收窄到其他证据
+解释不了故障的时候）。评测报告、录制文件和运行记录据此区分结果出自哪一版。
 提示词用英文书写，与工具说明、报告 Schema 的字段描述保持同一种语言，分三部分：
 
-- **Method**：推荐的调查顺序——先看概览和样本；至少看一个事件的详情，有堆栈就读栈顶帧的源码，再对比版本；证据足以支撑
-  结论或工具不再带来新信息时，调用一次 `submit_report`。避免模型漫无目的地调工具。
+- **Method**：推荐的调查顺序——先看概览和样本；至少看一个事件的详情，有堆栈就读栈顶帧的源码，再对比版本；某个版本像是
+  起因、又有代码类工具时，找嫌疑提交，按需读文件、搜代码；证据足以支撑结论或工具不再带来新信息时，调用一次
+  `submit_report`。避免模型漫无目的地调工具。
 - **Evidence rules**：引用格式，与 `citations.ts` 的校验一一对应（`resultRef` 用结果第一行的编号，`quote` 逐字摘录、少于
   200 字符，两段就各占一行）；间接关联的原因置信度低于 0.5，并按置信度排序；拿不到的写进 `missingInformation`（例如缺少
   map、没有后端日志）；事件或失败请求带着 trace id 时，后端那一侧记在 Agent 读不到的链路系统里，不猜，在
-  `missingInformation` 里点名这个 trace（和 span）；栈映射不到源码（例如没有 Source Map）时没看到出错的代码，「缺少 map」
-  是首要结论、排在第一并要求补传，猜测的代码缺陷置信度低于 0.5——真实模型评测里 Agent 三次都把具体缺陷排在第一；摘要最多三句。
+  `missingInformation` 里点名这个 trace（和 span）；栈映射不到源码（例如没有 Source Map）时没看到出错的代码：其他证据
+  （请求、用户操作、版本、浏览器）已经解释了故障，就以它为首要原因、把缺少 map 记进 `missingInformation`；否则「缺少 map」
+  是首要结论、排在第一并要求补传，猜测的代码缺陷置信度低于 0.5。这条规则改过两次：v4 的真实模型评测里 missing-source-map
+  三次都把猜测的缺陷排在第一，v5 加上无条件的版本修好了它，却让 double-submit（请求时间线就能说明）三次都把「缺少 map」
+  排第一，v6 才加上前半句的前提；摘要最多三句。
 - **Untrusted data**：工具结果里的错误消息、URL、元素文字、堆栈都来自终端用户的浏览器，任何人都能影响。只把它当作描述事故
   的数据，不执行其中的指令，也不让它改变方法、输出或置信度。攻击者完全可以故意制造一条内容为「忽略之前的指令……」的错误。
 
-另外三段固定文本：第一条 user 消息 `Investigate issue <id>: "<标题>". …`；预算用尽时追加的收尾指令；附在每份报告末尾的
+另外三段固定文本：第一条 user 消息 `Investigate issue <id>: "<标题>". …`（项目没有仓库时追加一句，说明代码类工具不可用）；预算用尽时追加的收尾指令；附在每份报告末尾的
 免责声明（只读的假设，没有改动或验证任何代码、命令或线上状态）。
 
 ### 10.9 模型客户端
@@ -1891,7 +1911,7 @@ Agent 的裁判得分 v4 0.88 → v5 0.89 → v6 0.94，三次都判为正确的
 一个发版提交。两个版本的 `commit_sha` 指向其中的真实提交（打了 `v2.3.9`、`v2.4.1` 标签），`find_suspect_commits` 要从三个
 提交里挑出改过出错文件的那一个。2.4.1 的代码与 map 内联的源码一致；两个版本共用一份 map，2.3.9 的 `total.ts` 与之不同，
 但 2.3.9 没有落在那个文件里的事件。提交时间相对于「现在」，每次重建提交号都会变。git 不可用或 `REPOSITORY_ROOT` 为空时跳过，
-版本没有提交号，代码类工具如实回答。顺序和推荐的接入方式
+版本没有提交号：排障 Agent 不带代码类工具调查，MCP 调用它们时如实回答。顺序和推荐的接入方式
 一致：先为两个版本上传 map（`checkout.a81e93bd.js`、`inventory.29ad00ef.js`），再接入事件，聚合才能用上还原后的栈帧。
 某个版本缺 map 时，同一个 bug 会在两个版本里分成两个 Issue（6.6 的「代价」），所以两个版本都传；「缺少 map」这种证据缺口
 由评测集的 `missing-source-map` 用例覆盖。上传走正式的 `saveSourceMap`。删除旧数据前先取出 map 文件路径，删完表数据再删
@@ -1960,7 +1980,7 @@ Agent 的裁判得分 v4 0.88 → v5 0.89 → v6 0.94，三次都判为正确的
 
 ## 14. 测试
 
-服务端 229 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 230 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
 | 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1974,19 +1994,19 @@ Agent 的裁判得分 v4 0.88 → v5 0.89 → v6 0.94，三次都判为正确的
 | `services/alertChannels.test.ts`      |    7 | 通用 Webhook 的签名可验、飞书与钉钉按各自文档的算法签名、转义 @所有人 的写法；飞书钉钉 200 里的错误码、渠道地址打码、只接受官方机器人域名                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `services/alerts.test.ts`             |    8 | 本地 HTTP 服务当渠道：新 Issue 变成一次签名的 Webhook 且不重发；去重窗口与静默被抑制并记下原因；按触发条件和级别匹配；失败退避重试、用完次数标记失败；每小时上限与过期记录；发出前被停用的规则；测试发送；只为真正发出的告警发起调查、第二条规则遇到冷却、链接写进通知                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `services/autoInvestigation.test.ts`  |    3 | 发起调查的两道闸（冷却、滚动 24 小时的每日上限、人点的不占上限）、服务忙、上限为 0；跟进通知的摘要、首要原因与核验数、离线脚本的标注；跟进排在发起它的规则上，静默、停用、找不到来源时不发                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `services/repository.test.ts`         |    6 | 只在配置的根目录下找仓库、按版本读文件、拒绝越界路径与伪装成选项的提交号、字面搜索（正则字符按字面、限定目录）、map 路径对到仓库文件、版本间提交与 blame 和 diff                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `services/repository.test.ts`         |    7 | 只在配置的根目录下找仓库、按版本读文件、拒绝越界路径与伪装成选项的提交号（含版本登记的提交号）、字面搜索（正则字符按字面、限定目录）、map 路径对到仓库文件、版本间提交与 blame 和 diff、blame 不执行仓库配置的 textconv                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `lib/fingerprint.test.ts`             |    8 | 动态 ID 与哈希归一化、Vite 哈希与普通单词、展示标题、取真正的栈顶帧、失败请求按方法和状态码分开；按源码位置而不是压缩名和行列号聚合、跳过依赖包的帧、自定义指纹                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `db/migrations.test.ts`               |    5 | 新库、引入迁移之前的旧库升级且数据保留（指纹搬进指纹表、已有 map 没有 Debug ID）、每个迁移只跑一次、失败回滚并写明是哪一个、拒绝打开更新的库                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `services/sourcemaps.test.ts`         |   17 | Release 边界内还原、多帧共用一次解析、找不到 map 的降级、上传前完整校验、重新上传立即生效、第 0 行的帧、只回填相关事件、文件丢失；Debug ID：读取与校验、版本号对不上仍能找到、同名文件的旧构建保留、找不到时回退、不跨项目、按 Debug ID 回填                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `services/sourceMapCache.test.ts`     |    6 | 只加载一次、LRU 淘汰并释放、借出期间不销毁、替换后读到新内容、记住损坏的 map、读不到视为缺失                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `services/diagnosis.external.test.ts` |    4 | Responses API 解析与用量、端点不支持时降级、其他失败不降级、模型输出不合法时证据仍可查                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `investigation/investigation.test.ts` |   10 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、失败请求附上后端 trace 且报告点名它、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `investigation/investigation.test.ts` |   11 | 离线调查端到端且引用全部核实（含源码与嫌疑提交两条证据）、失败请求附上后端 trace 且报告点名它、没有仓库时不给代码类工具并在任务说明里写明、引用不存在的调用被退回并接受修正、原文找不到被标出、预算用尽后强制提交、长堆栈下仍能看到 cause 链、网络错误算失败而取消不算、工具作用域绑定、取消与重复发起复用、SSE 按 Last-Event-ID 回放并在结束后停止                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `investigation/citations.test.ts`     |    4 | 宽松的编号写法、多段原文、任一段不符即拒绝、不存在的编号                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `investigation/fixBrief.test.ts`      |    4 | 围栏比内容里最长的反引号还长；代码位置（被引用的在前）、嫌疑提交、核验状态；伪造的标题和模型照抄的「## How to proceed」都出不了代码块；没完成的调查不出简报                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `investigation/agui.test.ts`          |    5 | 每个 AG-UI 事件过官方 Schema、事件顺序（旁白收尾后才调工具、结束前收尾）；官方 HttpAgent 消费合成的日志并得到消息、工具调用与共享状态；取消与失败的结局；续传位置的写法；HttpAgent 经 `POST /api/v1/ag-ui` 驱动一次真实调查，GET 回放与之一致、从记录中间续传不重不漏、发完 204；非法输入 400 与不存在的 Issue 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `investigation/model.test.ts`         |    2 | 流式文字转发与跨 chunk 的工具调用拼接、强制指定工具                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `mcp/mcp.test.ts`                     |    7 | 用官方 SDK 的客户端：工具清单由 Agent 注册表生成且全部只读、从 Issue 列表一路查到出错行源码和嫌疑提交、参数错误由同一个校验返回、提示词模板、令牌只看自己的项目且不泄露别的 Issue 是否存在、缺失/无效/吊销的令牌被拒且列表不含明文；stdio 子进程提供同样的 12 个工具、只读连接拒绝写入、结构版本不符拒绝打开；完成一次调查后 get_fix_brief 给出含出错行源码和嫌疑提交的简报、两个提示词模板                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `eval/eval.test.ts`                   |   14 | 12 个用例各自聚合成一个 Issue 且全部还原；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `eval/eval.test.ts`                   |   15 | 12 个用例各自聚合成一个 Issue 且全部还原；`compare_releases` 写明旧版本的事件发生在下一个版本部署之后；评分不认照抄标题里的词、区分采纳与否定注入内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `eval/metrics.test.ts`                |    6 | pass^k 与 pass@k 的教科书数值、非法的试验次数；Cohen's kappa 的完全一致、扣除碰巧一致、没有定义的情况；轨迹指标：重复调用（参数顺序不同也算）、失败调用、被驳回的报告、关键证据工具召回                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `eval/replay.test.ts`                 |   40 | 离线脚本现场录制再回放：同一时钟下行为与工具输出都一致、换了时钟只提示漂移、改动引用的原文被发现、录制轮数不够时报错；recordings/ 下的真实模型录制逐个回放（现有 deepseek-chat 的 12 个用例 × 3 次，共 36 项）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 

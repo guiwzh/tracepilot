@@ -363,7 +363,7 @@ const compareReleases = defineTool({
     const first = [...affected].sort((left, right) =>
       String(left.firstSeenInRelease).localeCompare(String(right.firstSeenInRelease)),
     )[0];
-    // 部署时间与页面加载的先后直接写成一句话：模型曾三次都没注意到报错页面加载于部署之前。
+    // 部署时间与页面加载的先后直接写成一句话：真实模型评测里，模型三次中有两次没注意到报错页面加载于部署之前。
     const stale = affected
       .filter((release) => (release.eventsAfterNextRelease?.issueEvents ?? 0) > 0)
       .map(
@@ -638,7 +638,8 @@ const findSuspectCommits = defineTool({
 
 /**
  * 收集证据用的 8 个只读工具。参数都是 z.object：MCP 在它们之上扩展出 issueId。
- * 后三个读被监控应用的 git 仓库（services/repository.ts），没有配置仓库时如实回答。
+ * 后三个读被监控应用的 git 仓库（services/repository.ts）。项目没有仓库时不交给排障 Agent（toolSpecsFor）；
+ * MCP 照常列出，调用时如实回答「没有配置仓库」。
  */
 export const INVESTIGATION_TOOLS: ToolDefinition[] = [
   getIssueOverview,
@@ -700,7 +701,7 @@ export const CODE_TOOLS: readonly string[] = [
 
 /**
  * 这次调查交给模型的工具。项目没有配置仓库时去掉三个代码类工具：它们只会回答「没有配置仓库」，
- * 真实模型评测里 Agent 平均每次调查仍会调用它们约 3 次，白白多出几轮对话的 token。
+ * 提示词 v4 的真实模型评测里（那时还交给模型），Agent 平均每次调查仍会调用它们约 3 次，白白多出几轮对话的 token。
  */
 export function toolSpecsFor(context: Pick<ToolContext, 'repositoryRoot' | 'projectId'>) {
   return projectRepository(context.repositoryRoot, context.projectId)

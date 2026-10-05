@@ -241,6 +241,8 @@ flowchart TD
 - `payload`：按 `redactPayload` 脱敏，堆栈字段保留行列号（见第 8 节）。
 - `breadcrumbs`：性能事件为空数组，其余事件带上当前面包屑的副本。
 - `debugIds`：payload 带堆栈、且应用用构建插件构建时，堆栈里出现的产物文件各自的 Debug ID（见 5.6）。
+- `traceId`：失败请求的事件是请求自己带的 trace；其他事件（性能样本除外）是当前页面浏览的 trace，前提是这次浏览里
+  已经有请求把它带给了后端（见 10.5）。
 
 去重放在组装之前，错误风暴里被挡下的重复几乎没有开销。组装、`beforeSend` 和入队时抛出的异常都只让这次
 采集返回 `null`，不会传到业务代码。
@@ -337,16 +339,16 @@ sequenceDiagram
 
 ### 6.2 各类 payload
 
-| 事件             | payload 字段                                                                                                                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 运行时异常       | `name`、`message`、`stack`（带着 cause 链，见 6.3）、`filename`、`line`、`column`、`level: 'error'`                                                                                |
-| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`                                                                                       |
-| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                                                                                              |
-| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                                              |
-| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                                                |
-| 白屏             | `name: 'WhiteScreen'`、`message: 'Blank page on <路由>'`、`mechanism: 'white-screen'`、`trigger`（`load` / `route`）、`emptyPoints`、`totalPoints`、`blankForMs`、`level: 'error'` |
-| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时）                       |
-| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`、`attribution`（元素与分段耗时，见 10.7）                                                                                |
+| 事件             | payload 字段                                                                                                                                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 运行时异常       | `name`、`message`、`stack`（带着 cause 链，见 6.3）、`filename`、`line`、`column`、`level: 'error'`                                                                                                             |
+| Promise 拒绝     | `name`、`message`、`stack`（reason 是 Error 时）、`mechanism: 'unhandledrejection'`、`level`                                                                                                                    |
+| React 渲染错误   | 同 `captureException`，另加 `mechanism: 'react'`、`componentStack`（最多 2,000 字符）                                                                                                                           |
+| `captureMessage` | `name: 'Message'`、`message`、`level`                                                                                                                                                                           |
+| 资源加载失败     | `url`、`tagName`、`resourceType`、`message: 'Failed to load <url>'`                                                                                                                                             |
+| 白屏             | `name: 'WhiteScreen'`、`message: 'Blank page on <路由>'`、`mechanism: 'white-screen'`、`trigger`（`load` / `route`）、`emptyPoints`、`totalPoints`、`blankForMs`、`level: 'error'`                              |
+| 失败的请求       | `method`、`url`、`status`（网络错误时为 0）、`duration`、`success: false`、`error`（fetch 网络错误的消息）、`businessCode` / `businessMessage`（业务失败时）、`traceId` / `spanId`（请求带着 `traceparent` 时） |
+| 性能样本         | `metric`、`value`、`rating`、`metricId`、`navigationType`、`attribution`（元素与分段耗时，见 10.7）                                                                                                             |
 
 非 Error 的 reason 也能稳定序列化：字符串成为 `message`；其他值用 `JSON.stringify` 转成文本，失败时用
 `String()`，`name` 为 `UnknownError`。
@@ -648,7 +650,7 @@ Sentry 也只把 5xx 算作失败。需要时把它们加进 `failedRequestStatu
 - 请求抛错时：`AbortController` 触发的取消（signal 已中止或 `AbortError`）标记为 `aborted`，只记面包屑；其余是
   网络错误，状态码记为 0，带上错误消息，成为事件。采集之后**原样重新抛出**，不改变业务代码对 fetch rejection 的处理。
 
-**XHR**：包装 `XMLHttpRequest.prototype.open` 和 `send`。
+**XHR**：包装 `XMLHttpRequest.prototype.open` 和 `send`；传播 trace 时还包装 `setRequestHeader`（见下面的链路上下文）。
 
 - `open` 时记下方法和地址（存在 `WeakMap` 里，不阻止 XHR 对象被回收）。
 - `send` 时开始计时，监听 `abort` 和 `loadend`：`loadend` 在成功、HTTP 失败、网络错误、被取消时都会触发，统一在这里
@@ -959,7 +961,7 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 | ------------------------ | -----: | -----: | -----: |
 | 发布产物 `dist/index.js` | 33,134 | 10,593 | 12,200 |
 | 业务应用实际接入成本     | 49,225 | 16,331 | 18,800 |
-| 其中 `web-vitals`        |      — |  5,300 |      — |
+| 其中 `web-vitals`        |      — |  5,306 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
 白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB、链路上下文约 0.8 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，

@@ -75,7 +75,7 @@ function ActivityTimeline({ items }: { items: IssueActivity[] }) {
 }
 
 function DistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
-  // 分布数据不变时复用 option 对象，避免命令式 ECharts 实例无谓重建。
+  // 分布数据不变时复用 option 对象，避免每次渲染都重新 setOption。
   const option = useMemo<ChartOption>(
     () => ({
       animationDuration: 400,
@@ -228,7 +228,7 @@ export function IssueDetailPage() {
       </main>
     );
   const data = issue.data;
-  // Server 已选择该 Issue 最新事件作为 sampleEvent，六个标签都围绕同一现场展示。
+  // Server 已选择该 Issue 最新事件作为 sampleEvent：头部的 trace 和概览、堆栈、面包屑、网络四个标签都围绕这同一个现场。
   const sample = data.sampleEvent;
   const networkBreadcrumbs = sample?.breadcrumbs.filter((item) => item.type === 'network') ?? [];
 

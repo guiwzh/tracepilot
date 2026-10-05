@@ -326,7 +326,7 @@ export interface SendOptions {
 
 /**
  * 发一条告警。不跟随重定向（redirect: manual）：允许跟随的话，一个看似无害的地址可以把请求转到内网。
- * 响应体只读前 2 KB。不抛错，失败时返回原因。
+ * 5 秒超时（含读取响应体），响应体只保留前 2,048 个字符。不抛错，失败时返回原因。
  */
 export async function sendToChannel(
   channel: AlertChannel,

@@ -7,7 +7,7 @@ Web Vitals，服务端聚合成 Issue、用 Source Map 还原源码；排障时�
 ![调查过程实时可见](docs/screenshots/07-investigation-live.png)
 
 > Agent 每一步的思路、调用的工具和返回给模型的原始结果都实时可见；刷新页面会从事件日志续上。
-> 所有画面由 `pnpm screenshots` 从真实运行的应用生成（2026-09-27）。
+> 所有画面由 `pnpm screenshots` 从真实运行的应用生成（2026-10-02）。
 
 ## 5 分钟本地跑通
 
@@ -236,7 +236,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | ---------------------------------------- | -------------------------: | -------------------------- |
 | SDK 发布产物 minified / gzip             |       33,134 / 10,593 字节 | `pnpm measure:sdk`         |
 | **业务应用实际接入成本** minified / gzip |       49,225 / 16,331 字节 | `pnpm measure:sdk`         |
-| 其中 web-vitals（归因版）                |            5,300 字节 gzip | `pnpm measure:sdk`         |
+| 其中 web-vitals（归因版）                |            5,306 字节 gzip | `pnpm measure:sdk`         |
 | `createMonitor()` + `start()` P50 / P95¹ |            60 / 190–400 µs | `pnpm measure:sdk-runtime` |
 | 单次 `captureException` P50 / P95¹       |           30–32 / 42–50 µs | `pnpm measure:sdk-runtime` |
 | 20 轮 start/destroy 后新增监听器         |                       0 个 | `pnpm measure:sdk-runtime` |
@@ -247,7 +247,7 @@ pnpm evaluate:agreement         # 裁判与人工标注的一致性（Cohen's ka
 | 重新上传 map 并回填 2,000 个事件²        | 0.14–0.20 s（修订前 44 s） | `pnpm benchmark`           |
 | 图表轮询更新 P50（重建 → 复用）          |             2.34 → 1.25 ms | `pnpm measure:chart`       |
 | 300 次更新新建 canvas（重建 → 复用）     |               1,500 → 0 个 | `pnpm measure:chart`       |
-| 单元 / 集成测试                          |                 355 项通过 | `pnpm verify`              |
+| 单元 / 集成测试                          |                 356 项通过 | `pnpm verify`              |
 | 浏览器闭环测试                           |             22 / 22 passed | `pnpm test:e2e`            |
 
 ¹ SDK 运行时两行是 2026-09-30 SDK 修订后在另一台机器（Chromium 141）上的重测，不能与其他行直接比较；

@@ -17,7 +17,7 @@ import {
 import { recordActivity } from './lifecycle';
 import { resolveStack, type ResolvedStack } from './sourcemaps';
 
-/** 一次接入的结果，原样作为 202 响应返回给 SDK。 */
+/** 一次接入的结果。路由再加上被入站过滤器丢掉的个数（filtered），作为 202 响应返回给 SDK。 */
 export interface IngestResult {
   /** 新写入的事件数。 */
   accepted: number;
@@ -309,7 +309,10 @@ function updateIssueCounters(
 
 /** 信封里的一个事件，经过规范化之后、入库之前。 */
 interface PreparedEvent {
-  /** 换算到服务端时钟、尚未脱敏的事件；Web Vitals 覆盖时要用它重新脱敏。 */
+  /**
+   * 换算到服务端时钟、尚未脱敏的事件：算 metricId、Web Vitals 覆盖时比较采集时间都用它；
+   * 写进库里的是脱敏后的 event。
+   */
   raw: MonitorEvent;
   /** 脱敏后的事件，入库和聚合都用它。 */
   event: MonitorEvent;

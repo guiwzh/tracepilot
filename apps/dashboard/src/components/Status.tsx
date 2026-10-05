@@ -1,6 +1,6 @@
 import type { IssueLevel, IssueStatus, IssueSubstatus } from '@trace-pilot/shared';
 
-// 状态值同时进入 CSS 修饰类；shared 枚举保证不会生成未定义的样式后缀。
+// 状态值直接拼成 CSS 修饰类，取值只有 shared 枚举里的三种；ignored 没有单独的样式，用 .status-badge 的默认灰色。
 export function IssueStatusBadge({ status }: { status: IssueStatus }) {
   return (
     <span className={`status-badge status-${status}`}>

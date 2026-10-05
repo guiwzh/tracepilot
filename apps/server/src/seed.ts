@@ -355,7 +355,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stdout.write(
       result.repository
         ? `Demo git repository: ${config.repositoryRoot}/demo-project (releases point at its commits).\n`
-        : 'No demo git repository (git unavailable or REPOSITORY_ROOT is empty): code tools will report it.\n',
+        : 'No demo git repository (git unavailable or REPOSITORY_ROOT is empty): investigations run without the code tools.\n',
     );
   } finally {
     database.close();

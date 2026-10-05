@@ -182,7 +182,7 @@ export async function runEngine(
         issueId: prepared.issueId,
         projectId: 'demo-project',
         allowSourceContext: config.agentSourceContext,
-        // 评测用例没有 git 仓库：代码类工具如实回答「没有配置仓库」，而不是读到演示仓库里无关的代码。
+        // 评测用例没有 git 仓库：不把代码类工具交给 Agent（任务说明里写明），也不会读到演示仓库里无关的代码。
         repositoryRoot: null,
       },
       issue: { id: prepared.issueId, title: prepared.issueTitle },

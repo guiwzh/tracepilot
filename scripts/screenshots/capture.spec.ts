@@ -159,7 +159,7 @@ test('capture the performance view', async ({ page }) => {
   await page.goto('/projects/demo-project/performance');
   await expect(page.getByRole('heading', { name: 'Performance' })).toBeVisible();
   await expect(page.locator('.vital-card').first()).toBeVisible();
-  // ECharts 有 400ms 入场动画，等它结束再拍。
+  // 性能页的图表用 ECharts 默认的 1 秒入场动画（cubicInOut），0.9 秒时已基本画完。
   await page.waitForTimeout(900);
   await page.screenshot({ path: resolve(outputDir, '05-performance.png') });
 });

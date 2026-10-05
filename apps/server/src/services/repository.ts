@@ -12,8 +12,9 @@ import { join, posix } from 'node:path';
  *
  * 安全措施：
  * - 用 execFile 传参数数组调用 git，不经过 shell，参数里的任何字符都不会被解释成命令；
- * - 提交号只接受十六进制，路径不能是绝对路径、不能含 ..、不能以 - 开头（会被当成 git 的选项），
- *   并且一律放在 -- 之后；
+ * - 提交号只接受十六进制，并先确认仓库里有这个提交，之后一律用完整的 40 位提交号；
+ *   路径不能是绝对路径、不能含 ..、不能以 - 开头（会被当成 git 的选项），放在 -- 之后，
+ *   或者接在提交号后面（<提交号>:<路径>）；
  * - 关掉可能执行外部程序的配置（fsmonitor、外部 diff、textconv），不读系统级 git 配置，不弹出认证提示，
  *   不加可选的锁（只读操作不该在仓库里留下 index.lock）；
  * - 每条命令 5 秒超时、输出有上限。
@@ -140,7 +141,7 @@ export async function resolveRepositoryFile(
     .replace(/[?#].*$/, '')
     .replace(/^(?:\.{1,2}\/)+/, '');
   if (!cleaned) return null;
-  const files = await filesAt(repository, commit);
+  const files = await filesAt(repository, await verifyCommit(repository, commit));
   if (files.includes(cleaned)) return cleaned;
   const matches = files.filter((file) => file.endsWith(`/${cleaned}`));
   return matches.length === 1 ? matches[0]! : null;
@@ -282,6 +283,7 @@ export async function blameLine(
     output = await git(repository, [
       'blame',
       '--porcelain',
+      '--no-textconv',
       '-L',
       `${line},${line}`,
       full,

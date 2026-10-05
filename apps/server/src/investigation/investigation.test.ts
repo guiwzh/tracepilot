@@ -191,7 +191,7 @@ describe('investigation agent', () => {
   });
 
   it('offers no code tools when the project has no repository, and says so', async () => {
-    // 真实模型评测里没有仓库时 Agent 仍会每次调用代码类工具约 3 次，只能得到「没有配置仓库」。
+    // 提示词 v4 的真实模型评测里，没有仓库时 Agent 平均每次调查仍调用代码类工具约 3 次，只能得到「没有配置仓库」。
     config = { ...config, repositoryRoot: null };
     const { client, requests } = scripted([
       () => turn([{ id: 'c1', name: 'get_issue_overview', arguments: '{}' }]),
@@ -388,7 +388,7 @@ describe('investigation agent', () => {
   });
 
   it('counts requests that got no response as failed, but not cancelled ones', async () => {
-    // 回归：失败请求只挑状态码 ≥ 400 的，断网、跨域被拦这类拿不到响应的请求（状态码 0）
+    // 回归：失败请求曾只挑状态码 ≥ 400 的，断网、跨域被拦这类拿不到响应的请求（状态码 0）
     // 从不出现在失败请求里，Agent 和单次诊断都看不到它们。
     await start();
     const now = Date.now();

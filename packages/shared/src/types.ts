@@ -252,12 +252,12 @@ export interface AlertDelivery {
   /** investigation：自动调查结束后的跟进通知。 */
   trigger: AlertTrigger | 'test' | 'investigation';
   status: 'pending' | 'sent' | 'failed' | 'suppressed';
-  /** suppressed 的原因（muted、interval、rate_limited），或最近一次发送失败的原因。 */
+  /** suppressed 的原因（muted、interval、rate_limited，以及发出前规则被停用的 disabled），或最近一次发送失败的原因。 */
   reason: string | null;
   attempts: number;
   /** 这条通知发起（或汇报）的调查。 */
   investigationId: string | null;
-  /** 规则要求自动调查、却没有发起的原因：cooldown、daily_limit、busy。 */
+  /** 规则要求自动调查、却没有发起的原因：cooldown、daily_limit、busy、disabled（服务端关闭了自动调查）。 */
   investigationNote: string | null;
   createdAt: number;
   sentAt: number | null;

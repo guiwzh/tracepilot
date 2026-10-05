@@ -21,8 +21,8 @@ import { listIssues, listProjects } from '../services/queries';
  *
  * 与 Agent 共用同一份工具定义（investigation/tools.ts）：同样的 Zod 参数校验、同样的执行函数、同样在结果
  * 离开服务端之前再脱敏一次、同样的长度上限。区别只在作用域：Agent 的工具绑定在一次调查的 Issue 上，
- * MCP 客户端要先找到 Issue，所以每个工具多一个 issueId 参数，另加 list_projects、list_issues 和
- * get_latest_investigation。
+ * MCP 客户端要先找到 Issue，所以每个工具多一个 issueId 参数，另加 list_projects、list_issues、
+ * get_latest_investigation 和 get_fix_brief。
  *
  * 全部工具只读，并在 MCP 的工具注解里标明（readOnlyHint）。作用域由连接决定：HTTP 连接只能看令牌所属的
  * 项目，stdio 连接（本机进程）看得到全部项目或启动时指定的那一个。不在作用域里的 Issue 一律回答
