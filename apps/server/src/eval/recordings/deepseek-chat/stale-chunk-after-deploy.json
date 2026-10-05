@@ -2,237 +2,79 @@
   "format": 1,
   "caseId": "stale-chunk-after-deploy",
   "model": "deepseek-chat",
-  "promptVersion": "investigation-v5",
+  "promptVersion": "investigation-v6",
   "toolsDigest": "4c608188d8472350",
   "sourceContext": true,
-  "recordedAt": "2026-10-02T23:06:38.521Z",
+  "recordedAt": "2026-10-02T23:26:29.130Z",
   "runs": [
     {
       "run": 1,
-      "clock": 1790982348092,
+      "clock": 1790983547202,
       "turns": [
         {
-          "text": "I'll start by getting the issue overview and recent event samples.",
+          "text": "I'll start with the issue overview and recent event samples.",
           "toolCalls": [
             {
-              "id": "call_00_kjf4FogxWIJxvDmdzS9g6268",
+              "id": "call_00_VJeBIC8v9oXKxhbkLQyz8073",
               "name": "get_issue_overview",
               "arguments": "{}"
             },
             {
-              "id": "call_01_FI6vkjJNFWS4qFeSA8M32619",
+              "id": "call_01_0S8ytqD79GdZU7DFcmEN1870",
               "name": "list_event_samples",
               "arguments": "{\"limit\": 10}"
             }
           ],
           "usage": {
-            "inputTokens": 2025,
-            "outputTokens": 65
+            "inputTokens": 2058,
+            "outputTokens": 64
           }
         },
         {
-          "text": "Now let me inspect a full event and check release spread.",
+          "text": "I'll inspect one event in detail and check the release spread.",
           "toolCalls": [
             {
-              "id": "call_00_Nsyvhikg4RCYGNYQUluF5548",
+              "id": "call_00_pYT9Uj1iNttZJJKItSkH4248",
               "name": "get_event_detail",
               "arguments": "{\"eventId\": \"evt-4a1a36-025\"}"
             },
             {
-              "id": "call_01_jixYXSkRdigRMbErQDG19963",
+              "id": "call_01_wWthARbWZAu8cnz1sxsB7578",
               "name": "compare_releases",
               "arguments": "{}"
             }
           ],
           "usage": {
-            "inputTokens": 3196,
-            "outputTokens": 72
+            "inputTokens": 3228,
+            "outputTokens": 73
           }
         },
         {
-          "text": "Let me check the source context for the top frame to confirm whether it can be mapped.",
+          "text": "I have enough evidence. Let me confirm the top frame source context isn't available (stack is null) — the stack is null so there's no frame to resolve.",
           "toolCalls": [
             {
-              "id": "call_00_2GLIV0PNMh9yOkLfn5L07742",
+              "id": "call_00_yVfSDCwjghmR1iLNQYvz8176",
               "name": "get_source_context",
               "arguments": "{\"eventId\": \"evt-4a1a36-025\", \"frameIndex\": 0}"
             }
           ],
           "usage": {
-            "inputTokens": 3755,
-            "outputTokens": 82
+            "inputTokens": 3788,
+            "outputTokens": 98
           }
         },
         {
-          "text": "The event has no stack, no failed request detail, no trace id, and no source maps. Let me check an earlier event to see if any event carries more detail.",
+          "text": "",
           "toolCalls": [
             {
-              "id": "call_00_HU3esz6keG6mmFmqMtZn0646",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-016\"}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3887,
-            "outputTokens": 82
-          }
-        },
-        {
-          "text": "The evidence is consistent across events. Let me submit the report.",
-          "toolCalls": [
-            {
-              "id": "call_00_5BilGOjPLOsRra7IDJYD4926",
+              "id": "call_00_Vh2TKJrYK1YbZLIsAc3V1533",
               "name": "submit_report",
-              "arguments": "{\"summary\": \"26 \\\"Resource failed\\\" errors for https://cdn.shop.example/assets/address-lookup.1f9e.js all occur on /checkout in release 3.1.0, ~2s after clicking \\\"Add a new address\\\", across all four browsers. Every event lacks a stack, failed-request detail, trace id and source maps, so the failing code itself was not observed. The leading finding is that this asset could not be loaded/executed from the CDN, but the underlying fetch status must be confirmed from CDN/network logs.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\",\\\"releases\\\":\\\"3.1.0 100%\\\"\", \"description\": \"All 26 events / 23 users are confined to the /checkout route and release 3.1.0, so the failure is route- and release-bound.\", \"source\": \"issue\"}, {\"resultRef\": \"T2\", \"quote\": \"\\\"message\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"stackMapped\\\":false,\\\"breadcrumbs\\\":2\", \"description\": \"Sample events repeat the same message; no event is stack-mapped, so no original source location is available for any sample.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"stack\\\":null,\\\"stackMapped\\\":false\", \"description\": \"The inspected event has no stack trace at all, so the failing frame cannot be resolved to source code.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"[-2.0s click button.add-address “Add a new address\\\"]\", \"description\": \"The timeline places the failure ~2s after the user clicks the add-address button on checkout, indicating the address-lookup chunk is loaded lazily by that interaction.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"failedRequests\\\":[],\\\"traceId\\\":null\", \"description\": \"No failed request was captured and no trace id was recorded, so the backend/CDN side of this resource fetch cannot be looked up from telemetry.\", \"source\": \"network\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"sourceMaps\\\":0\", \"description\": \"Neither release 3.1.0 nor 3.2.0 has any source maps uploaded, explaining why stacks cannot be source-mapped.\", \"source\": \"release\"}, {\"resultRef\": \"T4\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed\", \"description\": \"All events come from 3.1.0 pages loaded before 3.2.0 was deployed, i.e. stale long-running sessions referencing the older asset hashed name address-lookup.1f9e.js.\", \"source\": \"release\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"available\\\":false,\\\"reason\\\":\\\"NO_STACK\\\"\", \"description\": \"Source context is unavailable because the event carries no stack; the actual failing code was never seen.\", \"source\": \"source\"}], \"possibleCauses\": [{\"cause\": \"The lazy-loaded chunk address-lookup.1f9e.js failed to load from the CDN (404 / integrity or CORS failure), so the address-lookup module the add-address button depends on never executed; the exact HTTP status must be confirmed in CDN or network logs.\", \"confidence\": 0.55, \"evidenceRefs\": [1, 2, 4, 6]}, {\"cause\": \"Stale clients still running release 3.1.0 request the old hashed filename address-lookup.1f9e.js after 3.2.0 was deployed and the old asset was removed from the CDN; 3.2.0 itself reports zero such events.\", \"confidence\": 0.5, \"evidenceRefs\": [5, 6]}, {\"cause\": \"Source maps are missing for both releases, so even if a stack existed the failure could not be mapped to original code; the failing source is unverified and no code-level defect can be named.\", \"confidence\": 0.3, \"evidenceRefs\": [5, 7, 3]}], \"investigationSteps\": [\"Read issue overview: 26 events, 23 users, 100% on /checkout, 100% in release 3.1.0\", \"Listed recent event samples and confirmed identical message and stackMapped:false across browsers\", \"Inspected two full events (evt-4a1a36-025, evt-4a1a36-016): stack null, no failedRequests, no traceId, click on add-address ~2s before\", \"Called get_source_context on frame 0: unavailable with reason NO_STACK\", \"Compared releases: issue only in 3.1.0, all events after 3.2.0 deployment, sourceMaps 0 in both releases\"], \"suggestions\": [\"Check CDN/access logs for requests to /assets/address-lookup.1f9e.js around 2026-10-02T22:23–23:01Z to see the HTTP status (404/403/5xx/timeout)\", \"Verify whether address-lookup.1f9e.js still exists in the 3.1.0 build output and whether the 3.2.0 deploy pruned old hashed assets\", \"Add cache-busting/retention for hashed chunks and serve a manifest so long-lived 3.1.0 pages do not request removed filenames\", \"Upload source maps for 3.1.0 and 3.2.0 so future events can be mapped to original source\", \"Instrument the dynamic import of the address-lookup chunk to capture the underlying error/status and a trace id\", \"Reproduce on /checkout by clicking \\\"Add a new address\\\" while throttling or blocking the CDN asset to confirm the user-visible impact\"], \"missingInformation\": [\"No source maps for releases 3.1.0 or 3.2.0, so the failing code cannot be mapped to original source\", \"No stack trace on any event and no trace id / span id recorded, so the request cannot be opened in the backend tracing system\", \"No failed-request detail (HTTP status, request id) captured for the address-lookup.1f9e.js fetch\", \"CDN/edge access logs and deploy asset manifest for 3.1.0 vs 3.2.0\", \"No git repository is configured, so no suspect commits could be examined\"]}"
+              "arguments": "{\"summary\": \"On release 3.1.0, users clicking \\\"Add a new address\\\" on /checkout trigger a failed load of the hashed bundle https://cdn.shop.example/assets/address-lookup.1f9e.js, which is requested lazily by the address lookup feature. All 26 events come from 3.1.0 pages that were already loaded before 3.2.0 was deployed, and the events carry no stack, no failed request detail and no trace id, so the exact fetch failure mode is not directly observable. The likeliest explanation is that the hashed asset 1f9e.js is missing or stale on the CDN for that release's chunk path.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\", \"description\": \"The issue title names the failing resource; all events are errors about that CDN asset.\", \"source\": \"issue\"}, {\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\",\\\"releases\\\":\\\"3.1.0 100%\\\"\", \"description\": \"Every event comes from /checkout and only from release 3.1.0, with a single failing asset URL.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"-2.0s click button.add-address “Add a new address”\", \"description\": \"The error immediately follows a click on the add-address button, showing the bundle is loaded on demand for the address lookup feature.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"stack\\\":null\", \"description\": \"The event has no stack and no failed-request detail, so the failure mode (404, MIME, CSP, network) cannot be read from telemetry.\", \"source\": \"stack\"}, {\"resultRef\": \"T4\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed (2026-10-02T22:40:47.202Z): they come from pages loaded before that deployment and still running 3.1.0.\", \"description\": \"The failures affect only clients still running the old 3.1.0 build after the new deploy, consistent with the old hashed asset being unavailable.\", \"source\": \"release\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"available\\\":false,\\\"reason\\\":\\\"NO_STACK\\\"\", \"description\": \"Source resolution is impossible for this event because it has no stack trace.\", \"source\": \"source\"}], \"possibleCauses\": [{\"cause\": \"The hashed chunk address-lookup.1f9e.js is missing or not served from the CDN for release 3.1.0 (deleted/replaced by the 3.2.0 deploy or a bad upload), so clicking 'Add a new address' fails to load the lazy bundle.\", \"confidence\": 0.6, \"evidenceRefs\": [0, 1, 2, 4]}, {\"cause\": \"The request for the asset is blocked or failing at the network/MIME/CSP level in the browser (e.g. wrong content-type or blocked origin); telemetry cannot distinguish this from a 404 because stacks and failed-request details are absent.\", \"confidence\": 0.3, \"evidenceRefs\": [2, 3]}, {\"cause\": \"Stale clients running the pre-3.2.0 build reference an obsolete asset path after deployment; if 3.1.0 assets were pruned at deploy time, only those still-open pages would see this failure.\", \"confidence\": 0.3, \"evidenceRefs\": [4]}], \"investigationSteps\": [\"Read the issue overview to see counts, routes, browsers and release split.\", \"Listed the 10 most recent event samples; all identical message, route and release.\", \"Inspected evt-4a1a36-025 in full: stack null, no failed requests, breadcrumb shows a click on the add-address button.\", \"Compared releases: all events belong to 3.1.0, all after 3.2.0 was deployed.\", \"Requested source context for frame 0 and confirmed it is unavailable (NO_STACK).\"], \"suggestions\": [\"Verify on the CDN whether /assets/address-lookup.1f9e.js exists and returns 200 with a JavaScript content-type for release 3.1.0.\", \"Check whether the 3.2.0 deploy pruned or overwrote 3.1.0 assets, and add a retention/versioned-path policy for older hashed chunks.\", \"Capture HTTP status and response headers for failed dynamic imports so these events record a status instead of a bare message.\", \"Confirm the address-lookup chunk is actually emitted by the 3.1.0 build (correct dynamic import path and public path).\", \"Consider serving old hashed assets for a retention window so pages loaded before a deploy do not break.\"], \"missingInformation\": [\"No stack trace or source map for this event (get_source_context: NO_STACK), so the failing code path in the lazy chunk could not be read.\", \"No failed-request record and no HTTP status/headers for address-lookup.1f9e.js, so 404 vs MIME/CSP/network failure is unconfirmed.\", \"No trace id or span id on the event, so there is no backend-side record to open.\", \"No CDN access logs available; nobody has confirmed whether the asset exists on the CDN.\", \"No git repository is configured, so the change that introduced or removed the asset reference could not be inspected.\"]}"
             }
           ],
           "usage": {
-            "inputTokens": 4163,
-            "outputTokens": 1548
-          }
-        },
-        {
-          "text": "The quote in evidence[3] wasn't verbatim. Let me fix it.",
-          "toolCalls": [
-            {
-              "id": "call_00_Kv0B36W7pb9xVPejKt6y8179",
-              "name": "submit_report",
-              "arguments": "{\"summary\": \"26 \\\"Resource failed\\\" errors for https://cdn.shop.example/assets/address-lookup.1f9e.js all occur on /checkout in release 3.1.0, ~2s after clicking \\\"Add a new address\\\", across all four browsers. Every event lacks a stack, failed-request detail, trace id and source maps, so the failing code itself was not observed. The leading finding is that this asset could not be loaded/executed from the CDN, but the underlying fetch status must be confirmed from CDN/network logs.\", \"evidence\": [{\"description\": \"All 26 events / 23 users are confined to the /checkout route and release 3.1.0, so the failure is route- and release-bound.\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\",\\\"releases\\\":\\\"3.1.0 100%\\\"\", \"resultRef\": \"T1\", \"source\": \"issue\"}, {\"description\": \"Sample events repeat the same message; no event is stack-mapped, so no original source location is available for any sample.\", \"quote\": \"\\\"message\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"stackMapped\\\":false,\\\"breadcrumbs\\\":2\", \"resultRef\": \"T2\", \"source\": \"issue\"}, {\"description\": \"The inspected event has no stack trace at all, so the failing frame cannot be resolved to source code.\", \"quote\": \"\\\"stack\\\":null,\\\"stackMapped\\\":false\", \"resultRef\": \"T3\", \"source\": \"stack\"}, {\"description\": \"The timeline places the failure ~2s after the user clicks the add-address button on checkout, indicating the address-lookup chunk is loaded lazily by that interaction.\", \"quote\": \"-2.0s click button.add-address “Add a new address”\", \"resultRef\": \"T3\", \"source\": \"breadcrumb\"}, {\"description\": \"No failed request was captured and no trace id was recorded, so the backend/CDN side of this resource fetch cannot be looked up from telemetry.\", \"quote\": \"\\\"failedRequests\\\":[],\\\"traceId\\\":null\", \"resultRef\": \"T3\", \"source\": \"network\"}, {\"description\": \"Neither release 3.1.0 nor 3.2.0 has any source maps uploaded, explaining why stacks cannot be source-mapped.\", \"quote\": \"\\\"sourceMaps\\\":0\", \"resultRef\": \"T4\", \"source\": \"release\"}, {\"description\": \"All events come from 3.1.0 pages loaded before 3.2.0 was deployed, i.e. stale long-running sessions referencing the older asset hashed name address-lookup.1f9e.js.\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed\", \"resultRef\": \"T4\", \"source\": \"release\"}, {\"description\": \"Source context is unavailable because the event carries no stack; the actual failing code was never seen.\", \"quote\": \"\\\"available\\\":false,\\\"reason\\\":\\\"NO_STACK\\\"\", \"resultRef\": \"T5\", \"source\": \"source\"}], \"possibleCauses\": [{\"cause\": \"The lazy-loaded chunk address-lookup.1f9e.js failed to load from the CDN (404 / integrity or CORS failure), so the address-lookup module the add-address button depends on never executed; the exact HTTP status must be confirmed in CDN or network logs.\", \"confidence\": 0.55, \"evidenceRefs\": [1, 2, 4, 6]}, {\"cause\": \"Stale clients still running release 3.1.0 request the old hashed filename address-lookup.1f9e.js after 3.2.0 was deployed and the old asset was removed from the CDN; 3.2.0 itself reports zero such events.\", \"confidence\": 0.5, \"evidenceRefs\": [5, 6]}, {\"cause\": \"Source maps are missing for both releases, so even if a stack existed the failure could not be mapped to original code; the failing source is unverified and no code-level defect can be named.\", \"confidence\": 0.3, \"evidenceRefs\": [5, 7, 3]}], \"investigationSteps\": [\"Read issue overview: 26 events, 23 users, 100% on /checkout, 100% in release 3.1.0\", \"Listed recent event samples and confirmed identical message and stackMapped:false across browsers\", \"Inspected two full events (evt-4a1a36-025, evt-4a1a36-016): stack null, no failedRequests, no traceId, click on add-address ~2s before\", \"Called get_source_context on frame 0: unavailable with reason NO_STACK\", \"Compared releases: issue only in 3.1.0, all events after 3.2.0 deployment, sourceMaps 0 in both releases\"], \"suggestions\": [\"Check CDN/access logs for requests to /assets/address-lookup.1f9e.js around 2026-10-02T22:23–23:01Z to see the HTTP status (404/403/5xx/timeout)\", \"Verify whether address-lookup.1f9e.js still exists in the 3.1.0 build output and whether the 3.2.0 deploy pruned old hashed assets\", \"Add cache-busting/retention for hashed chunks and serve a manifest so long-lived 3.1.0 pages do not request removed filenames\", \"Upload source maps for 3.1.0 and 3.2.0 so future events can be mapped to original source\", \"Instrument the dynamic import of the address-lookup chunk to capture the underlying error/status and a trace id\", \"Reproduce on /checkout by clicking \\\"Add a new address\\\" while throttling or blocking the CDN asset to confirm the user-visible impact\"], \"missingInformation\": [\"No source maps for releases 3.1.0 or 3.2.0, so the failing code cannot be mapped to original source\", \"No stack trace on any event and no trace id / span id recorded, so the request cannot be opened in the backend tracing system\", \"No failed-request detail (HTTP status, request id) captured for the address-lookup.1f9e.js fetch\", \"CDN/edge access logs and deploy asset manifest for 3.1.0 vs 3.2.0\", \"No git repository is configured, so no suspect commits could be examined\"]}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 5774,
-            "outputTokens": 1550
-          }
-        }
-      ],
-      "outcome": {
-        "steps": 6,
-        "calls": [
-          {
-            "ref": "T1",
-            "name": "get_issue_overview",
-            "ok": true,
-            "outputDigest": "8730792715e2b2d3"
-          },
-          {
-            "ref": "T2",
-            "name": "list_event_samples",
-            "ok": true,
-            "outputDigest": "113052e25786a265"
-          },
-          {
-            "ref": "T3",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "1f5818e871213a19"
-          },
-          {
-            "ref": "T4",
-            "name": "compare_releases",
-            "ok": true,
-            "outputDigest": "dc62618aa5b22954"
-          },
-          {
-            "ref": "T5",
-            "name": "get_source_context",
-            "ok": true,
-            "outputDigest": "8e8b04cf558d640f"
-          },
-          {
-            "ref": "T6",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "5e4e2d80c67c06ed"
-          }
-        ],
-        "citations": {
-          "verified": 8,
-          "total": 8,
-          "attempts": 2
-        },
-        "error": null
-      },
-      "score": {
-        "keywordCorrect": true,
-        "adoptedForbidden": null,
-        "reportedMissing": null
-      },
-      "judge": {
-        "verdict": "partial",
-        "adoptedForbiddenClaim": false,
-        "reason": "The correct stale-chunk mechanism appears only as the second-ranked cause, while the top-ranked cause is a generic CDN load failure that does not identify the post-deployment removal of the old asset."
-      },
-      "latencyMs": 17030
-    },
-    {
-      "run": 2,
-      "clock": 1790982370582,
-      "turns": [
-        {
-          "text": "I'll start by getting the issue overview and recent event samples.",
-          "toolCalls": [
-            {
-              "id": "call_00_uYEN8OpApj42sQz5bg4a3733",
-              "name": "get_issue_overview",
-              "arguments": "{}"
-            },
-            {
-              "id": "call_01_I4eIooLStu8RMwEpZnR68816",
-              "name": "list_event_samples",
-              "arguments": "{\"limit\": 10}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 2022,
-            "outputTokens": 65
-          }
-        },
-        {
-          "text": "Now let me inspect a specific event in detail and check release distribution.",
-          "toolCalls": [
-            {
-              "id": "call_00_v2XufpeQTsZVOCzkG9Il6086",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-025\"}"
-            },
-            {
-              "id": "call_01_xS56qQ3fyMLDRSsmn1Ch8428",
-              "name": "compare_releases",
-              "arguments": "{}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3193,
-            "outputTokens": 74
-          }
-        },
-        {
-          "text": "Let me check the source context for the top frame to confirm whether the code can be mapped.",
-          "toolCalls": [
-            {
-              "id": "call_00_DEJqmAYfV0DdI6XfsTdg9868",
-              "name": "get_source_context",
-              "arguments": "{\"eventId\": \"evt-4a1a36-025\", \"frameIndex\": 0}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3754,
-            "outputTokens": 83
-          }
-        },
-        {
-          "text": "Now I have enough evidence to submit the report.",
-          "toolCalls": [
-            {
-              "id": "call_00_bpkYfmJDQ5YI67YwhObq8156",
-              "name": "submit_report",
-              "arguments": "{\"summary\": \"All 26 events are \\\"Resource failed\\\" for the CDN asset address-lookup.1f9e.js, exclusively on https://shop.example/checkout across all four browsers, indicating a deployment/asset-availability problem rather than a browser-specific bug. The events began at 2026-10-02T22:24Z, only in release 3.1.0, and every one occurred in pages loaded before 3.2.0 was deployed. The events carry no stack trace and the release has no source maps, so no failing code line could be inspected.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"{\\\"issue\\\":{\\\"title\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"level\\\":\\\"error\\\",\\\"status\\\":\\\"unresolved\\\",\\\"events\\\":26,\\\"affectedUsers\\\":23,\\\"firstSeen\\\":\\\"2026-10-02T22:24:10.582Z\\\",\\\"lastSeen\\\":\\\"2026-10-02T23:01:40.582Z\\\",\\\"latestRelease\\\":\\\"3.1.0\\\"}\", \"description\": \"The issue is a failed CDN resource load for address-lookup.1f9e.js: 26 events from 23 users between 22:24Z and 23:01Z.\", \"source\": \"issue\"}, {\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\",\\\"releases\\\":\\\"3.1.0 100%\\\"\", \"description\": \"Every event is on the checkout route and from release 3.1.0, so the failure is route- and release-specific.\", \"source\": \"issue\"}, {\"resultRef\": \"T2\", \"quote\": \"{\\\"eventId\\\":\\\"evt-4a1a36-025\\\",\\\"capturedAt\\\":\\\"2026-10-02T23:01:40.582Z\\\",\\\"release\\\":\\\"3.1.0\\\",\\\"page\\\":\\\"https://shop.example/checkout\\\",\\\"browser\\\":\\\"Edge\\\",\\\"message\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"stackMapped\\\":false\", \"description\": \"Samples across Edge, Chrome, Safari and Firefox all show the same resource-failure message with stackMapped false, ruling out a single-browser cause.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"message\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"stack\\\":null,\\\"stackMapped\\\":false,\\\"timeline\\\":[\\\"-3625.0s navigation pushState → /cart\\\",\\\"-2.0s click button.add-address “Add a new address”\\\"],\\\"failedRequests\\\":[],\\\"traceId\\\":null\", \"description\": \"The event has a null stack and empty failedRequests; the user clicked 'Add a new address' on checkout two seconds before capture, so the assertion of the address-lookup bundle is what failed.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"sourceMaps\\\":0,\\\"eventsAfterNextRelease\\\":{\\\"nextRelease\\\":\\\"3.2.0\\\",\\\"nextDeployedAt\\\":\\\"2026-10-02T22:21:10.582Z\\\",\\\"issueEvents\\\":26}\", \"description\": \"Release 3.1.0 has no source maps, and all 26 events came from pages loaded while 3.1.0 was live but fired after 3.2.0 was deployed at 22:21Z — clients running the stale release whose asset chunk is no longer served.\", \"source\": \"release\"}, {\"resultRef\": \"T5\", \"quote\": \"{\\\"available\\\":false,\\\"reason\\\":\\\"NO_STACK\\\",\\\"meaning\\\":\\\"This event has no stack trace.\\\",\\\"release\\\":\\\"3.1.0\\\"}\", \"description\": \"Source context cannot be resolved: the event has no stack trace at all, so no failing line of address-lookup.js could be examined.\", \"source\": \"source\"}], \"possibleCauses\": [{\"cause\": \"The address-lookup.1f9e.js asset chunk that release 3.1.0 requests is missing from the CDN after the 3.2.0 deployment replaced the build, so already-open 3.1.0 pages fail to load it (stale-release asset 404). This matches the release timing: all 26 events are 3.1.0 pages and all fired after 3.2.0 went live.\", \"confidence\": 0.72, \"evidenceRefs\": [2, 4, 5]}, {\"cause\": \"The address-lookup chunk was never uploaded / has a wrong hash or path in the CDN for 3.1.0, so the request 404s regardless of the rollout. Supported by the 100% checkout-route concentration and the uniform failure across all browsers.\", \"confidence\": 0.45, \"evidenceRefs\": [0, 1, 2]}, {\"cause\": \"The chunk exists but a runtime error while it executes (e.g. an undefined API) surfaces as a failed dynamic import; this cannot be confirmed because the event has no stack trace and release 3.1.0 ships no source maps.\", \"confidence\": 0.2, \"evidenceRefs\": [3, 5]}], \"investigationSteps\": [\"Read the issue overview: 26 events, 23 users, all on /checkout, all release 3.1.0.\", \"Sampled 10 recent events; identical message on Edge, Chrome, Safari and Firefox, all stackMapped false.\", \"Pulled event evt-4a1a36-025 in full: null stack, empty failedRequests, no traceId, user clicked 'Add a new address' 2s before capture.\", \"Compared releases: 3.1.0 has no source maps and all 26 events fired after 3.2.0 was deployed.\", \"Requested source context for frame 0, which failed with reason NO_STACK.\"], \"suggestions\": [\"Verify whether /assets/address-lookup.1f9e.js is still present on cdn.shop.example and whether the 3.2.0 build removed or renamed that hashed chunk.\", \"Add long-lived immutable caching plus a retention policy so chunks from an outgoing release remain fetchable for the lifetime of open sessions.\", \"Ensure the address-lookup dynamic import has a graceful fallback (address can still be entered) when the chunk fails to load.\", \"Upload source maps for release 3.1.0 so any future error from it is mapped to original source.\", \"Check CDN access/error logs for 404s on that asset path around 2026-10-02T22:21–23:01Z to confirm the status code.\"], \"missingInformation\": [\"No source maps for release 3.1.0 (sourceMaps: 0), so no original source line for the failing chunk could be inspected.\", \"The event carries no stack trace (stack: null) and no traceId, so there is no browser-side trace to correlate.\", \"No HTTP status or response detail was captured: failedRequests is empty, so it is unconfirmed whether the CDN returned 404/403/500.\", \"No git repository is configured, so no suspect commit or shipped source could be read.\", \"CDN/backend access logs for cdn.shop.example/assets/address-lookup.1f9e.js are not available here.\"]}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3887,
-            "outputTokens": 1747
+            "inputTokens": 3936,
+            "outputTokens": 1324
           }
         }
       ],
@@ -243,25 +85,25 @@
             "ref": "T1",
             "name": "get_issue_overview",
             "ok": true,
-            "outputDigest": "8e720145d7f00c32"
+            "outputDigest": "fb6f6e5d930b7d54"
           },
           {
             "ref": "T2",
             "name": "list_event_samples",
             "ok": true,
-            "outputDigest": "7ed2b36fb3d1fe73"
+            "outputDigest": "170d55ea78cbeef3"
           },
           {
             "ref": "T3",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "089fb101de8a2dc4"
+            "outputDigest": "c9129a32733f79b7"
           },
           {
             "ref": "T4",
             "name": "compare_releases",
             "ok": true,
-            "outputDigest": "2b189533535ce72b"
+            "outputDigest": "5167394af35f474f"
           },
           {
             "ref": "T5",
@@ -285,136 +127,112 @@
       "judge": {
         "verdict": "correct",
         "adoptedForbiddenClaim": false,
-        "reason": "The top-ranked cause identifies the same stale-chunk mechanism: pages loaded before the 3.2.0 deployment still request the removed address-lookup.1f9e.js asset, causing CDN failures."
+        "reason": "The top-ranked cause identifies the missing hashed chunk address-lookup.1f9e.js due to the 3.2.0 deployment, matching the reference stale-chunk mechanism."
       },
-      "latencyMs": 10205
+      "latencyMs": 9681
     },
     {
-      "run": 3,
-      "clock": 1790982384167,
+      "run": 2,
+      "clock": 1790983561843,
       "turns": [
         {
-          "text": "I'll start by getting the issue overview and recent event samples.",
+          "text": "I'll start with the issue overview and event samples.",
           "toolCalls": [
             {
-              "id": "call_00_YsRug1E84idI1poXkAK50516",
+              "id": "call_00_19MntwrIVQS2Zkb1q23P5972",
               "name": "get_issue_overview",
               "arguments": "{}"
             },
             {
-              "id": "call_01_8o1vfqC0ymO02ELiJMWh9496",
+              "id": "call_01_6ZNJEtTGaEJTHLsxGQnA4466",
               "name": "list_event_samples",
               "arguments": "{\"limit\": 10}"
             }
           ],
           "usage": {
-            "inputTokens": 2024,
-            "outputTokens": 65
+            "inputTokens": 2055,
+            "outputTokens": 63
           }
         },
         {
-          "text": "Now let me get event detail and release comparison.",
+          "text": "Now let me inspect a detailed event and check the release distribution.",
           "toolCalls": [
             {
-              "id": "call_00_JOX047scNtOxHBDJJ5GC6593",
+              "id": "call_00_U8Nvm44LX5GkkyekpJdy7306",
               "name": "get_event_detail",
               "arguments": "{\"eventId\": \"evt-4a1a36-025\"}"
             },
             {
-              "id": "call_01_QhmWQnKxMjUGI2s4Kfyn4881",
+              "id": "call_01_3hMBJfg7YSCkr6ULsMDx8732",
               "name": "compare_releases",
               "arguments": "{}"
             }
           ],
           "usage": {
-            "inputTokens": 3195,
-            "outputTokens": 70
+            "inputTokens": 3224,
+            "outputTokens": 73
           }
         },
         {
-          "text": "The event has no stack and no failed requests captured. Let me check the source context for the top frame and a couple more events to see if any have failed network details.",
+          "text": "The stack is null and stackMapped is false, so there's no code frame to map. Let me confirm the source context is unavailable and check a second event for details like the request status.",
           "toolCalls": [
             {
-              "id": "call_00_vpvz9Fqs1SsoYuFj0XoZ1505",
+              "id": "call_00_2FzyrZ0Ok4luRWIHK1487110",
               "name": "get_source_context",
               "arguments": "{\"eventId\": \"evt-4a1a36-025\", \"frameIndex\": 0}"
             },
             {
-              "id": "call_01_mQsuiqf7ELZyaBymlL0g1333",
+              "id": "call_01_u1IZAhj2wNSaKhpjPhLx2555",
               "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-020\"}"
-            },
-            {
-              "id": "call_02_9XJmFfkXmsNXIgU3KVzr6493",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-023\"}"
+              "arguments": "{\"eventId\": \"evt-4a1a36-022\"}"
             }
           ],
           "usage": {
-            "inputTokens": 3752,
-            "outputTokens": 177
+            "inputTokens": 3784,
+            "outputTokens": 143
           }
         },
         {
-          "text": "All events are consistent: cross-browser, a user clicks \"Add a new address\" ~2s before the error, and the dynamically-imported chunk `address-lookup.1f9e.js` fails to load. No stack, no trace id, no failed-request detail. Let me check the remaining newest event to confirm there's nothing new.",
+          "text": "I have enough evidence now. The failure is a lazy-loaded chunk (`address-lookup.1f9e.js`) requested when the user clicks \"Add a new address\" on checkout. All events come from release 3.1.0 pages loaded before 3.2.0 deployed, with no matching request in failedRequests. No stack, no source map.",
           "toolCalls": [
             {
-              "id": "call_00_OFyd3rUsi4ERY60fUcki8490",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-024\"}"
-            },
-            {
-              "id": "call_01_7tALkK2k3rzWVxYVOOx26015",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-4a1a36-016\"}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 4364,
-            "outputTokens": 160
-          }
-        },
-        {
-          "text": "Evidence is complete and consistent. Submitting report.",
-          "toolCalls": [
-            {
-              "id": "call_00_AId6mkavIOfp44JJl7Hz0666",
+              "id": "call_00_lPjHn7HH18r6cmb6IUNT8295",
               "name": "submit_report",
-              "arguments": "{\"summary\": \"26 events across Edge/Chrome/Safari/Firefox all fire on /checkout right after clicking \\\"Add a new address\\\", when the lazy chunk address-lookup.1f9e.js fails to load. All events come from release 3.1.0 and none from 3.2.0, suggesting the chunk URL changed or the old asset was removed/retired on the CDN while 3.1.0 pages were still open. No stack trace or trace id exists, so the failing code itself could not be inspected.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\"\", \"description\": \"The failure is confined to the checkout route and all events are from release 3.1.0.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"-2.0s click button.add-address “Add a new address”\\\"\", \"description\": \"The error immediately follows the user clicking the add-address button, which is when the address-lookup chunk would be dynamically imported.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"stack\\\":null,\\\"stackMapped\\\":false\", \"description\": \"The event captured no stack trace, so the failing code path cannot be mapped or inspected.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"reason\\\":\\\"NO_STACK\\\",\\\"meaning\\\":\\\"This event has no stack trace.\\\"\", \"description\": \"Source context is unavailable because the event carries no stack; no source map or original source could be resolved.\", \"source\": \"source\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"version\\\":\\\"3.2.0\\\",\\\"deployedAt\\\":\\\"2026-10-02T22:21:24.167Z\\\",\\\"issueEvents\\\":0\", \"description\": \"All 26 events are on 3.1.0 and zero on 3.2.0, pointing at the 3.1.0 asset/URL rather than a permanent defect in the new release.\", \"source\": \"release\"}, {\"resultRef\": \"T4\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed (2026-10-02T22:21:24.167Z): they come from pages loaded before that deployment and still running 3.1.0.\", \"description\": \"Events occur only on stale 3.1.0 pages still running after the 3.2.0 deployment, consistent with an asset that is no longer available under the old URL.\", \"source\": \"release\"}, {\"resultRef\": \"T6\", \"quote\": \"\\\"failedRequests\\\":[],\\\"traceId\\\":null\", \"description\": \"No failed-request detail or trace id was recorded, so the HTTP status/reason for the chunk load could not be confirmed.\", \"source\": \"network\"}], \"possibleCauses\": [{\"cause\": \"The lazily loaded chunk https://cdn.shop.example/assets/address-lookup.1f9e.js is unavailable under the 3.1.0 asset URL (removed or replaced on the CDN when 3.2.0 shipped), so the dynamic import triggered by clicking \\\"Add a new address\\\" on still-open 3.1.0 pages fails.\", \"confidence\": 0.62, \"evidenceRefs\": [1, 2, 5, 3]}, {\"cause\": \"A stale cached HTML/JS entry on 3.1.0 pages references a content-hashed chunk name that no longer exists after deployment, producing a chunk-load error that the app does not catch; deploy-time cache invalidation or a chunk-load retry handler is needed.\", \"confidence\": 0.45, \"evidenceRefs\": [1, 4, 6]}, {\"cause\": \"The address-lookup module's dynamic import throws inside a module/tooling layer that produced no stack trace; without source maps or a stack this code-level possibility cannot be confirmed.\", \"confidence\": 0.2, \"evidenceRefs\": [2, 3]}], \"investigationSteps\": [\"Read the issue overview: 26 events, 23 users, all on /checkout, all release 3.1.0.\", \"Listed the 10 newest event samples and confirmed a single repeated message across four browsers.\", \"Inspected four events in full; each showed the same click 'Add a new address' breadcrumb ~2s before the failure.\", \"Requested source context for the top frame; it returned NO_STACK.\", \"Compared releases: 26/26 events on 3.1.0, 0 on 3.2.0, all after 3.2.0 was deployed.\"], \"suggestions\": [\"Confirm from CDN/access logs whether /assets/address-lookup.1f9e.js returns 404 or 403 for requests after the 2026-10-02T22:21:24Z 3.2.0 deployment.\", \"Capture the HTTP status of the failing chunk request in the error payload (add failed-request/trace capture for resource errors).\", \"Add a chunk-load retry / stale-bundle reload fallback around the address-lookup dynamic import.\", \"Verify that deploying a new release does not immediately delete the previous release's hashed assets, or extend asset retention.\", \"Ensure source maps are published per release so future resource errors can be mapped to original code.\"], \"missingInformation\": [\"No stack trace or source map for this event, so the failing source was never inspected.\", \"No HTTP status or network detail for the chunk request (failedRequests is empty); the actual CDN response is unknown.\", \"No trace id or span id was recorded, so no backend/CDN request can be looked up.\", \"No git repository is configured, so no commit or diff could be linked to this asset.\", \"CDN deployment/asset-retention logs for the 3.2.0 rollout are not available to me.\"]}"
+              "arguments": "{\"summary\": \"All 26 events are \\\"Resource failed\\\" for the lazy-loaded chunk address-lookup.1f9e.js, fired ~2s after clicking \\\"Add a new address\\\" on /checkout, exclusively from release 3.1.0 pages that were loaded before 3.2.0 was deployed. The hash-named asset was most likely removed or renamed by the 3.2.0 deployment while the old page kept running, so the dynamic import 404s. No stack, source map, HTTP status or trace id was captured, so the exact fetch failure mode could not be confirmed.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\"\", \"description\": \"The issue is confined to the checkout route and one release (3.1.0), all browsers affected, indicating a route/asset-deployment problem rather than a browser-specific bug.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"-2.0s click button.add-address “Add a new address”\", \"description\": \"The failing resource is requested about two seconds after the user triggers the address-lookup feature, indicating it is a lazily loaded chunk needed for that action.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"stack\\\":null,\\\"stackMapped\\\":false\", \"description\": \"The event carries no stack, so no code frame can be mapped to original source.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"reason\\\":\\\"NO_STACK\\\"\", \"description\": \"Source context is unavailable because the event has no stack trace at all.\", \"source\": \"stack\"}, {\"resultRef\": \"T4\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed\", \"description\": \"Every event comes from pages running 3.1.0 that stayed open after 3.2.0 was deployed; the new release has zero occurrences, consistent with the asset filename being invalidated by the deployment.\", \"source\": \"release\"}, {\"resultRef\": \"T4\", \"quote\": \"{\\\"version\\\":\\\"3.2.0\\\",...\\\"issueEvents\\\":0\", \"description\": \"Release 3.2.0 shows no instances of this issue, supporting that fresh pages loading 3.2.0 assets request a valid chunk path.\", \"source\": \"release\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"failedRequests\\\":[]\", \"description\": \"No failed request was recorded alongside the error, so the HTTP status (e.g. 404 vs 403 vs network) is unknown.\", \"source\": \"network\"}], \"possibleCauses\": [{\"cause\": \"The 3.2.0 deployment invalidated or removed the hashed asset address-lookup.1f9e.js, so 3.1.0 pages still open in the browser could no longer fetch that chunk when the address-lookup dynamic import ran.\", \"confidence\": 0.7, \"evidenceRefs\": [1, 3, 4, 5]}, {\"cause\": \"Users who kept an old 3.1.0 tab open past the 3.2.0 deploy hit stale chunk references (classic lazy-loaded chunk version mismatch); a reload would pick up the 3.2.0 asset names.\", \"confidence\": 0.6, \"evidenceRefs\": [3, 4, 5]}, {\"cause\": \"A CDN/network-level failure (404/403/CORS) for cdn.shop.example asset paths could also produce \\\"Resource failed\\\", but the absence of failedRequests means the fetch failure mode is unverified.\", \"confidence\": 0.3, \"evidenceRefs\": [6]}], \"investigationSteps\": [\"Pulled the issue overview: 26 events, 23 users, all on /checkout and release 3.1.0.\", \"Sampled the 10 most recent events; all show the same address-lookup.1f9e.js resource failure with no stack.\", \"Inspected two full events; both show a click on 'Add a new address' ~2s before the error, null stack, and no failedRequests.\", \"Compared releases: 3.1.0 has 100% of events, all after 3.2.0 deployed; 3.2.0 has zero.\", \"Attempted source context for the top frame; rejected with NO_STACK, no source map available.\"], \"suggestions\": [\"Verify on the CDN whether /assets/address-lookup.1f9e.js still resolves (expect 404 if the asset was rotated out by 3.2.0).\", \"Confirm the retention policy for hashed assets across deployments and keep old chunk filenames available for in-flight sessions.\", \"Capture HTTP status/response for failed resource loads (and widen failedRequests capture) so future chunk-load failures are diagnosable.\", \"Encourage users to reload after deploy, or implement automatic chunk-load-error handling that triggers a page reload to fetch the current manifest.\"], \"missingInformation\": [\"No source map is available (release 3.1.0 reports sourceMaps: 0) and the event has no stack, so the failing code could not be inspected.\", \"No failed-request entry or HTTP status (404/403/CORS) was captured for address-lookup.1f9e.js, so the exact fetch failure mode is unconfirmed.\", \"No trace id or span id present on the events, so there is no backend/CDN-side trace to correlate.\", \"No git repository is configured, so the change that touched the address-lookup import could not be identified.\"]}"
             }
           ],
           "usage": {
-            "inputTokens": 4908,
-            "outputTokens": 1402
+            "inputTokens": 4174,
+            "outputTokens": 1394
           }
         }
       ],
       "outcome": {
-        "steps": 5,
+        "steps": 4,
         "calls": [
           {
             "ref": "T1",
             "name": "get_issue_overview",
             "ok": true,
-            "outputDigest": "9617271e07157975"
+            "outputDigest": "1af3f3bae6ebf81c"
           },
           {
             "ref": "T2",
             "name": "list_event_samples",
             "ok": true,
-            "outputDigest": "4700f82f3b9822a9"
+            "outputDigest": "2df0ea96d4429b1a"
           },
           {
             "ref": "T3",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "4697775c9ef1c92d"
+            "outputDigest": "24754ef8718355da"
           },
           {
             "ref": "T4",
             "name": "compare_releases",
             "ok": true,
-            "outputDigest": "3d46743f3a6fe011"
+            "outputDigest": "7d7e56256679349b"
           },
           {
             "ref": "T5",
@@ -426,25 +244,7 @@
             "ref": "T6",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "6e4a89a7767520ce"
-          },
-          {
-            "ref": "T7",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "a6787afed07e8ff0"
-          },
-          {
-            "ref": "T8",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "f5a662365fef40ac"
-          },
-          {
-            "ref": "T9",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "8573342b563f5827"
+            "outputDigest": "f1e890c3dd67b138"
           }
         ],
         "citations": {
@@ -462,9 +262,155 @@
       "judge": {
         "verdict": "correct",
         "adoptedForbiddenClaim": false,
-        "reason": "The top-ranked cause accurately identifies the stale chunk issue: still-open 3.1.0 pages requesting the old hashed address-lookup.1f9e.js chunk that was removed when 3.2.0 deployed."
+        "reason": "The candidate's top-ranked cause matches the reference stale-chunk mechanism: 3.1.0 pages loaded before the 3.2.0 deployment still request the removed hashed chunk address-lookup.1f9e.js when the dynamic import runs."
       },
-      "latencyMs": 11404
+      "latencyMs": 9933
+    },
+    {
+      "run": 3,
+      "clock": 1790983575052,
+      "turns": [
+        {
+          "text": "I'll start by getting the issue overview and recent event samples.",
+          "toolCalls": [
+            {
+              "id": "call_00_OfEZDVovUl9TojL28tEC6818",
+              "name": "get_issue_overview",
+              "arguments": "{}"
+            },
+            {
+              "id": "call_01_UPy7SJgzs6vk4XEkMlQE0086",
+              "name": "list_event_samples",
+              "arguments": "{\"limit\": 10}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 2056,
+            "outputTokens": 65
+          }
+        },
+        {
+          "text": "All events are on release 3.1.0, checkout route, across all browsers. Let me inspect a couple of events in detail and compare releases.",
+          "toolCalls": [
+            {
+              "id": "call_00_ac7LdCiKQHjXfhXFtMSZ3342",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-4a1a36-025\"}"
+            },
+            {
+              "id": "call_01_PglQjud2JGBSn6hqOt3o5970",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-4a1a36-024\"}"
+            },
+            {
+              "id": "call_02_Jwl4mbVnOxByEZJB3hJn9966",
+              "name": "compare_releases",
+              "arguments": "{}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 3227,
+            "outputTokens": 131
+          }
+        },
+        {
+          "text": "Key findings: all events have `stack: null`, no failed requests, no trace id, and the timeline shows a click on \"Add a new address\" 2s before the error — a lazy-loaded chunk (`address-lookup.1f9e.js`) failing to load. The issue is confined to release 3.1.0, and all 26 events occurred *after* 3.2.0 was deployed, from pages loaded before that deployment. This points to a stale/cached chunk: the old page (3.1.0) requests a hashed asset `address-lookup.1f9e.js` that is no longer available on the CDN after the 3.2.0 deployment (hash changed / old asset pruned).\n\nLet me check the source context for the top frame (even though stack is null) and one more event to confirm the pattern.",
+          "toolCalls": [
+            {
+              "id": "call_00_T0KiLEB29VGGxKeFHFzW4845",
+              "name": "get_source_context",
+              "arguments": "{\"eventId\": \"evt-4a1a36-025\", \"frameIndex\": 0}"
+            },
+            {
+              "id": "call_01_w1ct7M0VAR4PbW6bLFVA5418",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-4a1a36-016\"}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 4035,
+            "outputTokens": 287
+          }
+        },
+        {
+          "text": "I have enough evidence. The pattern is consistent: a hashed lazy chunk fails to load on click, only on stale 3.1.0 pages still running after 3.2.0 was deployed.",
+          "toolCalls": [
+            {
+              "id": "call_00_SkftdqcI44HswGup3Nik8530",
+              "name": "submit_report",
+              "arguments": "{\"summary\": \"Across 26 events on the checkout route in release 3.1.0, clicking \\\"Add a new address\\\" 2 seconds later fails to load the lazy chunk https://cdn.shop.example/assets/address-lookup.1f9e.js. All 26 events occurred after release 3.2.0 was deployed, yet came from pages still running 3.1.0, and no other release is affected. This is consistent with a stale/hashed asset that no longer exists on the CDN once the new build replaced it, so the old page's dynamic import 404s; no stack, source map, failed-request record, or trace id exists to confirm a code-level defect.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/checkout 100%\\\",\\\"releases\\\":\\\"3.1.0 100%\\\"\", \"description\": \"Issue is confined to the checkout route and release 3.1.0, with 26 events / 23 users.\", \"source\": \"issue\"}, {\"resultRef\": \"T2\", \"quote\": \"\\\"message\\\":\\\"Resource failed: https://cdn.shop.example/assets/address-lookup.1f9e.js\\\",\\\"stackMapped\\\":false\", \"description\": \"Every sampled event reports the same failing hashed asset with no mapped stack, across Edge, Chrome, Safari and Firefox — not browser-specific.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"[\\\"-3625.0s navigation pushState → /cart\\\",\\\"-2.0s click button.add-address “Add a new address”\\\"]\", \"description\": \"Timeline: the resource failure follows a click on the add-address button by ~2s, indicating a lazy-loaded module requested on user action; failedRequests is empty and traceId is null.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"3.1.0\\\",\\\"deployedAt\\\":\\\"2026-09-29T23:26:15.052Z\\\"\", \"description\": \"Release comparison: the issue exists only in 3.1.0 (26 events, 100% of its errors); 3.2.0 has 0 events.\", \"source\": \"release\"}, {\"resultRef\": \"T5\", \"quote\": \"26 of 26 events of 3.1.0 happened after 3.2.0 was deployed\", \"description\": \"All 3.1.0 events occurred after 3.2.0 was deployed (2026-10-02T22:41:15Z) but came from pages loaded before that deployment and still running 3.1.0 — the classic stale-page requesting a replaced hashed asset.\", \"source\": \"release\"}, {\"resultRef\": \"T5\", \"quote\": \"\\\"sourceMaps\\\":0\", \"description\": \"No source maps exist for either release, so original source cannot be resolved.\", \"source\": \"release\"}, {\"resultRef\": \"T6\", \"quote\": \"\\\"reason\\\":\\\"NO_STACK\\\"\", \"description\": \"Source-context lookup failed because this event has no stack trace, so the failing application code was not observed.\", \"source\": \"source\"}, {\"resultRef\": \"T7\", \"quote\": \"\\\"-2.0s click button.add-address “Add a new address”\\\"\", \"description\": \"A second, independent event in Chrome shows the identical add-address click preceding the chunk failure, confirming a reproducible interaction pattern.\", \"source\": \"breadcrumb\"}], \"possibleCauses\": [{\"cause\": \"Stale hashed chunk: pages still running release 3.1.0 request /assets/address-lookup.1f9e.js after the 3.2.0 deployment replaced that asset, so the CDN returns 404/410 and the dynamic import of the address-lookup module rejects. All 26 events post-date the 3.2.0 deployment while originating from pre-deployment 3.1.0 pages.\", \"confidence\": 0.7, \"evidenceRefs\": [1, 2, 4, 5, 7]}, {\"cause\": \"Legitimate network/CDN delivery failure for the asset (transient 5xx, cache/stale edge, or blocked request) rather than a code defect; the empty failedRequests and absent traceId mean the response status was not captured, so server-side confirmation is missing.\", \"confidence\": 0.35, \"evidenceRefs\": [2, 3, 7]}, {\"cause\": \"A code-level defect in the add-address handler that mis-references the chunk path cannot be confirmed or ruled out, because there is no stack trace and no source map for release 3.1.0.\", \"confidence\": 0.2, \"evidenceRefs\": [5, 6]}], \"investigationSteps\": [\"Reviewed the issue overview: 26 events, 23 users, only on /checkout in release 3.1.0.\", \"Sampled the 10 most recent events; all report the same failing URL with stackMapped false and two breadcrumbs.\", \"Inspected events evt-4a1a36-025, -024 and -016 in detail; each shows a click on 'Add a new address' ~2s before the failure, no failed requests and no trace id.\", \"Compared releases: only 3.1.0 is affected, and all 26 events occurred after 3.2.0 was deployed from pages still running 3.1.0; no source maps in either release.\", \"Attempted get_source_context on the top frame, which reported NO_STACK, so the failing code path could not be read.\"], \"suggestions\": [\"Check CDN/access logs for GET /assets/address-lookup.1f9e.js around 2026-10-02T22:44–23:22Z to confirm 404/410 responses after the 3.2.0 deploy.\", \"Verify that 3.2.0's asset hash for address-lookup differs from 1f9e.js and that old hashed assets are retained or purged only after a grace period.\", \"Add a stale-chunk guard: catch dynamic import failures and prompt affected users to reload when a hashed chunk request fails.\", \"Capture the HTTP status and request id on resource-load errors and enable source-map upload for releases so future events are diagnosable.\"], \"missingInformation\": [\"No stack trace on any event (get_source_context returns NO_STACK), so the failing code path in the address-lookup module is not observable.\", \"No source maps for releases 3.1.0 or 3.2.0, so error locations cannot be source-mapped.\", \"failedRequests is empty and traceId is null on the inspected events, so the HTTP status of the address-lookup.1f9e.js request is unknown.\", \"No CDN/edge access logs were available to confirm 404/410 for the hashed asset.\", \"No git repository is configured, so no suspect-commit analysis was possible.\"]}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 4562,
+            "outputTokens": 1655
+          }
+        }
+      ],
+      "outcome": {
+        "steps": 4,
+        "calls": [
+          {
+            "ref": "T1",
+            "name": "get_issue_overview",
+            "ok": true,
+            "outputDigest": "aa1c2e1fa987b6ac"
+          },
+          {
+            "ref": "T2",
+            "name": "list_event_samples",
+            "ok": true,
+            "outputDigest": "90efcd33b9744612"
+          },
+          {
+            "ref": "T3",
+            "name": "get_event_detail",
+            "ok": true,
+            "outputDigest": "bfae2c87b5a2d34e"
+          },
+          {
+            "ref": "T4",
+            "name": "get_event_detail",
+            "ok": true,
+            "outputDigest": "1818c44037f67bdd"
+          },
+          {
+            "ref": "T5",
+            "name": "compare_releases",
+            "ok": true,
+            "outputDigest": "138370359f92da5d"
+          },
+          {
+            "ref": "T6",
+            "name": "get_source_context",
+            "ok": true,
+            "outputDigest": "8e8b04cf558d640f"
+          },
+          {
+            "ref": "T7",
+            "name": "get_event_detail",
+            "ok": true,
+            "outputDigest": "ab5fac320f60dc52"
+          }
+        ],
+        "citations": {
+          "verified": 8,
+          "total": 8,
+          "attempts": 1
+        },
+        "error": null
+      },
+      "score": {
+        "keywordCorrect": true,
+        "adoptedForbidden": null,
+        "reportedMissing": null
+      },
+      "judge": {
+        "verdict": "correct",
+        "adoptedForbiddenClaim": false,
+        "reason": "The top-ranked cause identifies the same stale-hashed-chunk mechanism: pre-3.2.0 pages requesting the removed address-lookup.1f9e.js asset after the 3.2.0 deploy."
+      },
+      "latencyMs": 11251
     }
   ]
 }

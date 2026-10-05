@@ -1330,7 +1330,7 @@ step.started；调用模型（收尾时只给 submit_report 并强制调用，�
   5 秒超时、输出有上限。
 - **源码外发**：读源码、搜代码和 diff 受 `AGENT_SOURCE_CONTEXT` 同一个开关控制；关闭时 `find_suspect_commits` 只给提交元数据。
 - **没有仓库就不提供**：项目没有配置仓库时，这三个工具不在交给模型的清单里（`toolSpecsFor`），第一条任务消息写明「没有配置
-  git 仓库，代码类工具不可用」。真实模型评测里，没有仓库时 Agent 平均每次调查仍会调用它们约 3 次，只能得到「没有配置仓库」。
+  git 仓库，代码类工具不可用」。改之前（提示词 v4）的真实模型评测里，没有仓库时 Agent 平均每次调查仍会调用它们约 3 次，只能得到「没有配置仓库」。
   MCP 那边照常列出（客户端连接时还不知道要查哪个项目），工具如实回答。
 
 `compare_releases` 还给出每个版本「下一个版本部署之后，仍带着这个版本号上报的事件数」（`eventsAfterNextRelease`），
@@ -1832,7 +1832,7 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
   事件 id 只用不透明的哈希前缀：第一次评测时，单次调用的报告直接引用了用例名（例如 `misleading-analytics-404`）里的答案提示。
 - **执行**（`eval/harness.ts`）：每个用例、每个引擎、每次运行各建一个临时 SQLite 文件，走正式的 `ingestEnvelope` 和
   `saveSourceMap` 写入数据，再按标题找到目标 Issue。数据只由传入的时钟决定（事件时间相对于 `CASES_CLOCK`，写库时整体
-  平移），回放才能逐字复现工具输出。评测用例没有 git 仓库，代码类工具如实回答没有仓库。Agent 180 秒超时。
+  平移），回放才能逐字复现工具输出。评测用例没有 git 仓库，Agent 拿不到代码类工具，与正式环境没有配置仓库时相同。Agent 180 秒超时。
 - **重复试验**：模型引擎每个用例默认跑 3 次（`--runs`），报告 pass@1、pass^k（τ-bench：任取 k 次全部成功，
   C(c,k)/C(n,k)）和每一轮的分数范围（`eval/metrics.ts`）。
 - **评分**（`eval/scoring.ts`）：确定性的三项——关键词（摘要 + 置信度最高的原因，先删掉照抄的 Issue 标题：规则引擎会把标题
@@ -1855,9 +1855,10 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
   离线脚本现场录制再回放，验证回放机制本身：同一个时钟下没有漂移，改动引用的原文会被发现，录制的轮数不够时报错
   而不是即兴发挥。
 
-2026-10-02 用 DeepSeek `deepseek-chat` 实测（提示词 v4，模型引擎每个用例 3 次，裁判 `deepseek-v4-pro`）：裁判得分 Agent 0.88、
-单次调用 0.71、规则 0.29；三次都判为正确的比例（pass^3）Agent 0.75、单次调用 0.25。Agent 的引用 100% 通过核验，代价是约
-11 倍的输入 token 和 2.1 倍的耗时。Agent 的 36 次运行录制在 `src/eval/recordings/deepseek-chat/`，`replay.test.ts` 在 CI 里
+2026-10-02 用 DeepSeek `deepseek-chat` 实测（模型引擎每个用例 3 次，裁判 `deepseek-v4-pro`），按评测暴露的问题迭代了两版提示词：
+Agent 的裁判得分 v4 0.88 → v5 0.89 → v6 0.94，三次都判为正确的比例（pass^3）0.75 → 0.67 → 0.75——v5 的规则修好了
+`missing-source-map`，却让 `double-submit` 回归，v6 收窄规则后修回。v6 的单次调用 0.67、规则 0.29；Agent 的引用 100% 通过
+核验，输入 token 约是单次调用的 8 倍。Agent 的 36 次运行录制在 `src/eval/recordings/deepseek-chat/`，`replay.test.ts` 在 CI 里
 逐个回放。样本小、裁判与被测模型同一家服务商、裁判尚未经过人工校准，适合对比与回归，不足以宣称泛化准确率。
 完整结果与分析见[诊断评测报告](reports/agent-evaluation.md)。
 
@@ -1959,7 +1960,7 @@ Agent（`agent-local`，工具和引用核对与真实 Agent 相同，不是模�
 
 ## 14. 测试
 
-服务端 227 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
+服务端 229 项测试（`pnpm --filter @trace-pilot/server test`），用真实的 SQLite 临时文件、`app.inject` 和本地起的 HTTP 服务
 替身，不连外部网络：
 
 | 文件                                  | 项数 | 覆盖                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |

@@ -2,98 +2,98 @@
   "format": 1,
   "caseId": "dom-not-ready-regression",
   "model": "deepseek-chat",
-  "promptVersion": "investigation-v5",
+  "promptVersion": "investigation-v6",
   "toolsDigest": "4c608188d8472350",
   "sourceContext": true,
-  "recordedAt": "2026-10-02T23:20:40.394Z",
+  "recordedAt": "2026-10-02T23:41:56.199Z",
   "runs": [
     {
       "run": 1,
-      "clock": 1790983189036,
+      "clock": 1790984470768,
       "turns": [
         {
           "text": "I'll start with the issue overview and event samples.",
           "toolCalls": [
             {
-              "id": "call_00_Vjz4Xz12LL4XN512jcyK6437",
+              "id": "call_00_LA2lFq2AjzfhNL0L0fpT8758",
               "name": "get_issue_overview",
               "arguments": "{}"
             },
             {
-              "id": "call_01_NdMRf1uoFe7nMFmwjSbw2718",
+              "id": "call_01_GE9kP7CiWHVR6w7HkPS77512",
               "name": "list_event_samples",
               "arguments": "{\"limit\": 10}"
             }
           ],
           "usage": {
-            "inputTokens": 2013,
+            "inputTokens": 2044,
             "outputTokens": 63
           }
         },
         {
-          "text": "Stacks are mapped. Let me inspect the newest event in detail and compare releases.",
+          "text": "All events come from one route in release 3.3.0. Let me get full detail on the newest event and compare releases.",
           "toolCalls": [
             {
-              "id": "call_00_GI6wdiBAQglwbCxJa4va7707",
+              "id": "call_00_1seSVu0TQXG9tDAiVBNu2005",
               "name": "get_event_detail",
               "arguments": "{\"eventId\": \"evt-843b02-028\"}"
             },
             {
-              "id": "call_01_WtdyxJ1hxqlHhUT1Xgtu2277",
+              "id": "call_01_37e2O2jeJJv501thbLNT3148",
               "name": "compare_releases",
               "arguments": "{}"
             }
           ],
           "usage": {
-            "inputTokens": 3099,
-            "outputTokens": 75
+            "inputTokens": 3130,
+            "outputTokens": 86
           }
         },
         {
-          "text": "The stack points to `src/reviews/widget.ts:4:1`. Let me get source context for the top frame.",
+          "text": "The stack maps to `src/reviews/widget.ts:4:1`. Let me get the source context for that frame.",
           "toolCalls": [
             {
-              "id": "call_00_PkJa2n3f2BFLjnls8zqa9759",
+              "id": "call_00_gd0akM7Nxz4udODM8fux3524",
               "name": "get_source_context",
               "arguments": "{\"eventId\": \"evt-843b02-028\", \"frameIndex\": 0}"
             }
           ],
           "usage": {
-            "inputTokens": 3604,
+            "inputTokens": 3646,
             "outputTokens": 87
           }
         },
         {
-          "text": "Confirmed the failing code: `container` is the result of `document.getElementById('reviews')` and is assumed non-null. Let me check another event from a different browser to confirm the same frame, and check breadcrumbs for context.",
+          "text": "I have the failing source. Let me confirm details of one more event to see if any user action or request context differs.",
           "toolCalls": [
             {
-              "id": "call_00_ALEQxFcZpbjIysUZaDZ53730",
+              "id": "call_00_9X0Ox35Ls7NAGZ92O1NA1233",
               "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-843b02-027\"}"
+              "arguments": "{\"eventId\": \"evt-843b02-026\"}"
             },
             {
-              "id": "call_01_gBTsvdjHnUuGlPd53DeM2623",
+              "id": "call_01_GiDgvWb3IXIuAmUzRGpO5759",
               "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-843b02-025\"}"
+              "arguments": "{\"eventId\": \"evt-843b02-019\"}"
             }
           ],
           "usage": {
-            "inputTokens": 3841,
-            "outputTokens": 131
+            "inputTokens": 3883,
+            "outputTokens": 107
           }
         },
         {
-          "text": "I have consistent evidence across browsers, releases and source. The root cause is a missing null guard after `document.getElementById('reviews')`, on a route where the `#reviews` element isn't present (client-side navigation via pushState).",
+          "text": "The evidence is consistent and complete: all events in release 3.3.0, one route, source-mapped stack pointing at a module-level `getElementById` result used without a null check.",
           "toolCalls": [
             {
-              "id": "call_00_FduO8AiYEC1yx4FiBiQX2961",
+              "id": "call_00_hG02B9sgcWNg60rW2sUf5990",
               "name": "submit_report",
-              "arguments": "{\"summary\": \"All 29 events of this TypeError come from release 3.3.0 (100% on route /products/sku-1182), and source-mapped stacks consistently fail at src/reviews/widget.ts:4:1. The code calls container.addEventListener where container = document.getElementById('reviews'), so the null is the module-level lookup returning no element. The timeline shows a client-side pushState navigation to the product page, consistent with the widget module running before/without the #reviews element being in the DOM.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\"\", \"description\": \"The issue is confined to a single route and a single release, indicating a route/DOM-order specific failure rather than a broad runtime problem.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"TypeError: Cannot read properties of null (reading 'addEventListener')\\n    at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"The source-mapped stack of the newest event points to the module-level addEventListener call in the reviews widget.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"Original source shows container is an unchecked getElementById result that is immediately dereferenced — the null-dereference site.\", \"source\": \"source\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"version\\\":\\\"3.3.0\\\",\\\"deployedAt\\\":\\\"2026-10-02T20:19:49.036Z\\\",\\\"issueEvents\\\":29\", \"description\": \"The failure first appears in 3.3.0 immediately after its deployment, and 3.2.1 shows zero events, so the regression is tied to this release.\", \"source\": \"release\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"timeline\\\":[\\\"-0.4s navigation pushState → /products/sku-1182\\\"]\", \"description\": \"The only preceding action is a client-side pushState navigation 0.4s before the error, consistent with the widget module executing at a point where no #reviews element exists yet.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T6\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"The identical top frame occurs in a Safari event, confirming the failure is browser-independent and the same code path.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"failedRequests\\\":[]\", \"description\": \"No failed network requests preceded the error, so a missing data fetch is not the cause; the failure is DOM-element-related.\", \"source\": \"network\"}], \"possibleCauses\": [{\"cause\": \"src/reviews/widget.ts assumes document.getElementById('reviews') is non-null and calls container.addEventListener without a guard; on the product route (reached via client-side pushState) the #reviews element is absent or not yet mounted, so the dereference throws.\", \"confidence\": 0.82, \"evidenceRefs\": [2, 3, 4, 5, 6]}, {\"cause\": \"A change introduced in release 3.3.0 (first release containing this error; 3.2.1 had none) altered when/how the reviews widget module is loaded relative to the product page DOM, exposing the unguarded lookup.\", \"confidence\": 0.55, \"evidenceRefs\": [1, 4]}, {\"cause\": \"The scripts may run before the reviews container is rendered (module executed at document level without DOMContentLoaded/defer ordering), a timing variant of the same missing-element problem.\", \"confidence\": 0.35, \"evidenceRefs\": [2, 5]}], \"investigationSteps\": [\"Read the issue overview, showing 29 events / 23 users all on release 3.3.0 and route /products/sku-1182.\", \"Listed the newest event samples; all share the same message and have mapped stacks.\", \"Inspected event evt-843b02-028 in full: top frame src/reviews/widget.ts:4:1 with a pushState navigation 0.4s before.\", \"Compared releases: 3.2.1 has zero events; 3.3.0 has all 29, first seen 10 minutes after deploy.\", \"Read source context for frame 0 via the release source map, confirming the null getElementById result is dereferenced.\", \"Cross-checked events from Safari and Edge to confirm the same frame across browsers.\"], \"suggestions\": [\"Add a null guard/early return after document.getElementById('reviews'), or use optional chaining (container?.addEventListener).\", \"Ensure the reviews widget module only initializes after the #reviews element is mounted (defer/DOMContentLoaded or an after-render hook), especially on client-side pushState navigations.\", \"Add a regression test loading /products/sku-1182 where the reviews container is absent or rendered late.\", \"Review the changes shipped in release 3.3.0 that affect when the reviews widget script runs relative to the product page DOM.\"], \"missingInformation\": [\"Whether the DOM actually lacks the #reviews element on this route or it is rendered after the module runs; no DOM snapshot or element-existence telemetry is available.\", \"The backend/API side of the request; the events carry no trace id (traceId is null), so there is nothing to correlate server-side.\", \"No git repository is configured, so no commits/changes could be inspected for release 3.3.0.\"]}"
+              "arguments": "{\"summary\": \"All 29 events come from release 3.3.0 on the single route /products/sku-1182 across four browsers, and the source-mapped stack points to src/reviews/widget.ts:4, where the module calls addEventListener on the result of document.getElementById('reviews'). The container element is absent (the surrounding page never rendered a #reviews node) so getElementById returns null and the module-level listener registration throws. The issue is absent in 3.2.1 and started within minutes of the 3.3.0 deploy, so the widget was newly loaded on this route by that release.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\",\\\"releases\\\":\\\"3.3.0 100%\\\"\", \"description\": \"Issue overview: every event is on one product route and only in release 3.3.0, 29 events from 23 users over ~2.5 hours.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"The source-mapped stack of the newest event points to line 4 of the reviews widget module, column 1 — module top-level code.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"Source context shows the module looks up #reviews and immediately calls container.addEventListener without checking for null; if the element is missing the call throws exactly this TypeError.\", \"source\": \"source\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"version\\\":\\\"3.2.1\\\"...\\\"issueEvents\\\":0\", \"description\": \"Release comparison: 3.2.1 has zero events for this issue while 3.3.0 has 29 and 100% of its errors, first seen 10 minutes after the 3.3.0 deploy (2026-10-02T20:41:10Z deploy vs 20:51:10Z first event).\", \"source\": \"release\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"timeline\\\":[\\\"-0.4s navigation pushState → /products/sku-1182\\\"]\", \"description\": \"The only user action before the error is an SPA pushState navigation to the product page; the widget module runs during that navigation, before any #reviews container exists in the DOM.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"failedRequests\\\":[]\", \"description\": \"No failed network requests precede the error, so the exception is not explained by a failed data fetch; it is a DOM-availability problem in the widget itself.\", \"source\": \"network\"}, {\"resultRef\": \"T7\", \"quote\": \"\\\"browser\\\":\\\"Safari\\\"\", \"description\": \"The same module-level stack appears for Safari, Firefox, Chrome and Edge events, so the failure is environment-independent and consistent with a missing DOM node rather than a browser bug.\", \"source\": \"issue\"}], \"possibleCauses\": [{\"cause\": \"src/reviews/widget.ts assumes document.getElementById('reviews') always returns an element; on /products/sku-1182 the #reviews container is not rendered when the module executes, so container is null and container.addEventListener throws.\", \"confidence\": 0.86, \"evidenceRefs\": [1, 2, 4, 5, 6]}, {\"cause\": \"Release 3.3.0 began loading the reviews widget on the product route (or changed when it loads) while the server-rendered/first-paint HTML still lacks the #reviews node, so the widget runs before its mount point exists.\", \"confidence\": 0.55, \"evidenceRefs\": [0, 3, 4, 5]}, {\"cause\": \"The module runs at import time during an SPA pushState navigation instead of after the product page's DOM is mounted, so a race between route rendering and widget initialization leaves the container missing.\", \"confidence\": 0.4, \"evidenceRefs\": [4, 5]}], \"investigationSteps\": [\"Read the issue overview: 29 events, 23 users, 100% on /products/sku-1182 and 100% in release 3.3.0.\", \"Sampled the 10 most recent events; all identical message, route and release with source-mapped stacks.\", \"Pulled full detail for the newest event and two others across different browsers: same stack frame and same preceding pushState navigation, no failed requests.\", \"Resolved the top stack frame through the source map, obtaining src/reviews/widget.ts lines 1-8.\", \"Compared releases: zero events in 3.2.1, first event 10 minutes after the 3.3.0 deploy, source maps available for both.\"], \"suggestions\": [\"Guard the lookup: assign document.getElementById('reviews') to a variable, return/log a warning if it is null, and only then call addEventListener.\", \"Verify that the product page template (/products/sku-1182) renders an element with id=\\\"reviews\\\", or move the widget initialization to run after the container is mounted.\", \"Register the click listener after DOMContentLoaded or from the route render hook rather than at module top level, so it cannot run before the container exists.\", \"Add a regression test that mounts the product route without a #reviews node and asserts the widget loads without throwing.\"], \"missingInformation\": [\"No git repository is configured, so no commit could be inspected to confirm what changed the widget loading or the product page markup in 3.3.0.\", \"No trace id or span id was recorded on these events (traceId is null), so there is no backend request to correlate.\", \"The product page HTML/DOM template for /products/sku-1182 was not available to confirm whether a #reviews element is intended to exist, and no render/route code was inspected.\", \"No failed requests or fetch breadcrumbs accompany the error, so it is unknown whether reviews data loading also fails once the container exists.\"]}"
             }
           ],
           "usage": {
-            "inputTokens": 4390,
-            "outputTokens": 1382
+            "inputTokens": 4406,
+            "outputTokens": 1480
           }
         }
       ],
@@ -104,25 +104,25 @@
             "ref": "T1",
             "name": "get_issue_overview",
             "ok": true,
-            "outputDigest": "c07bae6b707cb88a"
+            "outputDigest": "8d68bf955fd611d7"
           },
           {
             "ref": "T2",
             "name": "list_event_samples",
             "ok": true,
-            "outputDigest": "730051b62dfe6b03"
+            "outputDigest": "d728ce545a4bd3fe"
           },
           {
             "ref": "T3",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "3d11dbe7c2be7b68"
+            "outputDigest": "99da9ef66c4e7a6b"
           },
           {
             "ref": "T4",
             "name": "compare_releases",
             "ok": true,
-            "outputDigest": "17850acd2e2dd592"
+            "outputDigest": "f5dd29bd366eb21f"
           },
           {
             "ref": "T5",
@@ -134,13 +134,13 @@
             "ref": "T6",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "3e77577213c2fb2d"
+            "outputDigest": "879dcbcb00ed2714"
           },
           {
             "ref": "T7",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "7fda4d6d488116bd"
+            "outputDigest": "ac969c49ca2a33f0"
           }
         ],
         "citations": {
@@ -158,281 +158,117 @@
       "judge": {
         "verdict": "correct",
         "adoptedForbiddenClaim": false,
-        "reason": "The top-ranked cause identifies the same unguarded getElementById('reviews') returning null and addEventListener throwing because the reviews container is absent or not yet mounted, which matches the reference's script-timing regression where the module runs before the #reviews element is in the DOM."
+        "reason": "The top-ranked cause identifies the same mechanism as the reference: the reviews widget executes before the #reviews element exists, so getElementById returns null and addEventListener throws, starting in release 3.3.0."
       },
-      "latencyMs": 11384
+      "latencyMs": 11285
     },
     {
       "run": 2,
-      "clock": 1790983207157,
+      "clock": 1790984486253,
       "turns": [
         {
-          "text": "I'll start by getting the issue overview and recent event samples.",
+          "text": "I'll start by getting the issue overview and sample events.",
           "toolCalls": [
             {
-              "id": "call_00_Ron89YHJqiQbdakCrw2P6696",
+              "id": "call_00_GTHJ9G8QIJ2SepCYdnMF8757",
               "name": "get_issue_overview",
               "arguments": "{}"
             },
             {
-              "id": "call_01_0EepkyL5ZEyeB5Hkckra7838",
+              "id": "call_01_uJQTaFcxPyDCbGmHUsSv6215",
               "name": "list_event_samples",
               "arguments": "{\"limit\": 10}"
             }
           ],
           "usage": {
-            "inputTokens": 2010,
-            "outputTokens": 65
-          }
-        },
-        {
-          "text": "Now let me inspect a full event and check release spread.",
-          "toolCalls": [
-            {
-              "id": "call_00_kdoswdGt3iCTiThZ0IkU4610",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-843b02-028\"}"
-            },
-            {
-              "id": "call_01_PoDLv8nQBEc0L5o2rwRY1911",
-              "name": "compare_releases",
-              "arguments": "{}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3098,
-            "outputTokens": 70
-          }
-        },
-        {
-          "text": "The stack maps to `src/reviews/widget.ts:4:1`. Let me get the source context for the top frame.",
-          "toolCalls": [
-            {
-              "id": "call_00_1HmEqba0Es9tWsNigAUg5307",
-              "name": "get_source_context",
-              "arguments": "{\"eventId\": \"evt-843b02-028\", \"frameIndex\": 0}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3598,
-            "outputTokens": 88
-          }
-        },
-        {
-          "text": "The source is clear: `document.getElementById('reviews')` returns null because the product page for sku-1182 likely doesn't render a `#reviews` element, and the code calls `.addEventListener` without a null guard. Let me examine another event to confirm consistency across browsers.",
-          "toolCalls": [
-            {
-              "id": "call_00_XDLs9558nyUvF8UfibeP7234",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-843b02-026\"}"
-            },
-            {
-              "id": "call_01_jegQhTvVsr9oGFJr0QqH4572",
-              "name": "get_source_context",
-              "arguments": "{\"eventId\": \"evt-843b02-026\", \"frameIndex\": 0}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3836,
-            "outputTokens": 160
-          }
-        },
-        {
-          "text": "The evidence is consistent and sufficient: same frame, same route, all browsers, only release 3.3.0, and the source shows an unguarded `.addEventListener` on a possibly-null `getElementById` result. Submitting the report.",
-          "toolCalls": [
-            {
-              "id": "call_00_n0Vy5RSpjC4zKfTCS1Yj2609",
-              "name": "submit_report",
-              "arguments": "{\"summary\": \"On release 3.3.0, 29 errors across all browsers occur only on the product route /products/sku-1182, with the stack always pointing to src/reviews/widget.ts:4. The source shows document.getElementById('reviews') is dereferenced with addEventListener without a null check, so it throws when the page has no #reviews element. The route-limited, browser-independent pattern indicates the reviews widget runs on pages that do not render its container.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\"\", \"description\": \"All 29 events are on a single product route, suggesting the failing element is absent on that page.\", \"source\": \"issue\"}, {\"resultRef\": \"T4\", \"quote\": \"The issue appears in 1 of 2 releases and was first seen in 3.3.0; 3.3.0 has 100% of its events.\", \"description\": \"The issue is exclusive to release 3.3.0 (deployed 2026-10-02T20:20:07Z) and first seen 10 minutes later; 3.2.1 had zero events.\", \"source\": \"release\"}, {\"resultRef\": \"T3\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"The mapped stack frame for a Chrome event points to line 4 of the reviews widget module.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"Source context confirms getElementById('reviews') result is used directly at line 4 without any null guard, matching the 'reading addEventListener of null' error.\", \"source\": \"source\"}, {\"resultRef\": \"T6\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"A Firefox event on the same route throws at the identical frame, showing the failure is browser-independent.\", \"source\": \"stack\"}, {\"resultRef\": \"T3\", \"quote\": \"timeline\\\":[\\\"-0.4s navigation pushState → /products/sku-1182\\\"]\", \"description\": \"The error follows a client-side navigation to the product page, consistent with the widget module running before/without its container being in the DOM.\", \"source\": \"breadcrumb\"}], \"possibleCauses\": [{\"cause\": \"src/reviews/widget.ts runs on the product page but document.getElementById('reviews') returns null (the #reviews container is not rendered on /products/sku-1182), and line 4 calls container.addEventListener without a null check, throwing the TypeError.\", \"confidence\": 0.86, \"evidenceRefs\": [1, 2, 3, 4, 5]}, {\"cause\": \"A change shipped in release 3.3.0 (deployed ~10 minutes before first occurrence) introduced or newly imported this widget, since 3.2.1 had zero occurrences; this is inferred from release timing only, as no git repository is configured to confirm the change.\", \"confidence\": 0.45, \"evidenceRefs\": [1, 3, 5]}], \"investigationSteps\": [\"Reviewed issue overview: 29 events, 23 users, 100% on /products/sku-1182\", \"Listed recent event samples; all events on release 3.3.0, all browsers\", \"Inspected event evt-843b02-028 and its mapped stack (src/reviews/widget.ts:4:1)\", \"Called get_source_context for frame 0, confirming the unguarded addEventListener\", \"Compared releases: only 3.3.0 affected, first seen 10 min after its deploy\", \"Cross-checked a second event (Firefox) with identical frame and route\"], \"suggestions\": [\"Add a null guard before addEventListener (e.g. if (!container) return;) or render/require the #reviews element on the product page\", \"Verify whether the reviews widget should load at all on product pages (likely unrelated to product pages without a reviews section)\", \"Confirm the DOM for /products/sku-1182 (sku-1182 specifically) to see whether #reviews is conditionally omitted\", \"Defer widget initialization until after the container element exists (e.g. after DOM ready / mount hook)\"], \"missingInformation\": [\"No git repository is configured, so the change that introduced this widget in 3.3.0 cannot be identified and no commit correlation is possible\", \"No server-side rendering/fetch logs or DOM snapshots for /products/sku-1182 to confirm that #reviews is absent (no failedRequests, traceId is null)\"]}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 4353,
-            "outputTokens": 1187
-          }
-        }
-      ],
-      "outcome": {
-        "steps": 5,
-        "calls": [
-          {
-            "ref": "T1",
-            "name": "get_issue_overview",
-            "ok": true,
-            "outputDigest": "db39bb4f416c80b4"
-          },
-          {
-            "ref": "T2",
-            "name": "list_event_samples",
-            "ok": true,
-            "outputDigest": "251f64af3340b753"
-          },
-          {
-            "ref": "T3",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "efed92625c0c9cd7"
-          },
-          {
-            "ref": "T4",
-            "name": "compare_releases",
-            "ok": true,
-            "outputDigest": "a20bba25b1bea0a2"
-          },
-          {
-            "ref": "T5",
-            "name": "get_source_context",
-            "ok": true,
-            "outputDigest": "0c5b91555dc11daa"
-          },
-          {
-            "ref": "T6",
-            "name": "get_event_detail",
-            "ok": true,
-            "outputDigest": "bc563f7ae1536f0f"
-          },
-          {
-            "ref": "T7",
-            "name": "get_source_context",
-            "ok": true,
-            "outputDigest": "0c5b91555dc11daa"
-          }
-        ],
-        "citations": {
-          "verified": 6,
-          "total": 6,
-          "attempts": 1
-        },
-        "error": null
-      },
-      "score": {
-        "keywordCorrect": true,
-        "adoptedForbidden": null,
-        "reportedMissing": null
-      },
-      "judge": {
-        "verdict": "incorrect",
-        "adoptedForbiddenClaim": false,
-        "reason": "The top-ranked cause attributes the null to the #reviews container not being rendered on the route, whereas the reference root cause is a script-timing regression where the module runs at import time before the DOM element exists."
-      },
-      "latencyMs": 10517
-    },
-    {
-      "run": 3,
-      "clock": 1790983226455,
-      "turns": [
-        {
-          "text": "I'll start by getting the issue overview and event samples.",
-          "toolCalls": [
-            {
-              "id": "call_00_s7aDzRZX3SNBPqq489s80446",
-              "name": "get_issue_overview",
-              "arguments": "{}"
-            },
-            {
-              "id": "call_01_0OiZ4jfYCUb3S4HzB8eY6227",
-              "name": "list_event_samples",
-              "arguments": "{\"limit\": 10}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 2014,
+            "inputTokens": 2045,
             "outputTokens": 64
           }
         },
         {
-          "text": "Let me examine a full event and check release comparison.",
+          "text": "All events are on release 3.3.0 and the same product route. Let me get event detail, source context, and release comparison.",
           "toolCalls": [
             {
-              "id": "call_00_EzEFyVXwPVxZGLvXCn6J5438",
+              "id": "call_00_4zDaY4U6gwHdEclnieFi2074",
               "name": "get_event_detail",
               "arguments": "{\"eventId\": \"evt-843b02-028\"}"
             },
             {
-              "id": "call_01_h4SNa8QemfA3i1EhG4Rv4645",
+              "id": "call_01_LKjFp2qajgcNqyqHBpEU9082",
               "name": "compare_releases",
               "arguments": "{}"
-            }
-          ],
-          "usage": {
-            "inputTokens": 3101,
-            "outputTokens": 69
-          }
-        },
-        {
-          "text": "The stack is mapped to `src/reviews/widget.ts:4:1`. Let me get the source context for the top frame.",
-          "toolCalls": [
+            },
             {
-              "id": "call_00_Rk8xVQ6w4n7LMolF6oI39405",
+              "id": "call_02_hd3ZNGQpWubAqLlQgbcP7943",
               "name": "get_source_context",
               "arguments": "{\"eventId\": \"evt-843b02-028\", \"frameIndex\": 0}"
             }
           ],
           "usage": {
-            "inputTokens": 3600,
-            "outputTokens": 89
+            "inputTokens": 3132,
+            "outputTokens": 142
           }
         },
         {
-          "text": "The source is available and shows the exact defect. Let me verify across a couple more events to confirm consistency.",
+          "text": "The source is available and mapped. The failing code is `document.getElementById('reviews')` returning null, then `addEventListener` called on it. Let me check the other frame context and another event to confirm the breadcrumb/user action pattern.",
           "toolCalls": [
             {
-              "id": "call_00_VOg8BLfBObHwAKQaU9ia9850",
-              "name": "get_event_detail",
-              "arguments": "{\"eventId\": \"evt-843b02-014\"}"
+              "id": "call_00_k3nUoDVu9ZwRG25k97gc0346",
+              "name": "get_source_context",
+              "arguments": "{\"eventId\": \"evt-843b02-028\", \"frameIndex\": 1}"
             },
             {
-              "id": "call_01_TLLcD7Wh6gB2fWbQCfYJ9557",
-              "name": "get_source_context",
-              "arguments": "{\"eventId\": \"evt-843b02-025\", \"frameIndex\": 0}"
+              "id": "call_01_AFdISm3gVCdXqlLKQcxT9606",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-843b02-027\"}"
             }
           ],
           "usage": {
-            "inputTokens": 3839,
-            "outputTokens": 121
+            "inputTokens": 3850,
+            "outputTokens": 149
           }
         },
         {
-          "text": "I have consistent, source-mapped evidence pointing to a specific defect. Submitting the report.",
+          "text": "I have enough evidence. The stack maps to original source; the root cause is clear.\n\n**Analysis:**\n- 100% of events on route `/products/sku-1182`, 100% on release 3.3.0, first seen 10 minutes after 3.3.0 deployed, zero events on the prior release 3.2.1.\n- Stack maps cleanly to `src/reviews/widget.ts:4` — `container.addEventListener(...)` where `container = document.getElementById('reviews')` returned null.\n- The module runs at top level (not awaited/DOM-ready guarded), so on this route the `#reviews` element isn't in the DOM when the widget module executes, making `container` null.",
           "toolCalls": [
             {
-              "id": "call_00_J8GlYnOrWTaY06rLezJL6912",
+              "id": "call_00_5kRgHrELUTnLSs5Eopgo3758",
               "name": "submit_report",
-              "arguments": "{\"summary\": \"All 29 events occur only on the /products/sku-1182 route in release 3.3.0 (none in 3.2.1, first seen 10 minutes after 3.3.0 deployed). The source-mapped stack points to src/reviews/widget.ts:4, where module-level code calls container.addEventListener on the result of document.getElementById('reviews'). The element with id 'reviews' is absent on this product page, so the top-level module throws on import.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\",\\\"releases\\\":\\\"3.3.0 100%\\\"\", \"description\": \"The issue is confined to a single product route and a single release, 29 events across all four browsers (Chrome, Safari, Firefox, Edge), so it is not browser-specific.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"Event evt-843b02-028 has a source-mapped stack pointing at module-scope code in src/reviews/widget.ts line 4. The preceding action was a pushState navigation to /products/sku-1182, matching a client-side route change.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"The shipped source at the top frame: container is the direct return value of document.getElementById('reviews') with no null check, then addEventListener is called on it. A null return explains the exact error message.\", \"source\": \"source\"}, {\"resultRef\": \"T4\", \"quote\": \"the issue appears in 1 of 2 releases and was first seen in 3.3.0; 3.3.0 has 100% of its events\", \"description\": \"Release 3.2.1 recorded 0 events and 3.3.0 recorded all 29, with firstSeenInRelease 2026-10-02T20:30:26Z only 10 minutes after 3.3.0 deployed at 20:20:26Z. The regression tracks the release boundary.\", \"source\": \"release\"}, {\"resultRef\": \"T6\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"A second event on Firefox (evt-843b02-014) resolves to the identical frame, confirming the same root location rather than a one-off.\", \"source\": \"stack\"}, {\"resultRef\": \"T7\", \"quote\": \"const container = document.getElementById('reviews');\", \"description\": \"Re-reading the frame for a different release-3.3.0 event (Chrome, evt-843b02-025 via Safari sample set) yields the same unmapped-null assignment, so the code path is stable across events.\", \"source\": \"source\"}], \"possibleCauses\": [{\"cause\": \"In src/reviews/widget.ts the module assumes an element with id 'reviews' always exists; on /products/sku-1182 that element is not present (or not yet mounted), so document.getElementById('reviews') returns null and the immediate addEventListener call at line 4 throws at module evaluation time.\", \"confidence\": 0.86, \"evidenceRefs\": [1, 2, 3, 4, 5]}, {\"cause\": \"The reviews widget was newly introduced or rewired in release 3.3.0 without a null guard, so only pages that lack the 'reviews' container are affected; 3.2.1 had zero events.\", \"confidence\": 0.6, \"evidenceRefs\": [0, 3]}, {\"cause\": \"A timing/ordering issue on client-side navigation: the pushState transition to /products/sku-1182 runs the widget module before the reviews container is rendered into the DOM.\", \"confidence\": 0.4, \"evidenceRefs\": [0, 1, 5]}], \"investigationSteps\": [\"Pulled the issue overview and the 10 most recent event samples; all 29 events share one message, one route and release 3.3.0.\", \"Opened event evt-843b02-028 in full to read the source-mapped stack and timeline.\", \"Ran compare_releases to see the spread across 3.2.1 and 3.3.0 and the appearance timing relative to deployment.\", \"Resolved frame 0 through get_source_context and read the shipped code at src/reviews/widget.ts.\", \"Cross-checked with a second event (evt-843b02-014) and a second source-context call to confirm the same frame.\"], \"suggestions\": [\"In src/reviews/widget.ts guard the lookup: const container = document.getElementById('reviews'); if (!container) return; before attaching the listener.\", \"Verify whether /products/sku-1182 (and other product SKUs) render the element with id 'reviews' at all; add the container or render the widget only where it exists.\", \"If the widget must handle client-side navigation, run the listener attachment after the container is mounted instead of at module top level.\", \"Add a regression check or test page for product routes that lack the reviews container.\"], \"missingInformation\": [\"No git repository is configured, so no commit or diff could be inspected to confirm exactly what changed in 3.3.0.\", \"Backend/server logs and the rendered DOM of /products/sku-1182 were not available; the absence of the 'reviews' element is inferred from the null lookup, not directly observed.\", \"No trace id or span id was present on the events (traceId is null), so no backend request could be correlated.\"]}"
+              "arguments": "{\"summary\": \"All 29 events occur on release 3.3.0 (100%) on a single route, /products/sku-1182, with zero events on the prior release 3.2.1. The stack maps to src/reviews/widget.ts:4, where document.getElementById('reviews') returns null and the module immediately calls container.addEventListener, throwing the TypeError. This is a code-level defect introduced with 3.3.0: the reviews widget binds a listener at module top level without guarding against a missing/not-yet-present #reviews element on this route.\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\"\", \"description\": \"Issue is confined to a single product route, indicating a page/code-path-specific failure rather than a browser or environment issue.\", \"source\": \"issue\"}, {\"resultRef\": \"T4\", \"quote\": \"\\\"version\\\":\\\"3.3.0\\\",\\\"deployedAt\\\":\\\"2026-10-02T20:41:26.253Z\\\",\\\"issueEvents\\\":29\", \"description\": \"All 29 events belong to release 3.3.0, first seen ~10 min after its deploy, while release 3.2.1 has 0 events — pointing to a regression introduced in 3.3.0.\", \"source\": \"release\"}, {\"resultRef\": \"T3\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"Source-mapped stack shows the error thrown at module top level in src/reviews/widget.ts line 4.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"3 | const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"The mapped source shows document.getElementById('reviews') result used directly in addEventListener with no null check or DOM-ready guard, which is the direct cause of 'Cannot read properties of null'.\", \"source\": \"source\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"timeline\\\":[\\\"-0.4s navigation pushState → /products/sku-1182\\\"]\", \"description\": \"Each event is preceded by a client-side pushState navigation to the product route, consistent with the widget module executing against a DOM where #reviews has not been rendered.\", \"source\": \"breadcrumb\"}], \"possibleCauses\": [{\"cause\": \"In release 3.3.0 the reviews widget at src/reviews/widget.ts uses the result of document.getElementById('reviews') directly in container.addEventListener without a null check or DOM-ready guard; on /products/sku-1182 the #reviews element is absent (or not yet rendered after the pushState navigation), so container is null and addEventListener throws.\", \"confidence\": 0.85, \"evidenceRefs\": [2, 3, 4]}, {\"cause\": \"The widget binds its listener at module evaluation time, before the product page has mounted the #reviews container after the client-side navigation, so the element lookup races the render and returns null.\", \"confidence\": 0.55, \"evidenceRefs\": [2, 4, 1]}], \"investigationSteps\": [\"Reviewed issue overview: 29 events, 23 users, one route, one release.\", \"Sampled the 10 most recent events; all identical message, route, and release 3.3.0.\", \"Pulled full event detail for evt-843b02-028 and evt-843b02-027 — same mapped stack frame and pushState breadcrumb.\", \"Compared releases: 0 events in 3.2.1 vs 29 in 3.3.0, first seen after 3.3.0 deploy.\", \"Read the mapped source context for frame 0, showing getElementById result passed straight into addEventListener.\", \"Checked frame 1 — no further frames; attempted no git/code-history tools since none are configured.\"], \"suggestions\": [\"Null-guard the lookup in src/reviews/widget.ts (e.g. if (!container) return; or optional chaining) before calling addEventListener.\", \"Verify that /products/sku-1182 actually renders an element with id=\\\"reviews\\\" in release 3.3.0; if the widget loads on pages without that container, gate initialization on element presence.\", \"Defer listener binding until the #reviews container is mounted (DOMContentLoaded / mutation observer / framework lifecycle hook) instead of at module top level.\", \"Add a regression test that renders the reviews widget on a page without #reviews to confirm it no longer throws.\"], \"missingInformation\": [\"No git repository is configured, so the specific commit that introduced the widget change in 3.3.0 could not be identified.\", \"No backend logs or tracing system access; events carry traceId: null so no backend trace can be correlated.\", \"Release 3.3.0 changelog/diff against 3.2.1 is unavailable, so the exact code change that removed any prior null handling is unverified.\", \"Whether /products/sku-1182 is expected to contain a #reviews element in 3.3.0 (i.e. missing markup vs. timing) could not be confirmed from the data.\"]}"
             }
           ],
           "usage": {
-            "inputTokens": 4317,
-            "outputTokens": 1382
+            "inputTokens": 4257,
+            "outputTokens": 1391
           }
         }
       ],
       "outcome": {
-        "steps": 5,
+        "steps": 4,
         "calls": [
           {
             "ref": "T1",
             "name": "get_issue_overview",
             "ok": true,
-            "outputDigest": "1eef2b7cf88c4733"
+            "outputDigest": "0f08e71a35bfba97"
           },
           {
             "ref": "T2",
             "name": "list_event_samples",
             "ok": true,
-            "outputDigest": "ad995daca66d7351"
+            "outputDigest": "23ff07bc99b86fc8"
           },
           {
             "ref": "T3",
             "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "a197fdf5e77adfd0"
+            "outputDigest": "5e090e068e0d7ba9"
           },
           {
             "ref": "T4",
             "name": "compare_releases",
             "ok": true,
-            "outputDigest": "1e22c1705e1e18ac"
+            "outputDigest": "dc3efe4180d7638c"
           },
           {
             "ref": "T5",
@@ -442,20 +278,20 @@
           },
           {
             "ref": "T6",
-            "name": "get_event_detail",
+            "name": "get_source_context",
             "ok": true,
-            "outputDigest": "fc6b45f2b5815db9"
+            "outputDigest": "91cda53a98b90815"
           },
           {
             "ref": "T7",
-            "name": "get_source_context",
+            "name": "get_event_detail",
             "ok": true,
-            "outputDigest": "0c5b91555dc11daa"
+            "outputDigest": "0a54aca22e492617"
           }
         ],
         "citations": {
-          "verified": 6,
-          "total": 6,
+          "verified": 5,
+          "total": 5,
           "attempts": 1
         },
         "error": null
@@ -468,9 +304,153 @@
       "judge": {
         "verdict": "correct",
         "adoptedForbiddenClaim": false,
-        "reason": "The top-ranked cause identifies the same null getElementById at module evaluation time due to the #reviews element being absent or not yet mounted, matching the reference script-timing regression."
+        "reason": "The top-ranked cause identifies the same 3.3.0 script-timing regression where the reviews widget calls addEventListener on a null getElementById result because the #reviews element is not in the DOM yet."
       },
-      "latencyMs": 9917
+      "latencyMs": 9839
+    },
+    {
+      "run": 3,
+      "clock": 1790984499964,
+      "turns": [
+        {
+          "text": "I'll start by getting the issue overview and the most recent event samples.",
+          "toolCalls": [
+            {
+              "id": "call_00_eK7hvhL9TeQh57nh0Csy6049",
+              "name": "get_issue_overview",
+              "arguments": "{}"
+            },
+            {
+              "id": "call_01_SLP8WwL2uFa2G6YOVGOl2721",
+              "name": "list_event_samples",
+              "arguments": "{\"limit\": 10}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 2043,
+            "outputTokens": 67
+          }
+        },
+        {
+          "text": "All events are on one route and one release. Let me get event detail and release comparison.",
+          "toolCalls": [
+            {
+              "id": "call_00_uJhaXPJ6qComhnGMZPQU8294",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-843b02-028\"}"
+            },
+            {
+              "id": "call_01_OOBBpWt0w6BfCrCN7hLH1774",
+              "name": "compare_releases",
+              "arguments": "{}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 3133,
+            "outputTokens": 77
+          }
+        },
+        {
+          "text": "The stack is source-mapped to `src/reviews/widget.ts:4:1`. Let me get the source context around that frame.",
+          "toolCalls": [
+            {
+              "id": "call_00_aBVRdmq9p1rkoShckEoc3858",
+              "name": "get_source_context",
+              "arguments": "{\"eventId\": \"evt-843b02-028\", \"frameIndex\": 0}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 3640,
+            "outputTokens": 90
+          }
+        },
+        {
+          "text": "The source is explicit: `document.getElementById('reviews')` returned null and `addEventListener` was called on it without a null guard. The navigation breadcrumb shows a pushState to the product page, suggesting the module runs before/without the `#reviews` element being present in the DOM.\n\nLet me verify the source mapping is trustworthy by checking one more event's stack.",
+          "toolCalls": [
+            {
+              "id": "call_00_jHePW7fYwc2TMdq91AZ39652",
+              "name": "get_event_detail",
+              "arguments": "{\"eventId\": \"evt-843b02-025\"}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 3880,
+            "outputTokens": 123
+          }
+        },
+        {
+          "text": "The same frame appears across browsers and events. I have enough evidence to submit.",
+          "toolCalls": [
+            {
+              "id": "call_00_Co4rMd2Lg7bbjrLcm4g22041",
+              "name": "submit_report",
+              "arguments": "{\"summary\": \"All 29 events of this issue occur in release 3.3.0 on the route /products/sku-1182, immediately after a pushState navigation, and the source-mapped top frame is src/reviews/widget.ts:4. The code calls container.addEventListener on the result of document.getElementById('reviews') with no null check, so a null container throws. The reviews container is evidently absent when the widget module runs on this page, and the issue is fully confined to 3.3.0 (0 events in 3.2.1).\", \"evidence\": [{\"resultRef\": \"T1\", \"quote\": \"\\\"routes\\\":\\\"https://shop.example/products/sku-1182 100%\\\",\\\"releases\\\":\\\"3.3.0 100%\\\"\", \"description\": \"The issue is confined to a single route and a single release, indicating a page-specific DOM condition rather than a general app failure.\", \"source\": \"issue\"}, {\"resultRef\": \"T3\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"Source-mapped top (and only) frame points at line 4 of src/reviews/widget.ts as the module-level failure site.\", \"source\": \"stack\"}, {\"resultRef\": \"T5\", \"quote\": \"const container = document.getElementById('reviews');\\n>    4 | container.addEventListener('click', (event) => {\", \"description\": \"Shipped source shows the reviews container looked up by id without any null guard, then addEventListener called directly on it — the exact null-read in the error message.\", \"source\": \"source\"}, {\"resultRef\": \"T3\", \"quote\": \"\\\"-0.4s navigation pushState → /products/sku-1182\\\"\", \"description\": \"The widget runs roughly 0.4s after an SPA pushState navigation to the product page, consistent with the module executing when the #reviews element is not yet in the DOM.\", \"source\": \"breadcrumb\"}, {\"resultRef\": \"T4\", \"quote\": \"{\\\"version\\\":\\\"3.2.1\\\"...\\\"issueEvents\\\":0\", \"description\": \"Release 3.2.1 has zero events for this issue while 3.3.0 has all 29, tying the failure to the 3.3.0 deployment rather than to the route alone.\", \"source\": \"release\"}, {\"resultRef\": \"T6\", \"quote\": \"at <module> (src/reviews/widget.ts:4:1)\", \"description\": \"An identical frame in a second event on a different browser (Edge, 22:56Z) confirms the failure site is stable and browser-independent.\", \"source\": \"stack\"}], \"possibleCauses\": [{\"cause\": \"src/reviews/widget.ts calls addEventListener on document.getElementById('reviews') without a null check, so when the #reviews element is absent the module throws. This matches the error message and mapped frame exactly.\", \"confidence\": 0.85, \"evidenceRefs\": [2, 3, 1]}, {\"cause\": \"On the /products/sku-1182 route the widget module executes during/before the SPA navigation renders the #reviews container (pushState ~0.4s before capture), so the element lookup returns null.\", \"confidence\": 0.6, \"evidenceRefs\": [0, 3, 4]}, {\"cause\": \"Something changed in release 3.3.0 (0 events in 3.2.1) that removed, renamed, or deferred the #reviews element/moved this script on the product page; the code tools to inspect that change are unavailable for this project.\", \"confidence\": 0.35, \"evidenceRefs\": [0, 4, 1]}], \"investigationSteps\": [\"Pulled issue overview and recent samples: 29 events, 100% on /products/sku-1182 and release 3.3.0.\", \"Fetched event detail for evt-843b02-028: source-mapped stack at src/reviews/widget.ts:4 plus a pushState breadcrumb.\", \"Read source context at the top frame; found an unguarded getElementById('reviews').addEventListener.\", \"Compared releases: 3.2.1 has 0 events, 3.3.0 has all 29.\", \"Cross-checked a second event on a different browser; identical mapped frame.\"], \"suggestions\": [\"Add a null guard / optional chaining around the #reviews lookup in src/reviews/widget.ts before calling addEventListener.\", \"Verify the product page actually renders an element with id=\\\"reviews\\\" in release 3.3.0 and that the widget module loads after that element exists.\", \"Ensure the widget initializes on the SPA route change (after the reviews container is mounted) rather than at module import time.\", \"Reproduce on /products/sku-1182 on release 3.3.0 across Chrome, Safari, Firefox and Edge to confirm the missing element.\"], \"missingInformation\": [\"No git repository is configured, so no suspect commit, source history, or blame for src/reviews/widget.ts or the product page markup could be inspected.\", \"No DOM/HTML capture of the /products/sku-1182 page in release 3.3.0 to confirm that #reviews is missing or renamed.\", \"Events carry traceId: null and the error made no failed requests, so there are no backend traces or network logs to correlate.\", \"No deployment notes or release changelog explaining what changed between 3.2.1 and 3.3.0.\"]}"
+            }
+          ],
+          "usage": {
+            "inputTokens": 4216,
+            "outputTokens": 1310
+          }
+        }
+      ],
+      "outcome": {
+        "steps": 5,
+        "calls": [
+          {
+            "ref": "T1",
+            "name": "get_issue_overview",
+            "ok": true,
+            "outputDigest": "2d37e152ae6ad5f7"
+          },
+          {
+            "ref": "T2",
+            "name": "list_event_samples",
+            "ok": true,
+            "outputDigest": "4ddaa1cb736fd7da"
+          },
+          {
+            "ref": "T3",
+            "name": "get_event_detail",
+            "ok": true,
+            "outputDigest": "04d4274877a8ee1b"
+          },
+          {
+            "ref": "T4",
+            "name": "compare_releases",
+            "ok": true,
+            "outputDigest": "de2147b3ca9bd9f4"
+          },
+          {
+            "ref": "T5",
+            "name": "get_source_context",
+            "ok": true,
+            "outputDigest": "0c5b91555dc11daa"
+          },
+          {
+            "ref": "T6",
+            "name": "get_event_detail",
+            "ok": true,
+            "outputDigest": "5548d195fdc87ca8"
+          }
+        ],
+        "citations": {
+          "verified": 6,
+          "total": 6,
+          "attempts": 1
+        },
+        "error": null
+      },
+      "score": {
+        "keywordCorrect": true,
+        "adoptedForbidden": null,
+        "reportedMissing": null
+      },
+      "judge": {
+        "verdict": "partial",
+        "adoptedForbiddenClaim": false,
+        "reason": "The top cause identifies the null addEventListener on a missing #reviews element but omits the key import-time/DOM-ready timing regression, which appears only in the second-ranked cause."
+      },
+      "latencyMs": 9983
     }
   ]
 }
