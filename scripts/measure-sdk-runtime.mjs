@@ -74,6 +74,8 @@ const bundle = await esbuild.build({
   bundle: true,
   format: 'iife',
   platform: 'browser',
+  // 与 measure-sdk 一致：不套用仓库 tsconfig 里的 paths，shared 按外部接入方的方式解析到构建产物。
+  tsconfigRaw: '{}',
   write: false,
   logLevel: 'warning',
 });

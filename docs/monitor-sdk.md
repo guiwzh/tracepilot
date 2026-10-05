@@ -19,7 +19,7 @@ SDK 运行在别人的页面里，所以每一条设计都先回答「会不会�
 5. **生命周期对称**：`start()` / `destroy()` 幂等，适配 SPA 的挂载卸载和 React StrictMode 的重复生命周期；
    反复 20 轮 start / destroy 后没有残留的事件监听器。
 
-体积（`pnpm measure:sdk`，gzip）：发布产物 10,593 字节；业务应用打包后实际多付出 16,331 字节，
+体积（`pnpm measure:sdk`，gzip）：发布产物 10,593 字节；业务应用打包后实际多付出 16,335 字节，
 其中 `web-vitals`（归因版本）约 5,300 字节。
 
 ## 2. 代码结构
@@ -953,15 +953,17 @@ ConsolePlugin：先记录、再调用原方法，只还原自己的包装。
 - **包入口**：`package.json` 的 `exports` 在 workspace 开发时（`development` 条件）直接指向 `src/index.ts`，
   其余情况指向 `dist`；`"sideEffects": false` 让打包器可以整个跳过没用到的模块。
 - **不能把 zod 带进浏览器**：shared 的入口同时导出依赖 zod 的 Schema。SDK 只从 shared 引入常量和脱敏函数这类
-  不依赖 zod 的运行时值，其余一律 `import type`。`pnpm measure:sdk` 断言接入方的包里没有 zod。
+  不依赖 zod 的运行时值，其余一律 `import type`；shared 的构建产物按源码模块分文件输出（`unbundle`），这些模块才能和
+  Schema 所在的模块分开摇树。`pnpm measure:sdk` 按外部接入方的方式解析依赖（不读仓库 tsconfig 的 `paths`），断言接入方的包里
+  没有 zod。
 
 `pnpm measure:sdk` 报告两个口径，超出预算即失败，已接入 `pnpm verify` 与 CI：
 
 | 口径                     | 压缩后 |   gzip |   预算 |
 | ------------------------ | -----: | -----: | -----: |
 | 发布产物 `dist/index.js` | 33,134 | 10,593 | 12,200 |
-| 业务应用实际接入成本     | 49,225 | 16,331 | 18,800 |
-| 其中 `web-vitals`        |      — |  5,306 |      — |
+| 业务应用实际接入成本     | 49,225 | 16,335 | 18,800 |
+| 其中 `web-vitals`        |      — |  5,298 |      — |
 
 两个口径会背离：发布产物把依赖 external 化了，称量它称不到依赖链。接入成本由一次真实打包测得。
 白屏检测约占 0.8 KB、控制台面包屑约 0.4 KB、链路上下文约 0.8 KB（gzip）；web-vitals 的归因版本比普通版本多约 2.3 KB，

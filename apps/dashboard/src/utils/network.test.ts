@@ -1,23 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isFailedRequest as sharedRule } from '@trace-pilot/shared';
-import { isFailedRequest, requestOutcome } from './network';
-
-describe('isFailedRequest', () => {
-  it('agrees with the shared rule the server uses', () => {
-    // 工作台为了不把 zod 打进包里自己复制了一份规则；两份必须一致。
-    const cases: Array<Record<string, unknown> | undefined> = [
-      { status: 200, success: true },
-      { status: 404, success: true },
-      { status: 503, success: false },
-      { status: 0, success: false, error: 'Failed to fetch' },
-      { status: 0, success: false, aborted: true },
-      { status: 0, success: true },
-      { status: 200, success: false, businessCode: 40012 },
-      undefined,
-    ];
-    expect(cases.map(isFailedRequest)).toEqual(cases.map(sharedRule));
-  });
-});
+import { requestOutcome } from './network';
 
 describe('requestOutcome', () => {
   it('names network errors, cancellations and business failures instead of a bare status', () => {

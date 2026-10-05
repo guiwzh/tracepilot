@@ -1,16 +1,11 @@
+import { isFailedRequest } from '@trace-pilot/shared';
+
 /**
- * 证据里算作失败的请求：HTTP 4xx / 5xx、拿不到响应的网络错误、业务码表示失败的 2xx；
- * 被取消的请求和 no-cors 的 opaque 响应不算。
- *
- * 与 shared 的 isFailedRequest 相同，network.test.ts 逐项对照两者。不直接引入它：从 shared 引入任何
- * 运行时值都会把 zod 打进前端包，详情页的 chunk 会从约 28 kB 涨到约 118 kB（见 packages/shared/src/index.ts）。
+ * 证据里算作失败的请求，与排障 Agent、单次诊断是同一条规则（shared 的 isFailedRequest）：HTTP 4xx / 5xx、
+ * 拿不到响应的网络错误、业务码表示失败的 2xx；被取消的请求和 no-cors 的 opaque 响应不算。
+ * 它所在的模块不依赖 zod，引入它不会把 zod 打进前端包（见 packages/shared/src/index.ts）。
  */
-export function isFailedRequest(data: Record<string, unknown> | undefined): boolean {
-  if (!data || data.aborted === true) return false;
-  if (data.businessCode !== undefined) return true;
-  const status = Number(data.status);
-  return status >= 400 || (status === 0 && data.success === false);
-}
+export { isFailedRequest };
 
 /**
  * Network 标签里一条请求的结果：状态码；被取消、拿不到响应、业务码失败另外写明。

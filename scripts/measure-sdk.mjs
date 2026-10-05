@@ -17,6 +17,10 @@ import * as esbuild from 'esbuild';
  * `import ... from "@trace-pilot/shared"`，而 shared 的 barrel 会连带引入 zod。
  * 只测产物就会漏掉这条依赖链——历史上这里真实少算过约 4.2 倍。
  * 因此接入成本由一次真实打包测得，并额外断言产物中不含 zod 运行时代码。
+ *
+ * 打包时不读仓库的 tsconfig：tsconfig.base.json 的 paths 把 @trace-pilot/shared 指到源码，外部接入方
+ * 拿到的却是 shared 的构建产物。2026-10-05 之前就是这样测的，于是没发现 shared 被打成单个文件后，
+ * 外部接入方会连带整个 zod（接入成本约 110 KB gzip，而这里报的是约 16 KB）。
  */
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -80,7 +84,7 @@ if (lineCount > 30 || artifactText.includes('\n  ')) {
 
 /**
  * 以真实接入方的身份打包一次。解析目录选 apps/playground，
- * 因为它是本仓库里唯一通过 workspace 依赖真实引用 SDK 的应用，
+ * 因为它是本仓库里唯一通过 workspace 依赖真实引用 SDK 的应用；不读 tsconfig（tsconfigRaw），
  * 走的是和外部业务应用完全相同的 exports 与 node_modules 解析路径。
  */
 const consumerSource = `
@@ -107,6 +111,8 @@ async function bundleConsumer(external = []) {
     minify: true,
     format: 'esm',
     platform: 'browser',
+    // 不套用仓库 tsconfig 里的 paths，否则 SDK 产物对 shared 的引用会被解析到源码。
+    tsconfigRaw: '{}',
     external,
     write: false,
     logLevel: 'warning',
@@ -156,7 +162,8 @@ if (report.consumer.gzipBytes > BUDGETS.consumerGzipBytes) {
 if (zodIdentifiers > BUDGETS.consumerZodIdentifiers) {
   failures.push(
     `接入方产物中出现 ${zodIdentifiers} 处 zod 运行时标识符。` +
-      'shared 或 monitor-sdk 可能丢失了 "sideEffects": false，导致 barrel 里的 zod 无法被摇除。',
+      'shared 或 monitor-sdk 可能丢失了 "sideEffects": false，或 shared 又被打成了单个文件，' +
+      '导致 barrel 里的 zod 无法被摇除。',
   );
 }
 

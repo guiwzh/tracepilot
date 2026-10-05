@@ -1,7 +1,7 @@
 # 本地性能基线
 
 - 测量时间：2026-09-28，依赖升级后重测（Asia/Shanghai）；SDK 运行时开销为 2026-09-30 SDK 修订后重测，SDK 体积为
-  2026-10-02 加入链路上下文后重测
+  2026-10-05 改按外部接入方的解析方式后重测
 - 运行时：Node.js v24.14.0；浏览器 Chrome 153
 - 存储：临时本地文件中的 SQLite WAL
 - 传输：进程内 Fastify `inject`，不包含网络或 TLS 开销
@@ -22,8 +22,16 @@ pnpm measure:sdk
 | 口径                       | 压缩后 | Gzip 9 级 |   预算 |
 | -------------------------- | -----: | --------: | -----: |
 | 发布产物 `dist/index.js`   | 33,134 |    10,593 | 12,200 |
-| 业务应用实际接入成本       | 49,225 |    16,331 | 18,800 |
-| 其中 `web-vitals` 所占份额 |      — |     5,306 |      — |
+| 业务应用实际接入成本       | 49,225 |    16,335 | 18,800 |
+| 其中 `web-vitals` 所占份额 |      — |     5,298 |      — |
+
+**2026-10-05 接入成本的测量口径修正**：探针用 esbuild 打包时会读仓库的 tsconfig，`tsconfig.base.json` 的 `paths` 把 SDK 产物
+对 `@trace-pilot/shared` 的引用解析到了 shared 的**源码**；外部业务应用拿到的却是 shared 的**构建产物**，而它被打成了单个
+文件，`schemas.ts`、`investigation.ts` 顶层的 `z.object(...)` 和 SDK 用到的脱敏函数同在一个模块里，摇不掉。按外部接入方的
+解析方式重测，接入成本是 **507,263 / 110,142 B（gzip），含 467 处 zod 标识符**，而这里一直报的是约 16 KB。修正：shared 的
+构建改为按源码模块分文件输出（tsdown 的 `unbundle`），探针不再读仓库的 tsconfig（`tsconfigRaw`）。修正后外部接入方是
+49,225 / 16,335 B，与此前在仓库里测得的 16,331 B 只差 4 字节（脱敏函数从源码和从产物编译的写法略有不同）。工作台引入
+shared 的 `isFailedRequest` 也不再带进 zod（详情页 chunk 仍是 33.30 kB），之前为此复制的一份规则已删除。
 
 **2026-10-02 链路上下文**（W3C `traceparent` 传播，见 [ADR 0013](../decisions/0013-trace-context-propagation.md)）：
 产物 9,777 → 10,593 B（+816 B），接入成本 15,491 → 16,331 B（+840 B）。代价来自 `core/trace.ts`（页面浏览的 trace、
@@ -92,10 +100,11 @@ pnpm measure:sdk
 **18,763 字节 gzip（含 164 处 zod 运行时标识符）**，是产物口径的约 4.2 倍。
 
 因此「接入成本」由一次真实打包测得：以 `apps/playground` 为解析目录（本仓库中唯一通过
-workspace 依赖真实引用 SDK 的应用），用 esbuild 打包一个只调用 `createMonitor` 的入口。
+workspace 依赖真实引用 SDK 的应用），用 esbuild 打包一个只调用 `createMonitor` 的入口；不读仓库的 tsconfig，
+依赖按 `exports` 解析到各自的构建产物，和外部业务应用一样。
 脚本额外断言产物中不得出现 zod 运行时标识符，防止依赖隔离被无声破坏。
 
-产物口径不含 Source Map 与类型声明文件。接入成本口径基于 esbuild 默认配置，
+产物口径不含 Source Map 与类型声明文件。接入成本口径基于 esbuild 默认配置（只是不读仓库的 tsconfig），
 webpack / rspack 的摇树结论可能不同。
 
 ## SDK 运行时开销
